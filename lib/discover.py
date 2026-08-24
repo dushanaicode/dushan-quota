@@ -397,6 +397,7 @@ def _from_store(add):
                     "api_key": item.get("api_key") or "",
                     "access": item.get("access") or item.get("api_key") or "",
                     "refresh": item.get("refresh") or "",
+                    "expiry": item.get("expiry"),
                     "variant": item.get("variant") or provider,
                     "account_id": item.get("user_id") or "",
                 },

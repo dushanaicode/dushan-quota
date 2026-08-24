@@ -3,136 +3,169 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  :root { --alpha: .85; --pick: 1; }
-  * { margin:0; padding:0; box-sizing:border-box; font:12px/1.45 ui-sans-serif,system-ui; }
-  html,body { background:transparent; overflow:hidden; }
-  body { color:#e8edf5; user-select:none; }
+  * { margin:0; padding:0; box-sizing:border-box; font-family:"Segoe UI",system-ui,sans-serif; }
+  html,body { background:#10131a; overflow:hidden; height:100%; }
+  body { color:#e6ecf5; font-size:12px; user-select:none; -webkit-user-select:none; }
   #panel {
-    background:rgba(16,19,26,var(--alpha));
-    border:1px solid rgba(120,140,180,.25);
-    border-radius:12px;
-    padding:8px 10px;
-    max-height:100vh; overflow-y:auto;
+    background:#10131a;
+    height:100vh;
+    display:flex; flex-direction:column;
+    overflow:hidden;
   }
-  #panel::-webkit-scrollbar { width:0; }
-  .hdr { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
-  .hdr b { font-size:12px; }
+  .hdr {
+    display:flex; align-items:center; gap:7px;
+    padding:9px 12px 8px;
+    border-bottom:1px solid rgba(255,255,255,.06);
+    cursor:move; flex:none;
+  }
+  .hdr .dot { width:7px; height:7px; border-radius:50%; background:#3dd68c; flex:none; box-shadow:0 0 6px rgba(61,214,140,.8); }
+  .hdr b { font-size:12.5px; font-weight:600; letter-spacing:.5px; }
   .hdr .sp { flex:1; }
-  .ico { cursor:pointer; opacity:.6; font-size:12px; padding:0 2px; }
-  .ico:hover { opacity:1; }
-  .card { margin-bottom:7px; }
-  .card .name { display:flex; gap:6px; align-items:baseline; }
-  .card .name b { font-size:12px; }
-  .card .name span { font-size:10px; color:#8b95a7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .row { display:flex; align-items:center; gap:6px; margin:2px 0; }
-  .row .lbl { width:52px; font-size:10px; color:#8b95a7; flex:none; }
-  .bar { flex:1; height:5px; border-radius:99px; background:rgba(255,255,255,.08); overflow:hidden; }
+  .ico { cursor:pointer; opacity:.45; font-size:11px; line-height:1; padding:2px 3px; border-radius:5px; }
+  .ico:hover { opacity:1; background:rgba(255,255,255,.10); }
+  .ico.on { opacity:1; background:rgba(110,168,254,.25); }
+  #body { overflow-y:auto; padding:2px 12px 6px; flex:1; }
+  #body::-webkit-scrollbar { width:3px; }
+  #body::-webkit-scrollbar-thumb { background:rgba(255,255,255,.16); border-radius:99px; }
+  .card { padding:8px 0 7px; border-top:1px solid rgba(255,255,255,.06); }
+  .card:first-child { border-top:0; }
+  .name { display:flex; align-items:center; gap:7px; margin-bottom:5px; }
+  .name b { font-size:12px; font-weight:600; color:#f0f5fb; white-space:nowrap; }
+  .pill { font-size:9px; padding:1px 6px; border-radius:99px; background:rgba(110,168,254,.15); color:#9ec2ff; white-space:nowrap; flex:none; }
+  .name span { font-size:10px; color:#77839a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row { margin:5px 0 1px; }
+  .row .top { display:flex; align-items:baseline; gap:7px; margin-bottom:3px; }
+  .row .lbl { font-size:10.5px; color:#93a0b6; white-space:nowrap; }
+  .row .rst { flex:1; text-align:right; font-size:9px; color:#5f6b81; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .pct { font-size:10.5px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .bar { height:5px; border-radius:99px; background:rgba(255,255,255,.08); overflow:hidden; }
   .bar i { display:block; height:100%; border-radius:99px; }
-  .pct { width:52px; text-align:right; font-size:10px; flex:none; }
-  .g { color:#3dd68c; } .y { color:#f4c95d; } .r { color:#ff6b6b; }
-  .bar i.g { background:#3dd68c; } .bar i.y { background:#f4c95d; } .bar i.r { background:#ff6b6b; }
-  .err { color:#ff6b6b; font-size:10px; }
-  .txt { font-size:10px; color:#cdd6e4; }
+  .txt { font-size:10px; color:#aeb9cc; }
+  .g { color:#4ade88; } .y { color:#f5c664; } .r { color:#f87171; }
+  .bar i.g { background:linear-gradient(90deg,#34d399,#4ade88); }
+  .bar i.y { background:linear-gradient(90deg,#eab308,#f5c664); }
+  .bar i.r { background:linear-gradient(90deg,#ef4444,#f87171); }
+  .err { color:#f87171; font-size:10px; }
   #cfg {
-    display:none; margin-top:6px; padding-top:6px; border-top:1px solid rgba(120,140,180,.25);
+    display:none; flex:none; padding:8px 12px 7px; margin:0 8px 7px;
+    background:rgba(255,255,255,.05); border-radius:10px;
   }
-  #cfg label { display:flex; justify-content:space-between; font-size:10px; color:#8b95a7; margin:3px 0; cursor:pointer; }
-  #cfg input[type=range] { width:100%; }
-  #cfg .btns { display:flex; gap:6px; margin-top:6px; }
-  #cfg button { flex:1; font-size:10px; padding:3px 0; border:0; border-radius:6px; background:#2c3947; color:#e8edf5; cursor:pointer; }
+  #cfg .sec { font-size:10px; color:#7d89a0; margin:4px 0 2px; }
+  #cfg label { display:flex; justify-content:space-between; align-items:center; font-size:10.5px; color:#a7b2c6; padding:2.5px 0; cursor:pointer; }
+  #cfg label:hover { color:#e2e9f4; }
+  #cfg input[type=checkbox] { accent-color:#6ea8fe; width:13px; height:13px; }
+  #cfg input[type=range] { width:100%; accent-color:#6ea8fe; height:14px; }
+  .albl { display:flex; justify-content:space-between; font-size:10.5px; color:#a7b2c6; margin-bottom:1px; }
 </style>
 </head>
 <body>
 <div id="panel">
-  <div class="hdr">
-    <b>Quota</b><span class="sp"></span>
+  <div class="hdr" id="hdr">
+    <span class="dot"></span><b>Quota</b><span class="sp"></span>
+    <span class="ico" id="tPin" title="置顶">📌</span>
     <span class="ico" id="tCfg" title="设置">⚙</span>
     <span class="ico" id="tRef" title="刷新">↻</span>
     <span class="ico" id="tQuit" title="退出">✕</span>
   </div>
-  <div id="list"></div>
+  <div id="body"><div id="list"><div class="txt" style="padding:6px 0">加载中…</div></div></div>
   <div id="cfg">
-    <label>不透明度 <span id="aVal"></span><input type="range" id="alpha" min="20" max="100" style="display:none"></label>
+    <div class="albl"><span>不透明度</span><span id="aVal">82%</span></div>
     <input type="range" id="alphaR" min="20" max="100">
+    <div class="sec">显示内容</div>
     <div id="pick"></div>
-    <div class="btns">
-      <button id="bAll">全选</button>
-      <button id="bNone">全不选</button>
-    </div>
   </div>
 </div>
 <script>
-let S = { alpha:85, show:{}, only_percent:false };
+let S = { alpha:82, show:{}, on_top:true };
+let cache = [];
+let api = null;
 const $ = id => document.getElementById(id);
-
-function color(p){ return p>=40?'g':p>=15?'y':'r'; }
-function esc(s){ return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const color = p => p>=40?'g':p>=15?'y':'r';
 
 function row(w){
-  if(w.text!=null) return `<div class="row"><span class="lbl">${esc(w.name)}</span><span class="txt">${esc(w.text)}</span></div>`;
+  if(w.text!=null) return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"></span><span class="txt">${esc(w.text)}</span></div></div>`;
   const p = Math.round(w.remaining_percent||0), c = color(p);
-  return `<div class="row"><span class="lbl">${esc(w.name)}</span><span class="bar"><i class="${c}" style="width:${p}%"></i></span><span class="pct ${c}">${p}%</span></div>`;
+  const rst = w.reset ? esc(w.reset) : '';
+  return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${rst}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
 }
 
 function render(items){
-  const list = $('list');
   let html = '';
   for(const it of items){
     if(S.show[it.title]===false) continue;
-    const ws = S.only_percent ? it.windows.filter(w=>w.text==null) : it.windows;
     const meta = [];
-    if(S.show['#email']!==false && it.email) meta.push(esc(it.email));
-    if(S.show['#plan']!==false && it.plan) meta.push(esc(it.plan));
-    html += `<div class="card"><div class="name"><b>${esc(it.title)}</b><span>${meta.join(' · ')}</span></div>`;
-    html += it.ok ? ws.map(row).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
+    if(S.show['#email']!==false && it.email) meta.push(`<span>${esc(it.email)}</span>`);
+    const pill = (S.show['#plan']!==false && it.plan) ? `<span class="pill">${esc(it.plan)}</span>` : '';
+    html += `<div class="card"><div class="name"><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
+    html += it.ok ? it.windows.map(row).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
     html += `</div>`;
   }
-  list.innerHTML = html || '<div class="txt">没有账号</div>';
+  $('list').innerHTML = html || '<div class="txt" style="padding:6px 0">没有账号</div>';
 }
 
-async function load(){
-  try { render(await pywebview.api.quota()); } catch(e) { $('list').innerHTML = '<div class="err">'+esc(e)+'</div>'; }
-}
-
-function applyAlpha(){
-  document.documentElement.style.setProperty('--alpha', (S.alpha/100).toFixed(2));
-  $('aVal').textContent = S.alpha + '%';
-  $('alphaR').value = S.alpha;
-}
-
-function buildPick(items){
-  const names = [...new Set(items.map(i=>i.title))];
-  const box = $('pick');
-  box.innerHTML = names.map(n=>`<label><span>${esc(n)}</span><input type="checkbox" data-n="${esc(n)}" ${S.show[n]!==false?'checked':''}></label>`).join('')
-    + `<label><span>显示邮箱</span><input type="checkbox" data-n="#email" ${S.show['#email']!==false?'checked':''}></label>`
-    + `<label><span>显示套餐</span><input type="checkbox" data-n="#plan" ${S.show['#plan']!==false?'checked':''}></label>`
-    + `<label><span>只看百分比行</span><input type="checkbox" data-n="#onlyp" ${S.only_percent?'checked':''}></label>`;
-  box.querySelectorAll('input').forEach(el=>{
+function buildPick(){
+  const names = [...new Set(cache.map(i=>i.title))];
+  $('pick').innerHTML =
+    names.map(n=>`<label><span>${esc(n)}</span><input type="checkbox" data-n="${esc(n)}" ${S.show[n]!==false?'checked':''}></label>`).join('')
+    + `<label><span>邮箱</span><input type="checkbox" data-n="#email" ${S.show['#email']!==false?'checked':''}></label>`
+    + `<label><span>套餐</span><input type="checkbox" data-n="#plan" ${S.show['#plan']!==false?'checked':''}></label>`;
+  $('pick').querySelectorAll('input').forEach(el=>{
     el.onchange = ()=>{
-      const n = el.dataset.n;
-      if(n==='#onlyp'){ S.only_percent = el.checked; }
-      else { S.show[n] = el.checked; }
+      S.show[el.dataset.n] = el.checked;
       save(); render(cache);
     };
   });
 }
 
-let cache = [];
-async function refresh(){ cache = await pywebview.api.quota(); render(cache); buildPick(cache); }
-function save(){ pywebview.api.save_settings(JSON.stringify(S)); }
+async function refresh(){
+  try{ cache = await api.quota(); render(cache); buildPick(); }catch(e){}
+}
+function save(){ try{ api.save_settings(JSON.stringify(S)); }catch(e){} }
+function applyAlpha(){
+  $('aVal').textContent = S.alpha + '%';
+  $('alphaR').value = S.alpha;
+  try{ api.set_alpha(S.alpha); }catch(e){}
+}
+function paintPin(){ $('tPin').classList.toggle('on', !!S.on_top); }
 
-$('tRef').onclick = refresh;
-$('tQuit').onclick = ()=>pywebview.api.quit();
-$('tCfg').onclick = ()=>{ const c=$('cfg'); c.style.display = c.style.display==='block'?'none':'block'; };
-$('alphaR').oninput = e=>{ S.alpha = +e.target.value; applyAlpha(); save(); };
-$('bAll').onclick = ()=>{ Object.keys(S.show).forEach(k=>S.show[k]=true); S.only_percent=false; save(); refresh(); };
-$('bNone').onclick = ()=>{ Object.keys(S.show).forEach(k=>S.show[k]=false); save(); render(cache); };
+let inited = false;
+async function init(){
+  if(inited) return;
+  inited = true;
+  api = window.pywebview.api;
 
-(async ()=>{
-  try { S = Object.assign(S, await pywebview.api.settings()); } catch(e){}
-  applyAlpha(); await refresh();
+  try{ S = Object.assign(S, await api.settings()); }catch(e){}
+  applyAlpha(); paintPin();
+
+  $('tRef').onclick = refresh;
+  $('tQuit').onclick = ()=>api.quit();
+  $('tCfg').onclick = ()=>{ const c=$('cfg'); c.style.display = c.style.display==='block'?'none':'block'; };
+  $('tPin').onclick = async ()=>{
+    try{
+      const r = await api.toggle_on_top();
+      S.on_top = !!r.on_top; paintPin();
+    }catch(e){}
+  };
+  $('alphaR').oninput = e=>{ S.alpha = +e.target.value; applyAlpha(); };
+  $('alphaR').onchange = ()=>save();
+
+  // 按下标题栏 → 系统原生接管拖动（零延迟、可跨屏）；图标不触发
+  const hdr = $('hdr');
+  hdr.addEventListener('pointerdown', e=>{
+    if(e.target.closest('.ico')) return;
+    if(e.button !== 0) return;
+    e.preventDefault();
+    try{ api.begin_drag(); }catch(err){}
+  });
+
+  await refresh();
   setInterval(refresh, 60000);
-})();
+}
+
+if(window.pywebview && window.pywebview.api) init();
+else document.addEventListener('pywebviewready', init);
+setTimeout(init, 1500);
 </script>
 </body>
 </html>

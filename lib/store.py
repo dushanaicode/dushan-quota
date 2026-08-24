@@ -76,5 +76,18 @@ def remove_account(account_id: str) -> bool:
     return len(data["accounts"]) < before
 
 
+def update_fields(provider: str, identity: str, fields: dict) -> bool:
+    data = load_store()
+    changed = False
+    for item in data["accounts"]:
+        if item.get("provider") == provider and item.get("identity") == identity:
+            item.update(fields)
+            item["updated_at"] = int(time.time())
+            changed = True
+    if changed:
+        save_store(data)
+    return changed
+
+
 def list_stored() -> list[dict]:
     return list(load_store().get("accounts") or [])
