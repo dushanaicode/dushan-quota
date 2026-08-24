@@ -1,6 +1,7 @@
 import json
 import base64
 
+from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
@@ -9,17 +10,13 @@ WINDOW_KIND = {18000: "5h quota", 604800: "Week quota", 2592000: "Month quota", 
 
 
 def fetch(account: Account) -> QuotaResult:
-    access = account.secret.get("access") or ""
+    access = tokenstore.ensure_fresh(account)
     if not access:
         return QuotaResult(account=account, ok=False, title="OpenAI", error="缺少 access token")
-    headers = {
-        "Authorization": f"Bearer {access}",
-        "User-Agent": "OpenCode-Quota-Toast/1.0",
-    }
-    account_id = account.secret.get("account_id") or _account_id(access)
-    if account_id:
-        headers["ChatGPT-Account-Id"] = account_id
-    status, text, data = request_json(USAGE_URL, headers=headers)
+    status, text, data = _usage(account, access)
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        status, text, data = _usage(account, access)
     if status != 200 or not isinstance(data, dict):
         return QuotaResult(account=account, ok=False, title="OpenAI", error=f"{status} {text[:80]}")
 
@@ -62,6 +59,17 @@ def fetch(account: Account) -> QuotaResult:
         plan=plan,
         auth_mode=account.auth_mode or "oauth",
     )
+
+
+def _usage(account: Account, access: str):
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "User-Agent": "OpenCode-Quota-Toast/1.0",
+    }
+    account_id = account.secret.get("account_id") or _account_id(access)
+    if account_id:
+        headers["ChatGPT-Account-Id"] = account_id
+    return request_json(USAGE_URL, headers=headers)
 
 
 def _reset_credits(data: dict) -> list[Window]:

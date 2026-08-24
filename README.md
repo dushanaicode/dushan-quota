@@ -16,10 +16,17 @@
 | DeepSeek | 余额（CNY/USD） | OpenCode / API Key / 环境变量 |
 | Antigravity | Gemini / Claude+GPT 周/5h 窗口 | Cockpit / Google OAuth |
 | Cursor | 用量汇总 | 本机 state.vscdb / 官方登录流 |
+| Cursor Agent | 用量汇总 | 本机 `%APPDATA%\Cursor\auth.json` / API Key（`crsr_`）/ `CURSOR_API_KEY` |
 
-悬浮窗（`quota float`）：无边框置顶小窗，半透明背景（20%–100% 可调），可拖动；点击 ⚙ 可按平台勾选显示内容、只看百分比行，设置持久化到 `~/.quota-cli/config.json`。需要 `pywebview`（Windows 用 Edge WebView2）。
+悬浮窗（`quota float`）：无边框置顶小窗，不透明度 20%–100% 可调，标题栏拖动（可跨屏），📌 切换置顶；以无控制台分离进程运行，任务栏与 Alt+Tab 均无图标，右下角系统托盘有图标（显示/隐藏、刷新、退出）；点击 ⚙ 可按平台勾选显示内容，设置持久化到 `~/.quota-cli/config.json`。需要 `pywebview`（Windows 用 Edge WebView2）与 `pystray` + `pillow`（托盘）。
 
-认证读取顺序：OpenCode `auth.json` → Cockpit 账号库（需 pycryptodome）→ 本机官方目录 → quota-cli 本地库 → 环境变量。按账号身份去重，支持多账号。
+认证读取顺序：OpenCode `auth.json` → Cockpit 账号库（需 pycryptodome）→ 本机官方目录 → quota-cli 本地库 → 环境变量。按账号身份与 API Key 去重，支持多账号。
+
+中央凭证库 `~/.quota-cli/agent.db`（SQLite）汇总所有来源账号的凭证：API Key 全量 + 脱敏版、access/refresh 令牌、到期时间。每轮发现自动同步，刷新后立刻更新，库里永远是最新可用票（按到期时间裁决，只读来源的旧票不会覆盖库里的新票）。
+
+OAuth 平台**过期自动刷新**（提前 60 秒或 401 触发）：Grok/xAI（`auth.x.ai/oauth2/token`）、OpenAI（`auth.openai.com/oauth/token`）、Claude（`console.anthropic.com/v1/oauth/token`）、Antigravity（Google）、Cursor IDE（`api2.cursor.sh/oauth/token`，session 票）。新票自动回写来源：OpenCode `auth.json`、`~/.grok/auth.json`、Cursor `state.vscdb`、quota-cli `accounts.json`。refresh 轮换的平台（xAI/OpenAI）回写是强制的，否则链条中断。
+
+Cursor 是两套票：`cursor`（IDE session，cookie 查 `cursor.com/api/usage-summary`）与 `cursor_agent`（`crsr_` Key，换票后走 Connect-RPC `aiserver.v1.DashboardService`），不可混用。
 
 ## 安装
 
@@ -42,7 +49,7 @@ macOS / Linux：`sh install.sh`，之后执行 `quota`。
 ```
 quota            # 交互菜单：查看 / 动态刷新 / 账号管理 / 环境变量 / Web UI / 悬浮窗
 quota ui         # 打开本机 Web UI（127.0.0.1），网页里添加账号、走 OAuth
-quota float      # 桌面悬浮窗：半透明、可拖动、置顶
+quota float      # 桌面悬浮窗：可调透明度、可拖动、可置顶，任务栏无图标
 quota show       # 动态刷新额度（默认 15s，可在 config 改）
 quota show --once  # 查一次就退出（脚本/Agent 用）
 quota accounts   # 查看本地账号库

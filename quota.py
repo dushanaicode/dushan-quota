@@ -39,6 +39,7 @@ def main():
     sub.add_parser("config", help="查看配置和环境变量")
     sub.add_parser("ui", help="打开本机 Web UI")
     sub.add_parser("float", help="打开悬浮窗（置顶可拖动）")
+    sub.add_parser("float-run", help=argparse.SUPPRESS)
 
     env_cmd = sub.add_parser("env", help="设置环境变量")
     env_cmd.add_argument("name")
@@ -76,6 +77,11 @@ def main():
         serve()
         return
     if args.command == "float":
+        from lib.float_win import launch_float
+        started = launch_float()
+        print("悬浮窗已启动（任务栏无图标，点窗口 ✕ 退出）" if started else "悬浮窗已在运行")
+        return
+    if args.command == "float-run":
         from lib.float_win import serve_float
         serve_float()
         return
@@ -90,10 +96,26 @@ def main():
     run_shell(watch)
 
 
+def _enable_vt() -> None:
+    """Windows 控制台默认可能不开 ANSI 转义，导致 \\033[H\\033[J 失效、画面向下堆积。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        handle = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong()
+        if ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            ctypes.windll.kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except Exception:
+        pass
+
+
 def watch(interval: int):
     hide = "\033[?25l"
     show = "\033[?25h"
     if interval > 0:
+        _enable_vt()
         sys.stdout.write(hide)
         sys.stdout.flush()
     try:

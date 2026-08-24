@@ -40,8 +40,9 @@ def run_shell(show_fn) -> None:
             serve()
             continue
         if choice == "7":
-            from .float_win import serve_float
-            serve_float()
+            from .float_win import launch_float
+            started = launch_float()
+            print("悬浮窗已启动（任务栏无图标，点窗口 ✕ 退出）" if started else "悬浮窗已在运行")
             continue
         print("无效选项")
 

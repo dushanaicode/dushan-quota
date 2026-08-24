@@ -1,6 +1,8 @@
 import ctypes
 import json
+import subprocess
 import sys
+import threading
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -217,10 +219,15 @@ class Api:
 
         def _drag():
             hwnd = _hwnd(self._window)
-            if hwnd:
-                user32 = ctypes.windll.user32
-                user32.ReleaseCapture()
-                user32.SendMessageW(hwnd, _WM_NCLBUTTONDOWN, _HTCAPTION, 0)
+            if not hwnd:
+                return
+            user32 = ctypes.windll.user32
+            point = wintypes.POINT()
+            user32.GetCursorPos(ctypes.byref(point))
+            user32.ReleaseCapture()
+            # lParam 必须带鼠标屏幕坐标（低位 x、高位 y），否则系统按 (0,0) 抓取导致错位
+            lparam = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
+            user32.SendMessageW(hwnd, _WM_NCLBUTTONDOWN, _HTCAPTION, lparam)
 
         try:
             from System import Action
@@ -236,6 +243,135 @@ class Api:
     def quit(self):
         if self._window:
             self._window.destroy()
+
+
+def _invoke_on_ui(window, func) -> None:
+    """WinForms 属性必须在 UI 线程设置，否则可能无效或跨线程报错。"""
+    try:
+        from System import Action
+
+        window.native.BeginInvoke(Action(func))
+    except Exception:
+        try:
+            func()
+        except Exception:
+            pass
+
+
+def _tray_image():
+    """程序内绘制托盘图标：深色圆角底 + 三条配额进度条。"""
+    from PIL import Image, ImageDraw
+
+    scale = 4
+    size = 64 * scale
+    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    margin = 4 * scale
+    draw.rounded_rectangle(
+        [margin, margin, size - margin, size - margin],
+        radius=14 * scale,
+        fill=(16, 19, 26, 255),
+        outline=(52, 61, 79, 255),
+        width=2 * scale,
+    )
+    bars = [
+        (0.82, (74, 222, 136, 255)),
+        (0.56, (74, 222, 136, 255)),
+        (0.32, (245, 198, 100, 255)),
+    ]
+    left = 16 * scale
+    right = size - 16 * scale
+    height = 6 * scale
+    y = 18 * scale
+    for fraction, color in bars:
+        width = int((right - left) * fraction)
+        draw.rounded_rectangle([left, y, left + width, y + height], radius=height // 2, fill=color)
+        y += 12 * scale
+    return image.resize((64, 64), Image.LANCZOS)
+
+
+class _Tray:
+    """右下角系统托盘：显示/隐藏、刷新、退出。"""
+
+    def __init__(self, api: "Api"):
+        self._api = api
+        self._icon = None
+        self._visible = True
+
+    def start(self) -> None:
+        try:
+            import pystray
+        except ImportError:
+            return
+        try:
+            menu = pystray.Menu(
+                pystray.MenuItem("显示 / 隐藏", self._toggle, default=True),
+                pystray.MenuItem("刷新", self._refresh),
+                pystray.MenuItem("退出", self._quit),
+            )
+            self._icon = pystray.Icon("quota-cli", _tray_image(), "Quota 悬浮窗", menu)
+            threading.Thread(target=self._icon.run, daemon=True).start()
+        except Exception:
+            self._icon = None
+
+    def stop(self) -> None:
+        if self._icon:
+            try:
+                self._icon.stop()
+            except Exception:
+                pass
+
+    def _toggle(self, icon=None, item=None) -> None:
+        window = self._api._window
+        if not window:
+            return
+        self._visible = not self._visible
+
+        def _apply():
+            window.native.Visible = self._visible
+
+        _invoke_on_ui(window, _apply)
+
+    def _refresh(self, icon=None, item=None) -> None:
+        window = self._api._window
+        if window:
+            try:
+                window.evaluate_js("refresh()")
+            except Exception:
+                pass
+
+    def _quit(self, icon=None, item=None) -> None:
+        self.stop()
+        window = self._api._window
+        if window:
+            _invoke_on_ui(window, lambda: window.native.Close())
+
+
+def launch_float() -> bool:
+    """以无控制台的 pythonw 分离进程启动悬浮窗，任务栏与 Alt+Tab 均无显示。
+
+    已运行则只把窗口带到前台，返回是否新启动了进程。
+    """
+    if not _is_windows():
+        serve_float()
+        return True
+    user32 = ctypes.windll.user32
+    existing = user32.FindWindowW(None, "Quota")
+    if existing:
+        user32.ShowWindow(existing, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(existing)
+        return False
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    exe = str(pythonw) if pythonw.is_file() else sys.executable
+    script = Path(__file__).resolve().parent.parent / "quota.py"
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    creation = 0x00000008 | 0x00000200 | 0x08000000
+    subprocess.Popen(
+        [exe, str(script), "float-run"],
+        creationflags=creation,
+        close_fds=True,
+    )
+    return True
 
 
 def serve_float():
@@ -263,7 +399,14 @@ def serve_float():
         api._on_top = bool(saved.get("on_top", True))
         _set_round_corners(window)
         _set_alpha(window, int(saved.get("alpha", 82)))
+        # WinForms 的 ShowInTaskbar 会反复把窗口加回任务栏，必须在 UI 线程关掉
+        _invoke_on_ui(window, lambda: setattr(window.native, "ShowInTaskbar", False))
         _hide_from_taskbar(window)
         _set_topmost(window, api._on_top)
 
-    webview.start(_ready, gui="edgechromium" if _is_windows() else None, debug=False)
+    tray = _Tray(api)
+    tray.start()
+    try:
+        webview.start(_ready, gui="edgechromium" if _is_windows() else None, debug=False)
+    finally:
+        tray.stop()

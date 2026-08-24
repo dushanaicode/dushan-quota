@@ -2,6 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from . import agentdb
 from .crypto_store import cockpit_key, load_maybe_encrypted
 from .env_auth import collect_env_accounts
 from .models import Account
@@ -33,7 +34,13 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
 
     def add(account: Account):
         key = (account.provider, account.identity)
-        if not account.identity or key in seen:
+        api_key = str(account.secret.get("api_key") or "")
+        if api_key:
+            # 同一把 API Key 可能同时来自本机文件与环境变量，按 key 去重
+            key = (account.provider, f"key:{api_key[-6:]}")
+        if not account.identity and not api_key:
+            return
+        if key in seen:
             return
         seen.add(key)
         accounts.append(account)
@@ -43,10 +50,12 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
     _from_official_grok(home, add)
     _from_cockpit(home, add)
     _from_cursor_local(home, add)
+    _from_cursor_agent_local(home, add)
     _from_claude_local(home, add)
     _from_store(add)
     for account in collect_env_accounts():
         add(account)
+    agentdb.sync_accounts(accounts)
     return accounts
 
 
@@ -83,6 +92,7 @@ def _from_opencode(auth: dict, add):
                 name=_openai_name(openai.get("access")) or "",
                 secret={
                     "access": openai.get("access", ""),
+                    "refresh": openai.get("refresh", ""),
                     "account_id": openai.get("accountId") or _openai_account_id(openai.get("access")),
                     "expires": openai.get("expires"),
                 },
@@ -98,7 +108,7 @@ def _from_opencode(auth: dict, add):
                 source="opencode",
                 identity="opencode-anthropic",
                 auth_mode="oauth",
-                secret={"access": anthropic.get("access", ""), "expires": anthropic.get("expires")},
+                secret={"access": anthropic.get("access", ""), "refresh": anthropic.get("refresh", ""), "expires": anthropic.get("expires")},
             )
         )
 
@@ -189,6 +199,7 @@ def _from_official_grok(home: Path, add):
                 secret={
                     "access": entry.get("key", ""),
                     "refresh": entry.get("refresh_token", ""),
+                    "expires": entry.get("expires_at"),
                     "email": entry.get("email"),
                 },
             )
@@ -319,6 +330,45 @@ def _from_cursor_local(home: Path, add):
                 "access": access,
                 "refresh": (rows.get("cursorAuth/refreshToken") or "").strip(),
                 "email": email,
+            },
+        )
+    )
+
+
+def _from_cursor_agent_local(home: Path, add):
+    """Cursor Agent（cursor-agent CLI）的凭证：%APPDATA%/Cursor/auth.json。
+
+    里面 accessToken 是短寿 JWT，真正可换票的是 apiKey（crsr_）。
+    """
+    import sys
+
+    if sys.platform == "win32":
+        appdata = Path.home() / "AppData" / "Roaming" / "Cursor" / "auth.json"
+    elif sys.platform == "darwin":
+        appdata = home / "Library" / "Application Support" / "Cursor" / "auth.json"
+    else:
+        appdata = home / ".config" / "Cursor" / "auth.json"
+    data = load_json(appdata)
+    if not isinstance(data, dict):
+        return
+    access = str(data.get("accessToken") or "").strip()
+    api_key = str(data.get("apiKey") or "").strip()
+    if not access and not api_key:
+        return
+    sub = _jwt_sub(access) or ""
+    user_id = sub.rsplit("|", 1)[-1] if "|" in sub else sub
+    add(
+        Account(
+            provider="cursor_agent",
+            label="Cursor Agent",
+            source="cursor-agent-local",
+            identity=user_id or "cursor-agent-local",
+            auth_mode="local",
+            user_id=user_id,
+            secret={
+                "api_key": api_key,
+                "access": access,
+                "refresh": str(data.get("refreshToken") or "").strip(),
             },
         )
     )

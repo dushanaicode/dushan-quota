@@ -1,3 +1,4 @@
+from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
@@ -5,17 +6,13 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 
 def fetch(account: Account) -> QuotaResult:
-    access = account.secret.get("access") or ""
+    access = tokenstore.ensure_fresh(account)
     if not access:
         return QuotaResult(account=account, ok=False, title="Claude Code", error="缺少 access token")
-    status, text, data = request_json(
-        USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {access}",
-            "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "quota-cli/1.0",
-        },
-    )
+    status, text, data = _usage(access)
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        status, text, data = _usage(access)
     if status != 200 or not isinstance(data, dict):
         return QuotaResult(account=account, ok=False, title="Claude Code", error=f"{status} {text[:80]}")
     windows = _windows(data)
@@ -31,6 +28,17 @@ def fetch(account: Account) -> QuotaResult:
         user_id=account.user_id or account.identity,
         plan=account.plan or "Claude",
         auth_mode=account.auth_mode or "oauth",
+    )
+
+
+def _usage(access: str):
+    return request_json(
+        USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {access}",
+            "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "quota-cli/1.0",
+        },
     )
 
 

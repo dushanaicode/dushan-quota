@@ -1,3 +1,4 @@
+from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
@@ -9,17 +10,13 @@ HEAVY_OFFER_RE = r"^heavy-p\d+m-\d{1,2}-[a-z]{3}\d{4}$"
 
 
 def fetch(account: Account) -> QuotaResult:
-    access = account.secret.get("access") or ""
+    access = tokenstore.ensure_fresh(account)
     if not access:
         return QuotaResult(account=account, ok=False, title="Grok", error="缺少 access token")
-    headers = {
-        "Authorization": f"Bearer {access}",
-        "Accept": "application/json",
-        "User-Agent": "OpenCode-Quota-Toast/1.0",
-        "x-grok-client-surface": "grok-build",
-        "x-grok-client-version": "1.0.0",
-    }
-    status, _, billing = request_json(BILLING_URL, headers=headers)
+    status, _, billing = request_json(BILLING_URL, headers=_headers(access))
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        status, _, billing = request_json(BILLING_URL, headers=_headers(access))
     if status != 200 or not isinstance(billing, dict):
         return QuotaResult(account=account, ok=False, title="Grok", error=f"billing {status}")
 
@@ -71,8 +68,8 @@ def fetch(account: Account) -> QuotaResult:
                 )
             )
 
-    plan = _plan_label(access, headers)
-    profile = _user_profile(headers)
+    plan = _plan_label(access, _headers(access))
+    profile = _user_profile(_headers(access))
     email = profile.get("email") or account.email or account.secret.get("email") or ""
     if email == "unknown@grok.local":
         email = ""
@@ -89,6 +86,16 @@ def fetch(account: Account) -> QuotaResult:
         plan=plan,
         auth_mode=account.auth_mode or "oauth",
     )
+
+
+def _headers(access: str) -> dict:
+    return {
+        "Authorization": f"Bearer {access}",
+        "Accept": "application/json",
+        "User-Agent": "OpenCode-Quota-Toast/1.0",
+        "x-grok-client-surface": "grok-build",
+        "x-grok-client-version": "1.0.0",
+    }
 
 
 def _user_profile(headers: dict) -> dict:

@@ -1,31 +1,24 @@
+from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
 USAGE_URL = "https://cursor.com/api/usage-summary"
-TOKEN_URL = "https://api2.cursor.sh/oauth/token"
-CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 
 
 def fetch(account: Account) -> QuotaResult:
-    access = account.secret.get("access") or ""
-    if not access:
-        return QuotaResult(account=account, ok=False, title="Cursor", error="缺少 access token")
+    access = tokenstore.ensure_fresh(account)
     cookie = _cookie(access)
     if not cookie:
-        refresh = account.secret.get("refresh") or ""
-        if refresh:
-            access = _refresh(refresh) or access
-            cookie = _cookie(access)
+        access = tokenstore.refresh_account(account) or access
+        cookie = _cookie(access)
     if not cookie:
-        return QuotaResult(account=account, ok=False, title="Cursor", error="无法解析 Cursor 会话")
-    status, text, data = request_json(
-        USAGE_URL,
-        headers={
-            "Accept": "application/json",
-            "Cookie": cookie,
-            "User-Agent": "Mozilla/5.0",
-        },
-    )
+        return QuotaResult(account=account, ok=False, title="Cursor", error="缺少 session（请在 Cursor IDE 官方登录）")
+    status, text, data = _usage(cookie)
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        cookie = _cookie(access)
+        if cookie:
+            status, text, data = _usage(cookie)
     if status != 200 or not isinstance(data, dict):
         return QuotaResult(account=account, ok=False, title="Cursor", error=f"{status} {text[:80]}")
     windows = _windows(data)
@@ -55,16 +48,15 @@ def fetch(account: Account) -> QuotaResult:
     )
 
 
-def _refresh(refresh_token: str) -> str | None:
-    status, _, data = request_json(
-        TOKEN_URL,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        body={"grant_type": "refresh_token", "client_id": CLIENT_ID, "refresh_token": refresh_token},
+def _usage(cookie: str):
+    return request_json(
+        USAGE_URL,
+        headers={
+            "Accept": "application/json",
+            "Cookie": cookie,
+            "User-Agent": "Mozilla/5.0",
+        },
     )
-    if status == 200 and isinstance(data, dict):
-        return data.get("access_token") or data.get("accessToken")
-    return None
 
 
 def _cookie(access: str) -> str | None:

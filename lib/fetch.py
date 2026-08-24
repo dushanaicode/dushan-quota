@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .models import Account, QuotaResult
-from .providers import antigravity, claude, cursor, deepseek, grok, kimi, openai, zai
+from .providers import antigravity, claude, cursor, cursor_agent, deepseek, grok, kimi, openai, zai
 
 
 _HANDLERS = {
@@ -13,6 +13,7 @@ _HANDLERS = {
     "deepseek": deepseek.fetch,
     "antigravity": antigravity.fetch,
     "cursor": cursor.fetch,
+    "cursor_agent": cursor_agent.fetch,
 }
 
 
@@ -20,8 +21,17 @@ def fetch_all(accounts: list[Account]) -> list[QuotaResult]:
     if not accounts:
         return []
     results: list[QuotaResult] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
-        futures = {pool.submit(_HANDLERS[account.provider], account): account for account in accounts}
+    known = []
+    for account in accounts:
+        handler = _HANDLERS.get(account.provider)
+        if handler is None:
+            results.append(
+                QuotaResult(account=account, ok=False, title=account.label, error=f"未知平台: {account.provider}")
+            )
+        else:
+            known.append((handler, account))
+    with ThreadPoolExecutor(max_workers=min(8, len(known) or 1)) as pool:
+        futures = {pool.submit(handler, account): account for handler, account in known}
         for future in as_completed(futures):
             account = futures[future]
             try:

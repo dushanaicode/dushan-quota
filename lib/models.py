@@ -42,6 +42,11 @@ AUTH_RULES = {
         "modes": ("oauth", "json", "local"),
         "env": (),
     },
+    "cursor_agent": {
+        "title": "Cursor Agent",
+        "modes": ("api_key", "json", "local", "env"),
+        "env": ("CURSOR_API_KEY",),
+    },
 }
 
 
