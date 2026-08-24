@@ -50,6 +50,8 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 | GET | `/api/provision/targets?provider=<p>` | 查某平台可写入的 harness |
 | POST | `/api/provision` | 写入 harness，body `{"provider","identity","harness","confirmed"}`；返回 `needs_confirm` 时用 `confirmed:true` 重发 |
 | POST | `/api/hide` / `/api/unhide` | 隐藏/恢复卡片，body `{"provider","identity"}`；unhide 空 body 全恢复 |
+| GET/POST | `/api/config` | 读/写设置（`watch_seconds` 自动刷新间隔秒数，0=仅手动） |
+| POST | `/api/float` | 启动桌面悬浮窗 |
 | GET | `/api/rules` | 平台与添加方式 |
 | POST | `/api/accounts/key` | 添加 API Key，body `{"provider","key"}` |
 
@@ -101,6 +103,8 @@ OpenAI 重置额度接口：`POST https://chatgpt.com/backend-api/wham/rate-limi
 | GLM → Claude Code | `~/.claude/settings.json` | zai（env.ANTHROPIC_BASE_URL=api.z.ai 或 bigmodel.cn/api/anthropic + ANTHROPIC_AUTH_TOKEN；GLM 无官方独立 CLI，这是 Z.ai 官方接入方式） |
 
 OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`，`identity_key="account:<sub>"`；api_key 行：`data={"key","source"}`。cursor_agent 的 refresh 必须填 `crsr_`，不能填短寿 JWT。
+
+注意（已内置看护）：OMP 的 `refreshCursorToken` 会把 `exchange_user_api_key` 返回的短寿 JWT 覆盖进 refresh，第二轮刷新必 403 并把凭证写进 `auth_credential_blocks` 拉黑。quota-cli 每轮拉取时自动修复（`lib/provision.py guard_omp_cursor`）：refresh 不是 crsr_ / 已过期 / 有 block → 换新票并清除拉黑，仅对已写入过 OMP 的账号生效。
 
 ## 环境变量
 

@@ -153,6 +153,13 @@ def _write_back(account, access: str, refresh: str, expires_in) -> None:
     writer = writers.get(account.source)
     if writer:
         writer(account, access, refresh, expires_in)
+    # grok 在 opencode 与 grok cli 中是同一个 xAI 账号，去重后只刷新了一个来源，
+    # 另一个文件也必须同步，否则那边的认证会自然过期
+    if account.provider == "grok":
+        if account.source != "opencode":
+            _write_opencode(account, access, refresh, expires_in)
+        if account.source != "official-grok":
+            _write_grok_cli(account, access, refresh, expires_in)
 
 
 def _write_opencode(account, access: str, refresh: str, expires_in) -> None:

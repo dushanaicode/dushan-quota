@@ -29,6 +29,89 @@ def _register(key: str, label: str, providers: tuple[str, ...]):
     return deco
 
 
+def guard_omp_cursor(accounts: list[Account]) -> None:
+    """OMP cursor 看护：修复被 OMP 刷新逻辑写坏的 cursor 凭证。
+
+    OMP refreshCursorToken 用 exchange 返回的 refreshToken（=1 小时短寿 JWT）覆盖 refresh，
+    第二轮刷新 Bearer 废 JWT 必然 403，凭证被 auth_credential_blocks 拉黑。
+    每轮拉取时检查：refresh 不是 crsr_ / 已过期 / 有 block → 换新票修复并清除拉黑。
+    """
+    if not _omp_provisioned():
+        return
+    account = next(
+        (a for a in accounts if a.provider == "cursor_agent" and (a.secret.get("api_key") or "").strip()),
+        None,
+    )
+    if account is None:
+        return
+    api_key = (account.secret.get("api_key") or "").strip()
+    db = _omp_db_path()
+    if not api_key or not db.is_file():
+        return
+    try:
+        conn = sqlite3.connect(str(db), timeout=10)
+        try:
+            row = conn.execute(
+                "SELECT id, data FROM auth_credentials WHERE provider = 'cursor' AND credential_type = 'oauth' AND disabled_cause IS NULL"
+            ).fetchone()
+            if not row:
+                return
+            cred_id, raw = row
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            now_ms = int(time.time() * 1000)
+            blocked = conn.execute(
+                "SELECT 1 FROM auth_credential_blocks WHERE credential_id = ?", (cred_id,)
+            ).fetchone()
+            healthy = (
+                data.get("refresh") == api_key
+                and isinstance(data.get("expires"), (int, float))
+                and data["expires"] > now_ms + 300000
+                and not blocked
+            )
+            if healthy:
+                return
+            from .providers.cursor_agent import _exchange
+
+            access = _exchange(api_key)
+            if not access:
+                return
+            data.update(
+                {
+                    "access": access,
+                    "refresh": api_key,
+                    "expires": _expires_ms(account, access),
+                    "authorizedAt": now_ms,
+                }
+            )
+            sub = _jwt_sub(access) or account.user_id or account.identity
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE auth_credentials SET data = ?, identity_key = ?, updated_at = CAST(strftime('%s','now') AS INTEGER) WHERE id = ?",
+                (json.dumps(data, separators=(",", ":")), f"account:{sub}", cred_id),
+            )
+            conn.execute("DELETE FROM auth_credential_blocks WHERE credential_id = ?", (cred_id,))
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+
+
+def _omp_provisioned() -> bool:
+    try:
+        return any(
+            item["harness"] == "omp" and item["provider"] == "cursor_agent"
+            for item in agentdb.list_provisions()
+        )
+    except Exception:
+        return False
+
+
 def compatible_harnesses(provider: str) -> list[str]:
     return [key for key, item in HARNESSES.items() if provider in item["providers"]]
 

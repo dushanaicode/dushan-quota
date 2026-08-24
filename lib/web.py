@@ -33,6 +33,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/quota":
             self._json(_quota_payload())
             return
+        if parsed.path == "/api/config":
+            cfg = config.load_config()
+            self._json({"watch_seconds": int(cfg.get("watch_seconds") or 60)})
+            return
         if parsed.path == "/api/provision/targets":
             provider = parse_qs(parsed.query).get("provider", [""])[0]
             from . import provision
@@ -104,6 +108,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/env":
                 config.set_env_value(payload.get("name") or "", payload.get("value") or "", persist_user=bool(payload.get("user")))
                 self._json({"ok": True})
+                return
+            if path == "/api/config":
+                seconds = payload.get("watch_seconds")
+                if isinstance(seconds, int) and 0 <= seconds <= 3600:
+                    cfg = config.load_config()
+                    cfg["watch_seconds"] = seconds
+                    config.save_config(cfg)
+                self._json({"ok": True})
+                return
+            if path == "/api/float":
+                from .float_win import launch_float
+
+                started = launch_float()
+                self._json({"ok": True, "started": started})
                 return
             if path == "/api/provision":
                 from . import provision
