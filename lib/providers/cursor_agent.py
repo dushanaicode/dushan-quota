@@ -41,6 +41,12 @@ def fetch(account: Account) -> QuotaResult:
         if isinstance(info, dict):
             plan = str(info.get("planName") or "") or plan
 
+    def _iso(ms_value):
+        try:
+            return datetime.fromtimestamp(int(ms_value) / 1000, tz=timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            return ""
+
     return QuotaResult(
         account=account,
         ok=True,
@@ -51,6 +57,8 @@ def fetch(account: Account) -> QuotaResult:
         user_id=user_id or email,
         plan=plan,
         auth_mode=account.auth_mode or "api_key",
+        sub_start=_iso(usage.get("billingCycleStart")),
+        sub_end=_iso(usage.get("billingCycleEnd")),
     )
 
 

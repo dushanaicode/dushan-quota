@@ -86,3 +86,5 @@ class QuotaResult:
     user_id: str = ""
     plan: str = ""
     auth_mode: str = ""
+    sub_start: str = ""
+    sub_end: str = ""

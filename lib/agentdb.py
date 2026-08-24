@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS provisions (
 );
 """
 
+_OPTIONAL_COLUMNS = {
+    "plan_start": "TEXT NOT NULL DEFAULT ''",
+    "plan_end": "TEXT NOT NULL DEFAULT ''",
+}
+
 # 令牌冲突裁决：只有来源票据的到期时间不早于库里的，才允许覆盖；
 # 解决 Cockpit 等只进内存的来源用旧票盖掉库里新票的问题
 _UPSERT = """
@@ -160,6 +165,21 @@ def get_tokens(provider: str, identity: str) -> dict | None:
     }
 
 
+def update_plan_period(provider: str, identity: str, start: str, end: str) -> None:
+    """记录订阅的起止时间（参考 Cockpit 的套餐周期展示）。"""
+    if not (start or end):
+        return
+    conn = _connect()
+    try:
+        conn.execute(
+            "UPDATE accounts SET plan_start = ?, plan_end = ?, updated_at = ? WHERE provider = ? AND identity = ?",
+            (start, end, int(time.time()), provider, identity),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def record_provision(provider: str, identity: str, harness: str, detail: str = "") -> None:
     conn = _connect()
     try:
@@ -224,6 +244,11 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=10)
     conn.executescript(_SCHEMA)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(accounts)")}
+    for column, ddl in _OPTIONAL_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE accounts ADD COLUMN {column} {ddl}")
+    conn.commit()
     _migrate_legacy_json(conn, path)
     return conn
 

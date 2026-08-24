@@ -1,215 +1,647 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Quota CLI</title>
-  <style>
-    :root { --bg:#0f1115; --card:#171a21; --line:#2a3140; --text:#e8edf5; --muted:#8b95a7; --acc:#6ea8fe; --ok:#3dd68c; --bad:#ff6b6b; }
-    * { box-sizing:border-box; }
-    body { margin:0; font:14px/1.5 ui-sans-serif,system-ui; background:var(--bg); color:var(--text); }
-    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
-    h1 { margin:0; font-size:18px; }
-    main { padding:20px 24px 40px; max-width:1100px; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
-    button, select, input, textarea { font:inherit; }
-    button { background:#243044; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 12px; cursor:pointer; }
-    button.primary { background:var(--acc); color:#081018; border:0; font-weight:600; }
-    button.danger { background:#3a1d22; color:#ffd5d5; }
-    .grid { display:grid; gap:12px; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
-    .muted { color:var(--muted); }
-    .ok { color:var(--ok); }
-    .bad { color:var(--bad); }
-    .bar { height:8px; background:#222834; border-radius:99px; overflow:hidden; margin:6px 0; }
-    .bar > i { display:block; height:100%; background:var(--ok); }
-    .modal { position:fixed; inset:0; background:#0008; display:none; align-items:center; justify-content:center; padding:20px; }
-    .modal.show { display:flex; }
-    .panel { width:min(560px,100%); background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
-    label { display:block; margin:10px 0 4px; color:var(--muted); }
-    input, select, textarea { width:100%; background:#10141c; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
-    textarea { min-height:120px; }
-    .meta { display:grid; grid-template-columns:64px 1fr; gap:4px 10px; margin:8px 0 10px; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quota</title>
+<style>
+  :root, body[data-theme="gold"] {
+    --bg:#0d0e11; --surface:#14151a; --surface-2:#1a1c22;
+    --line:#24262d; --line-soft:rgba(255,255,255,.055);
+    --text:#e9e7e2; --muted:#8b887f; --faint:#5d5b54;
+    --accent:#c3b191; --accent-soft:rgba(195,177,145,.12);
+    --ok:#7fb685; --warn:#d9b36c; --bad:#cf7a6d;
+    --header-bg:rgba(13,14,17,.82); --input-bg:#101218;
+    --track:rgba(255,255,255,.06); --shadow:none;
+    --sk1:rgba(255,255,255,.05); --sk2:rgba(255,255,255,.11);
+  }
+  body[data-theme="sky"] {
+    --bg:#edf4fb; --surface:#ffffff; --surface-2:#f5f9fd;
+    --line:#d9e4f0; --line-soft:rgba(29,42,56,.09);
+    --text:#1e2a38; --muted:#66788c; --faint:#9aa9bb;
+    --accent:#357abd; --accent-soft:rgba(53,122,189,.12);
+    --ok:#3da35f; --warn:#cf9a2e; --bad:#cd6159;
+    --header-bg:rgba(237,244,251,.85); --input-bg:#ffffff;
+    --track:rgba(20,40,60,.09); --shadow:0 6px 20px rgba(30,42,56,.07);
+    --sk1:rgba(20,40,60,.05); --sk2:rgba(20,40,60,.1);
+  }
+  body[data-theme="pink"] {
+    --bg:#fdf2f6; --surface:#ffffff; --surface-2:#fbf3f8;
+    --line:#f0d7e2; --line-soft:rgba(61,39,51,.09);
+    --text:#3d2733; --muted:#9c7387; --faint:#b59aa8;
+    --accent:#d96694; --accent-soft:rgba(217,102,148,.13);
+    --ok:#55a06b; --warn:#cf9a2e; --bad:#cd6159;
+    --header-bg:rgba(253,242,246,.85); --input-bg:#ffffff;
+    --track:rgba(80,30,50,.08); --shadow:0 6px 20px rgba(61,39,51,.07);
+    --sk1:rgba(80,30,50,.05); --sk2:rgba(80,30,50,.1);
+  }
+  body[data-theme="green"] {
+    --bg:#eff7f0; --surface:#ffffff; --surface-2:#f3faf4;
+    --line:#d6e7d9; --line-soft:rgba(24,42,29,.09);
+    --text:#1f2f24; --muted:#5f7a67; --faint:#93ab9a;
+    --accent:#3f9e5f; --accent-soft:rgba(63,158,95,.13);
+    --ok:#3da35f; --warn:#cf9a2e; --bad:#cd6159;
+    --header-bg:rgba(239,247,240,.85); --input-bg:#ffffff;
+    --track:rgba(25,60,35,.09); --shadow:0 6px 20px rgba(31,47,36,.07);
+    --sk1:rgba(25,60,35,.05); --sk2:rgba(25,60,35,.1);
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html { -webkit-font-smoothing:antialiased; }
+  body {
+    background:var(--bg); color:var(--text);
+    font:14px/1.6 ui-sans-serif,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    letter-spacing:.1px; transition:background .35s var(--ease), color .35s var(--ease);
+  }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button { cursor:pointer; }
+
+  /* ---------- header ---------- */
+  header {
+    position:sticky; top:0; z-index:20;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 28px 14px;
+    background:var(--header-bg);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--line-soft);
+  }
+  .brand { display:flex; align-items:baseline; gap:14px; }
+  .brand h1 { font-size:15px; font-weight:600; letter-spacing:.34em; text-transform:uppercase; }
+  .brand small { color:var(--faint); font-size:11px; letter-spacing:.12em; }
+  .actions { display:flex; gap:8px; align-items:center; }
+  .tick { position:absolute; left:0; bottom:-1px; height:1px; width:0;
+    background:linear-gradient(90deg, transparent, var(--accent), transparent);
+    transition:width 1s linear; opacity:.8; }
+
+  /* ---------- buttons ---------- */
+  .btn {
+    background:transparent; border:1px solid var(--line); color:var(--text);
+    border-radius:9px; padding:7px 14px; font-size:12.5px; text-decoration:none;
+    display:inline-flex; align-items:center; gap:6px;
+    transition:border-color .25s var(--ease), background .25s var(--ease), opacity .2s;
+  }
+  .btn:hover { border-color:var(--accent); background:var(--accent-soft); }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .btn.primary { background:var(--text); color:var(--bg); border-color:transparent; font-weight:600; }
+  .btn.primary:hover { opacity:.9; }
+  .btn .spin {
+    display:inline-block; width:10px; height:10px; vertical-align:-1px;
+    border:1.5px solid var(--faint); border-top-color:currentColor;
+    border-radius:50%; animation:rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform:rotate(360deg); } }
+  .themes { display:flex; gap:7px; margin:0 4px 0 8px; }
+  .themes button {
+    width:15px; height:15px; border-radius:50%; border:2px solid transparent;
+    background:var(--dot); padding:0; transition:transform .2s var(--ease), border-color .2s;
+  }
+  .themes button:hover { transform:scale(1.18); }
+  .themes button.on { border-color:var(--text); }
+
+  /* ---------- layout ---------- */
+  .layout { display:flex; gap:26px; max-width:1560px; margin:0 auto; padding:24px 32px 64px; align-items:flex-start; }
+  main { flex:1; min-width:0; }
+  .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
+
+  /* ---------- sidebar ---------- */
+  #side { flex:none; width:170px; position:sticky; top:88px; }
+  .side-title { font-size:10px; letter-spacing:.2em; color:var(--faint); text-transform:uppercase; margin:2px 0 10px 11px; }
+  #sideNav { display:flex; flex-direction:column; gap:2px; }
+  #sideNav button {
+    display:flex; justify-content:space-between; align-items:center; gap:8px;
+    background:transparent; border:0; border-radius:8px; padding:7px 11px;
+    font-size:12.5px; color:var(--muted); text-align:left;
+    transition:background .2s var(--ease), color .2s var(--ease);
+  }
+  #sideNav button:hover { background:var(--accent-soft); color:var(--text); }
+  #sideNav button.on { background:var(--accent-soft); color:var(--accent); }
+  #sideNav .cnt { font-size:10px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  #hiddenNote { margin:16px 0 0 11px; font-size:11px; color:var(--faint); }
+  #hiddenNote a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  #hiddenNote a:hover { text-decoration:underline; }
+  @media (max-width:900px) {
+    .layout { flex-direction:column; }
+    #side { width:100%; position:static; }
+    #sideNav { flex-direction:row; flex-wrap:wrap; }
+    .side-title { margin-left:0; }
+  }
+
+  /* ---------- card ---------- */
+  .card {
+    position:relative;
+    display:flex; flex-direction:column;
+    background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:16px 18px 14px; box-shadow:var(--shadow);
+    animation:rise .55s var(--ease) both;
+    transition:transform .3s var(--ease), border-color .3s var(--ease), background .35s, box-shadow .3s;
+  }
+  .card:hover { transform:translateY(-2px); border-color:var(--accent); }
+  @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+  .card.loading-dim { opacity:.55; transition:opacity .3s; }
+  .card .x {
+    position:absolute; top:10px; right:10px; width:22px; height:22px;
+    display:flex; align-items:center; justify-content:center;
+    border:0; background:transparent; color:var(--faint); font-size:11px; border-radius:7px;
+    opacity:0; transition:opacity .2s, color .2s, background .2s;
+  }
+  .card:hover .x { opacity:1; }
+  .card .x:hover { color:var(--bad); background:rgba(207,122,109,.12); }
+  .card .x.arm { opacity:1; color:var(--bad); width:auto; padding:0 8px; font-size:10.5px; }
+  .card-head { display:flex; align-items:center; gap:9px; margin-bottom:3px; padding-right:24px; }
+  .card-head h2 { font-size:13.5px; font-weight:600; letter-spacing:.02em; white-space:nowrap; }
+  .pill {
+    font-size:9.5px; letter-spacing:.06em; padding:2px 8px; border-radius:99px;
+    background:var(--accent-soft); color:var(--accent); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+  }
+  .pill.warn { background:rgba(207,154,46,.14); color:var(--warn); }
+  .pill.bad { background:rgba(205,97,89,.13); color:var(--bad); }
+  .meta { color:var(--muted); font-size:11.5px; margin:2px 0 0; line-height:1.55;
+    word-break:break-word; }
+  .meta.dim { color:var(--muted); font-size:11px; opacity:.85; }
+  .meta i { font-style:normal; color:var(--faint); margin:0 6px; }
+  .wins { border-top:1px solid var(--line-soft); margin-top:10px; padding-top:8px; flex:1; }
+  /* 两行式额度行（对齐悬浮窗）：名称+重置+百分比一行，细条整行在下 */
+  .wrow { margin:8px 0 3px; }
+  .wrow .top { display:flex; align-items:baseline; gap:8px; margin-bottom:3px; }
+  .wrow .lbl { font-size:11.5px; color:var(--muted); white-space:nowrap; }
+  .wrow .rst { flex:1; text-align:right; font-size:9.5px; color:var(--faint); white-space:nowrap; }
+  .wrow .pct { font-size:11.5px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .g { color:var(--ok); } .y { color:var(--warn); } .r { color:var(--bad); }
+  .bar { height:3px; border-radius:99px; background:var(--track); overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:99px; transition:width .8s var(--ease); }
+  .bar i.g { background:var(--ok); } .bar i.y { background:var(--warn); } .bar i.r { background:var(--bad); }
+  .wrow.info .txt, .wrow.warn .txt, .wrow.money .txt { flex:1; text-align:right; font-size:10.5px; line-height:1.5; }
+  .wrow.info, .wrow.warn, .wrow.money { display:flex; align-items:baseline; gap:8px; margin:7px 0; }
+  .wrow.info .txt { color:var(--muted); }
+  .wrow.warn .txt { color:var(--warn); }
+  .wrow.money .txt { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .wrow.money.neg .txt { color:var(--bad); }
+  .err { color:var(--bad); font-size:12px; padding:6px 0 2px; }
+  .foot { display:flex; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
+  .foot .btn { padding:4px 11px; font-size:11px; color:var(--muted); border-radius:8px; }
+  .foot .btn:hover { color:var(--text); }
+  .foot .btn.arm { color:var(--warn); border-color:rgba(207,154,46,.4); }
+
+  /* ---------- skeleton ---------- */
+  .sk { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
+  .sk .ln { height:10px; border-radius:6px; margin:12px 0;
+    background:linear-gradient(90deg, var(--sk1) 25%, var(--sk2) 50%, var(--sk1) 75%);
+    background-size:200% 100%; animation:shimmer 1.4s ease infinite; }
+  .sk .ln.w40 { width:40%; } .sk .ln.w70 { width:70%; } .sk .ln.w55 { width:55%; }
+  @keyframes shimmer { from { background-position:180% 0; } to { background-position:-20% 0; } }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(12px);
+    background:var(--surface-2); border:1px solid var(--line); border-radius:10px;
+    padding:9px 18px; font-size:12.5px; color:var(--text); z-index:80;
+    opacity:0; pointer-events:none; transition:opacity .3s var(--ease), transform .3s var(--ease);
+  }
+  #toast.show { opacity:1; transform:translateX(-50%); }
+  #toast.bad { color:var(--bad); border-color:rgba(205,97,89,.4); }
+
+  /* ---------- focus panel（右侧 1/3 滑出） ---------- */
+  #focusPanel {
+    position:fixed; top:0; right:0; z-index:45;
+    width:min(33vw, 460px); min-width:320px; height:100vh;
+    background:var(--surface); border-left:1px solid var(--line);
+    box-shadow:-14px 0 40px rgba(0,0,0,.22);
+    transform:translateX(106%); transition:transform .38s var(--ease);
+    display:flex; flex-direction:column;
+  }
+  #focusPanel.show { transform:translateX(0); }
+  .fp-head { display:flex; align-items:center; justify-content:space-between; padding:16px 18px 12px; border-bottom:1px solid var(--line-soft); }
+  .fp-tabs { display:flex; gap:4px; background:var(--track); border-radius:9px; padding:3px; }
+  .fp-tabs button { border:0; background:transparent; color:var(--muted); font-size:12px; padding:5px 13px; border-radius:7px; transition:all .2s var(--ease); }
+  .fp-tabs button.on { background:var(--surface); color:var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.15); }
+  .fp-x { border:0; background:transparent; color:var(--faint); font-size:12px; width:24px; height:24px; border-radius:7px; }
+  .fp-x:hover { color:var(--bad); background:rgba(205,97,89,.12); }
+  #fpList { flex:1; overflow-y:auto; padding:8px 18px 20px; }
+  .fp-item { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-soft); animation:rise .4s var(--ease) both; }
+  .fp-item .t { flex:1; min-width:0; font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .fp-item .t b { font-weight:600; }
+  .fp-item .t span { color:var(--faint); margin-left:7px; font-size:11px; }
+  .fp-item .r { font-size:10px; color:var(--faint); white-space:nowrap; }
+  .fp-item .p { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .fp-empty { color:var(--faint); font-size:12px; padding:18px 0; }
+
+  /* ---------- modal ---------- */
+  .modal { position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center; padding:22px;
+    background:rgba(8,9,11,.55); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+  .modal.show { display:flex; animation:fadein .25s var(--ease); }
+  @keyframes fadein { from { opacity:0; } }
+  .panel { width:min(520px,100%); background:var(--surface-2); border:1px solid var(--line);
+    border-radius:16px; padding:24px 24px 20px; animation:pop .3s var(--ease); }
+  @keyframes pop { from { opacity:0; transform:translateY(10px) scale(.985); } }
+  .panel h2 { font-size:15px; font-weight:600; letter-spacing:.04em; margin-bottom:16px; }
+  .panel label { display:block; font-size:11px; letter-spacing:.08em; color:var(--muted); margin:14px 0 5px; }
+  .panel input, .panel select, .panel textarea {
+    width:100%; background:var(--input-bg); border:1px solid var(--line); border-radius:9px;
+    padding:9px 11px; font-size:13px; outline:none;
+    transition:border-color .25s var(--ease), box-shadow .25s var(--ease);
+  }
+  .panel input:focus, .panel select:focus, .panel textarea:focus {
+    border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);
+  }
+  .panel textarea { min-height:110px; resize:vertical; }
+  .panel .row { display:flex; gap:8px; margin-top:20px; }
+  .panel .row.end { justify-content:flex-end; }
+  .hint { color:var(--muted); font-size:12px; line-height:1.7; }
+  .msg { margin-top:12px; font-size:12px; color:var(--accent); min-height:18px; }
+  .msg.bad { color:var(--bad); }
+  .oauth-box { display:flex; gap:8px; margin-top:10px; }
+  .oauth-box input { flex:1; font-size:11.5px; color:var(--muted); }
+  .waiting { display:flex; align-items:center; gap:9px; margin-top:12px; color:var(--muted); font-size:12px; }
+  .waiting i { width:11px; height:11px; border:1.5px solid var(--faint); border-top-color:var(--accent);
+    border-radius:50%; animation:rot .8s linear infinite; }
+  .targets { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
+  .targets .btn { text-align:left; padding:10px 13px; }
+  ::selection { background:var(--accent-soft); }
+</style>
 </head>
-<body>
-  <header>
-    <h1>Quota 账号与额度</h1>
-    <div class="row" style="margin:0">
-      <button onclick="loadQuota()">刷新额度</button>
-      <button class="primary" onclick="openAdd()">添加账号</button>
+<body data-theme="gold">
+<header>
+  <div class="brand"><h1>Quota</h1><small>多平台额度</small></div>
+  <div class="actions">
+    <div class="themes" id="themes">
+      <button data-t="gold" style="--dot:#c3b191" title="暗黑鎏金"></button>
+      <button data-t="sky" style="--dot:#5ea3e6" title="蓝天白云"></button>
+      <button data-t="pink" style="--dot:#e889ad" title="粉红少女"></button>
+      <button data-t="green" style="--dot:#55b579" title="绿意盎然"></button>
     </div>
-  </header>
-  <main>
-    <p class="muted">认证逻辑对齐 Cockpit / OpenCode quota：OAuth、API Key、JSON、本机导入、环境变量。仅本机 127.0.0.1。</p>
-    <div id="list" class="grid"></div>
-  </main>
-  <div id="addModal" class="modal">
-    <div class="panel">
-      <h2>添加账号</h2>
-      <label>平台</label>
-      <select id="provider"></select>
-      <label>方式</label>
-      <select id="mode"></select>
-      <div id="fields"></div>
-      <div class="row" style="margin-top:14px">
-        <button class="primary" onclick="submitAdd()">确认</button>
-        <button onclick="closeAdd()">取消</button>
-      </div>
-      <p id="addMsg" class="muted"></p>
+    <a class="btn" href="https://github.com/dushanaicode/quota-cli" target="_blank" rel="noopener" title="GitHub 仓库">GitHub</a>
+    <button class="btn" id="btnFocus" onclick="toggleFocus(true)">关注</button>
+    <button class="btn" id="btnRefresh" onclick="refreshQuota(true)">刷新</button>
+    <button class="btn primary" onclick="openAdd()">添加账号</button>
+  </div>
+  <div class="tick" id="tick"></div>
+</header>
+
+<div class="layout">
+  <aside id="side">
+    <nav id="sideNav"></nav>
+    <p id="hiddenNote"></p>
+  </aside>
+  <main><div id="list" class="grid"></div></main>
+</div>
+
+<div id="focusPanel">
+  <div class="fp-head">
+    <div class="fp-tabs">
+      <button data-tab="low" class="on" onclick="setFpTab('low')">用量最低</button>
+      <button data-tab="soon" onclick="setFpTab('soon')">即将重置</button>
+    </div>
+    <button class="fp-x" onclick="toggleFocus(false)">✕</button>
+  </div>
+  <div id="fpList"></div>
+</div>
+
+<div id="toast"></div>
+
+<div id="addModal" class="modal" onclick="if(event.target===this)closeAdd()">
+  <div class="panel">
+    <h2>添加账号</h2>
+    <label>平台</label>
+    <select id="provider"></select>
+    <label>方式</label>
+    <select id="mode"></select>
+    <div id="fields"></div>
+    <div class="row end">
+      <button class="btn" onclick="closeAdd()">取消</button>
+      <button class="btn primary" id="btnAdd" onclick="submitAdd()">确认</button>
+    </div>
+    <p id="addMsg" class="msg"></p>
+  </div>
+</div>
+
+<div id="syncModal" class="modal" onclick="if(event.target===this)closeSync()">
+  <div class="panel">
+    <h2>写入到 harness</h2>
+    <p class="hint" id="syncAcc"></p>
+    <div class="targets" id="syncTargets"></div>
+    <p id="syncMsg" class="msg"></p>
+    <div class="row end" id="syncConfirm" style="display:none">
+      <button class="btn" onclick="closeSync()">取消</button>
+      <button class="btn primary" id="syncYes">确认覆盖</button>
     </div>
   </div>
-  <div id="syncModal" class="modal">
-    <div class="panel">
-      <h2>写入到 harness</h2>
-      <p id="syncAcc" class="muted"></p>
-      <div id="syncTargets" class="row"></div>
-      <p id="syncMsg" class="muted"></p>
-      <div class="row" id="syncConfirm" style="display:none">
-        <button class="danger" id="syncYes">确认覆盖</button>
-        <button onclick="closeSync()">取消</button>
-      </div>
-      <div class="row"><button onclick="closeSync()">关闭</button></div>
-    </div>
-  </div>
-  <script>
-    const rules = {};
-    async function api(path, opt={}) {
-      const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opt));
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
-      return data;
+</div>
+
+<script>
+const rules = {};
+let firstLoad = true;
+let cache = [];
+let filter = '*';
+let hiddenCount = 0;
+let fpTab = 'low';
+
+async function api(path, opt={}) {
+  const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opt));
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const colorOf = p => p >= 40 ? 'g' : p >= 15 ? 'y' : 'r';
+
+/* ---------- 主题 ---------- */
+function setTheme(t){
+  document.body.dataset.theme = t;
+  localStorage.setItem('quota-theme', t);
+  document.querySelectorAll('#themes button').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+}
+(function initTheme(){
+  const q = new URLSearchParams(location.search).get('theme');
+  setTheme(q || localStorage.getItem('quota-theme') || 'gold');
+})();
+document.querySelectorAll('#themes button').forEach(b => b.onclick = () => setTheme(b.dataset.t));
+
+function toast(text, bad){
+  const t = document.getElementById('toast');
+  t.textContent = text; t.className = bad ? 'bad show' : 'show';
+  clearTimeout(t._tm); t._tm = setTimeout(() => t.className = '', 2600);
+}
+
+function skeleton(){
+  document.getElementById('list').innerHTML =
+    '<div class="sk"><div class="ln w40"></div><div class="ln w70"></div><div class="ln w55"></div><div class="ln w70"></div></div>'.repeat(4);
+}
+
+/* ---------- 专用样式 ---------- */
+function textRowClass(text){
+  if (/欠费|不可用|不足/.test(text)) return 'warn';
+  if (/¥|\$|balance/i.test(text)) return 'money' + (/-/.test(text) ? ' neg' : '');
+  return 'info';
+}
+function pillClass(plan){
+  if (/不可用|欠费|过期|失效/.test(plan || '')) return 'bad';
+  if (/free|免费/i.test(plan || '')) return 'warn';
+  return '';
+}
+function fmtDate(iso){
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+/* 两行式额度行（同悬浮窗）：名称+重置+百分比一行，细条整行 */
+function winRow(w){
+  if (w.text != null) {
+    return `<div class="wrow ${textRowClass(w.text)}"><span class="lbl">${esc(w.name)}</span><span class="txt">${esc(w.text)}</span></div>`;
+  }
+  const p = Math.max(0, Math.min(100, Math.round(w.remaining_percent || 0)));
+  const c = colorOf(p);
+  return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${esc(w.reset || '')}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
+}
+
+function renderSide(){
+  const nav = document.getElementById('sideNav');
+  const counts = {};
+  cache.forEach(it => { counts[it.title] = (counts[it.title] || 0) + 1; });
+  nav.innerHTML = '';
+  const mk = (key, label, cnt) => {
+    const b = document.createElement('button');
+    b.className = key === filter ? 'on' : '';
+    b.innerHTML = `<span>${esc(label)}</span><span class="cnt">${cnt}</span>`;
+    b.onclick = () => { filter = key; renderSide(); renderCards(); };
+    nav.appendChild(b);
+  };
+  mk('*', '全部', cache.length);
+  Object.keys(counts).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).forEach(t => mk(t, t, counts[t]));
+  document.getElementById('hiddenNote').innerHTML =
+    hiddenCount > 0 ? `已隐藏 ${hiddenCount} 张 · <a onclick="unhideAll()">全部恢复</a>` : '';
+}
+
+function renderCards(){
+  const box = document.getElementById('list');
+  box.innerHTML = '';
+  const items = cache.filter(it => filter === '*' || it.title === filter);
+  if (!items.length) { box.innerHTML = '<p class="hint">该筛选下没有卡片</p>'; return; }
+  items.forEach((item, i) => {
+    const line1 = [item.email, item.name].filter(Boolean).map(esc).join('<i>·</i>');
+    const line2 = [item.user_id && item.user_id !== item.email ? item.user_id : '', [item.auth_mode, item.source].filter(Boolean).join(' / ')].filter(Boolean).map(esc).join('<i>·</i>');
+    const subLine = (item.sub_start || item.sub_end)
+      ? `<div class="meta dim">订阅 ${esc(fmtDate(item.sub_start)) || '?'} · 到期 ${esc(fmtDate(item.sub_end)) || '?'}</div>` : '';
+    const wins = (item.windows || []).map(winRow).join('');
+    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(item.plan)}">${esc(item.plan)}</span>` : '';
+    const sec = document.createElement('section');
+    sec.className = 'card';
+    sec.style.animationDelay = (i * 45) + 'ms';
+    sec.innerHTML = `
+      <button class="x" title="${item.stored_id ? '删除本地账号' : '隐藏此卡片'}">✕</button>
+      <div class="card-head"><h2>${esc(item.title)}</h2>${pill}</div>
+      <div class="meta">${line1 || '-'}</div>
+      <div class="meta dim">${line2 || ' '}</div>
+      ${subLine}
+      ${item.ok ? `<div class="wins">${wins}</div>` : `<div class="err">${esc(item.error || '获取失败')}</div>`}
+      <div class="foot">
+        <button class="btn act-sync">写入到…</button>
+        ${item.provider === 'openai' ? '<button class="btn act-reset">重置额度</button>' : ''}
+      </div>`;
+    sec.querySelector('.x').onclick = e => closeCard(item, e.currentTarget);
+    sec.querySelector('.act-sync').onclick = () => openSync(item.provider, encodeURIComponent(item.identity || ''), item.title);
+    const rb = sec.querySelector('.act-reset');
+    if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
+    box.appendChild(sec);
+  });
+}
+
+function closeCard(item, btn){
+  if (item.stored_id) {
+    if (btn.dataset.arm) {
+      api('/api/accounts/' + item.stored_id, {method:'DELETE'}).then(() => { toast('已删除'); refreshQuota(false); });
+    } else {
+      btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认删除';
+      setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = '✕'; }, 2600);
     }
-    function bar(p){ const n=Math.max(0,Math.min(100,p||0)); return `<div class="bar"><i style="width:${n}%"></i></div>`; }
-    async function loadQuota(){
-      const box=document.getElementById('list');
-      box.innerHTML='<p class="muted">加载中...</p>';
-      const data=await api('/api/quota');
-      box.innerHTML='';
-      data.results.forEach(item=>{
-        const wins=(item.windows||[]).map(w=>`<div>${w.name} ${Math.round(w.remaining_percent)}% left ${w.used!=null?`| ${w.used}/${w.total}`:''} ${w.reset||''}${bar(w.remaining_percent)}</div>`).join('');
-        box.innerHTML += `<section class="card">
-          <strong>${item.title}</strong>
-          <div class="meta">
-            <span class="muted">账号</span><span>${item.email||'-'} ${item.name||''}</span>
-            <span class="muted">用户</span><span>${item.user_id||'-'}</span>
-            <span class="muted">套餐</span><span>${item.plan||'-'}</span>
-            <span class="muted">认证</span><span>${item.auth_mode||'-'} / ${item.source||'-'}</span>
-          </div>
-          ${item.ok?wins:`<div class="bad">${item.error||'失败'}</div>`}
-          <div class="row" style="margin:8px 0 0">
-            <button onclick="openSync('${item.provider}','${encodeURIComponent(item.identity||'')}','${item.title}')">写入到…</button>
-            ${item.stored_id?`<button class="danger" onclick="delAcc('${item.stored_id}')">删除本地账号</button>`:''}
-          </div>
-        </section>`;
-      });
-    }
-    async function openAdd(){
-      const data=await api('/api/rules');
-      Object.assign(rules, data.rules);
-      const p=document.getElementById('provider');
-      p.innerHTML=Object.entries(rules).map(([k,v])=>`<option value="${k}">${v.title}</option>`).join('');
-      p.onchange=renderModes; renderModes();
-      document.getElementById('addMsg').textContent='';
-      document.getElementById('addModal').classList.add('show');
-    }
-    function closeAdd(){ document.getElementById('addModal').classList.remove('show'); }
-    function renderModes(){
-      const provider=document.getElementById('provider').value;
-      const modes=rules[provider].modes;
-      document.getElementById('mode').innerHTML=modes.map(m=>`<option value="${m}">${modeLabel(m)}</option>`).join('');
-      document.getElementById('mode').onchange=renderFields; renderFields();
-    }
-    function modeLabel(m){return {oauth:'OAuth 授权',api_key:'API Key',json:'Token / JSON',local:'本机导入',env:'环境变量'}[m]||m;}
-    function renderFields(){
-      const mode=document.getElementById('mode').value;
-      const f=document.getElementById('fields');
-      if(mode==='api_key') f.innerHTML='<label>API Key</label><input id="apiKey" />';
-      else if(mode==='json') f.innerHTML='<label>JSON</label><textarea id="jsonText"></textarea>';
-      else if(mode==='env') f.innerHTML='<p class="muted">将读取并导入该平台已配置的环境变量。</p>';
-      else if(mode==='local') f.innerHTML='<p class="muted">从 OpenCode / Cockpit / 官方本机目录导入。</p>';
-      else if(mode==='oauth') f.innerHTML='<p class="muted">复制授权链接到你常用的浏览器打开；完成后会自动回到本页。Grok 会另显示验证码。</p><div id="oauthBox" class="row" style="margin-top:8px"></div>';
-      else f.innerHTML='';
-    }
-    async function submitAdd(){
-      const provider=document.getElementById('provider').value;
-      const mode=document.getElementById('mode').value;
-      const msg=document.getElementById('addMsg');
-      try{
-        if(mode==='api_key') await api('/api/accounts/key',{method:'POST',body:JSON.stringify({provider,key:document.getElementById('apiKey').value})});
-        else if(mode==='json') await api('/api/accounts/json',{method:'POST',body:JSON.stringify({text:document.getElementById('jsonText').value})});
-        else if(mode==='env') await api('/api/accounts/env',{method:'POST',body:JSON.stringify({provider})});
-        else if(mode==='local') await api('/api/accounts/local',{method:'POST',body:JSON.stringify({provider})});
-        else if(mode==='oauth'){ await startOAuth(provider); return; }
-        msg.textContent='已保存'; closeAdd(); loadQuota();
-      }catch(e){ msg.textContent=e.message; }
-    }
-    async function startOAuth(provider){
-      const data=await api('/api/oauth/'+provider+'/start',{method:'POST',body:'{}'});
-      const url=data.verification_uri_complete;
-      const box=document.getElementById('oauthBox');
-      box.innerHTML='';
-      if(data.user_code){
-        const p=document.createElement('p');
-        p.innerHTML='验证码 <b></b>';
-        p.querySelector('b').textContent=data.user_code;
-        box.appendChild(p);
-      }
-      const input=document.createElement('input');
-      input.readOnly=true; input.value=url; input.style.flex='1';
-      box.appendChild(input);
-      const copy=document.createElement('button');
-      copy.type='button'; copy.textContent='复制链接';
-      copy.onclick=()=>{ navigator.clipboard.writeText(url); copy.textContent='已复制'; setTimeout(()=>copy.textContent='复制链接',1200); };
-      box.appendChild(copy);
-      const open=document.createElement('button');
-      open.type='button'; open.textContent='默认浏览器打开';
-      open.onclick=()=>window.open(url,'_blank');
-      box.appendChild(open);
-      pollOAuth(provider, data.login_id);
-    }
-    async function pollOAuth(provider, id){
-      const data=await api('/api/oauth/'+provider+'/poll?login_id='+id);
-      if(data.status==='ok'){ document.getElementById('addMsg').textContent='授权成功'; closeAdd(); loadQuota(); return; }
-      if(data.status==='pending'){ setTimeout(()=>pollOAuth(provider,id), 2500); return; }
-      document.getElementById('addMsg').textContent=data.error||data.status;
-    }
-    async function delAcc(id){ await api('/api/accounts/'+id,{method:'DELETE'}); loadQuota(); }
-    let syncCtx = null;
-    async function openSync(provider, identity, title){
-      identity = decodeURIComponent(identity);
-      syncCtx = {provider, identity};
-      document.getElementById('syncAcc').textContent = title + '  ' + identity;
-      document.getElementById('syncMsg').textContent = '';
-      document.getElementById('syncConfirm').style.display = 'none';
-      const data = await api('/api/provision/targets?provider='+provider);
-      const box = document.getElementById('syncTargets');
-      box.innerHTML = '';
-      if(!data.targets.length){ box.innerHTML = '<span class="muted">该平台暂无可写 harness</span>'; }
-      data.targets.forEach(t=>{
-        const b = document.createElement('button');
-        b.textContent = '写入 ' + t.label;
-        b.onclick = ()=>doSync(t.key, false);
-        box.appendChild(b);
-      });
-      document.getElementById('syncModal').classList.add('show');
-    }
-    function closeSync(){ document.getElementById('syncModal').classList.remove('show'); }
-    async function doSync(harness, confirmed){
-      const msg = document.getElementById('syncMsg');
-      msg.textContent = '写入中…';
-      const data = await api('/api/provision', {method:'POST', body:JSON.stringify({provider:syncCtx.provider, identity:syncCtx.identity, harness, confirmed})});
-      if(data.needs_confirm){
-        msg.textContent = data.conflict;
-        const bar = document.getElementById('syncConfirm');
-        bar.style.display = 'flex';
-        document.getElementById('syncYes').onclick = ()=>{ bar.style.display='none'; doSync(harness, true); };
-        return;
-      }
-      document.getElementById('syncConfirm').style.display = 'none';
-      msg.textContent = data.message || data.error || JSON.stringify(data);
-    }
-    loadQuota();
-  </script>
+    return;
+  }
+  api('/api/hide', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})})
+    .then(() => { toast('已隐藏，可在左侧恢复'); refreshQuota(false); });
+}
+async function unhideAll(){ await api('/api/unhide', {method:'POST', body:'{}'}); refreshQuota(false); }
+
+async function resetOpenAI(item, btn){
+  if (!btn.dataset.arm) {
+    btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认重置';
+    setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = '重置额度'; }, 2600);
+    return;
+  }
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>重置中';
+  try {
+    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})});
+    toast(r.ok ? (r.message || '已重置') : (r.error || '重置失败'), !r.ok);
+  } catch(e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '重置额度'; refreshQuota(false); }
+}
+
+async function refreshQuota(manual){
+  const btn = document.getElementById('btnRefresh');
+  const list = document.getElementById('list');
+  if (firstLoad) skeleton();
+  else list.querySelectorAll('.card').forEach(c => c.classList.add('loading-dim'));
+  if (manual) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>刷新中'; }
+  try {
+    const data = await api('/api/quota');
+    cache = data.results || [];
+    hiddenCount = data.hidden_count || 0;
+    renderSide(); renderCards(); renderFocus();
+    firstLoad = false;
+  } catch(e) {
+    if (firstLoad) list.innerHTML = `<p class="hint">加载失败：${esc(e.message)}</p>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '刷新';
+    restartTick();
+  }
+}
+
+function restartTick(){
+  const t = document.getElementById('tick');
+  t.style.transition = 'none'; t.style.width = '0';
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    t.style.transition = 'width 60s linear'; t.style.width = '100%';
+  }));
+}
+
+/* ---------- 关注面板（右侧 1/3） ---------- */
+function toggleFocus(open){
+  document.getElementById('focusPanel').classList.toggle('show', open);
+  if (open) renderFocus();
+}
+function setFpTab(tab){
+  fpTab = tab;
+  document.querySelectorAll('.fp-tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  renderFocus();
+}
+function renderFocus(){
+  const box = document.getElementById('fpList');
+  const rows = [];
+  cache.forEach(it => {
+    if (!it.ok) return;
+    (it.windows || []).forEach(w => {
+      if (w.remaining_percent == null) return;
+      rows.push({title: it.title, name: w.name, pct: Math.round(w.remaining_percent), reset: w.reset || '', ts: w.reset_ts || 0});
+    });
+  });
+  let items;
+  if (fpTab === 'low') {
+    items = rows.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct || a.ts - b.ts);
+  } else {
+    items = rows.filter(r => r.ts > 0).sort((a, b) => a.ts - b.ts);
+  }
+  box.innerHTML = items.length ? '' : '<p class="fp-empty">暂无数据</p>';
+  items.forEach((r, i) => {
+    const c = colorOf(r.pct);
+    const div = document.createElement('div');
+    div.className = 'fp-item';
+    div.style.animationDelay = (i * 25) + 'ms';
+    div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span></span><span class="r">${esc(r.reset)}</span><span class="p ${c}">${r.pct}%</span>`;
+    box.appendChild(div);
+  });
+}
+
+/* ---------- add account ---------- */
+async function openAdd(){
+  const data = await api('/api/rules');
+  Object.assign(rules, data.rules);
+  const p = document.getElementById('provider');
+  p.innerHTML = Object.entries(rules).map(([k, v]) => `<option value="${k}">${esc(v.title)}</option>`).join('');
+  p.onchange = renderModes; renderModes();
+  document.getElementById('addMsg').textContent = ''; document.getElementById('addMsg').className = 'msg';
+  document.getElementById('addModal').classList.add('show');
+}
+function closeAdd(){ document.getElementById('addModal').classList.remove('show'); }
+function renderModes(){
+  const provider = document.getElementById('provider').value;
+  document.getElementById('mode').innerHTML = rules[provider].modes.map(m => `<option value="${m}">${modeLabel(m)}</option>`).join('');
+  document.getElementById('mode').onchange = renderFields; renderFields();
+}
+function modeLabel(m){ return {oauth:'OAuth 授权', api_key:'API Key', json:'Token / JSON', local:'本机导入', env:'环境变量'}[m] || m; }
+function renderFields(){
+  const mode = document.getElementById('mode').value;
+  const f = document.getElementById('fields');
+  if (mode === 'api_key') f.innerHTML = '<label>API Key</label><input id="apiKey" autocomplete="off" />';
+  else if (mode === 'json') f.innerHTML = '<label>JSON</label><textarea id="jsonText"></textarea>';
+  else if (mode === 'env') f.innerHTML = '<p class="hint">读取并导入该平台已配置的环境变量。</p>';
+  else if (mode === 'local') f.innerHTML = '<p class="hint">从 OpenCode / Cockpit / 官方本机目录导入。</p>';
+  else if (mode === 'oauth') f.innerHTML = '<p class="hint">复制授权链接到浏览器打开，完成后自动回到本页。</p><div id="oauthBox"></div>';
+  else f.innerHTML = '';
+}
+async function submitAdd(){
+  const provider = document.getElementById('provider').value;
+  const mode = document.getElementById('mode').value;
+  const msg = document.getElementById('addMsg');
+  const btn = document.getElementById('btnAdd');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>处理中';
+  msg.className = 'msg'; msg.textContent = '';
+  try {
+    if (mode === 'api_key') await api('/api/accounts/key', {method:'POST', body:JSON.stringify({provider, key:document.getElementById('apiKey').value})});
+    else if (mode === 'json') await api('/api/accounts/json', {method:'POST', body:JSON.stringify({text:document.getElementById('jsonText').value})});
+    else if (mode === 'env') await api('/api/accounts/env', {method:'POST', body:JSON.stringify({provider})});
+    else if (mode === 'local') await api('/api/accounts/local', {method:'POST', body:JSON.stringify({provider})});
+    else if (mode === 'oauth') { await startOAuth(provider); return; }
+    closeAdd(); refreshQuota(false);
+  } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
+  finally { btn.disabled = false; btn.textContent = '确认'; }
+}
+async function startOAuth(provider){
+  const data = await api('/api/oauth/' + provider + '/start', {method:'POST', body:'{}'});
+  const url = data.verification_uri_complete;
+  const box = document.getElementById('oauthBox');
+  box.innerHTML = '';
+  if (data.user_code) box.innerHTML += `<p class="hint">验证码 <b style="color:var(--text)">${esc(data.user_code)}</b></p>`;
+  box.innerHTML += `<div class="oauth-box"><input readonly value="${esc(url)}"/><button class="btn" id="cpBtn">复制</button></div>
+    <div class="waiting"><i></i>等待授权完成…</div>`;
+  document.getElementById('cpBtn').onclick = e => { navigator.clipboard.writeText(url); e.target.textContent = '已复制'; setTimeout(() => e.target.textContent = '复制', 1200); };
+  pollOAuth(provider, data.login_id);
+}
+async function pollOAuth(provider, id){
+  const data = await api('/api/oauth/' + provider + '/poll?login_id=' + id);
+  if (data.status === 'ok') { closeAdd(); refreshQuota(false); return; }
+  if (data.status === 'pending') { setTimeout(() => pollOAuth(provider, id), 2500); return; }
+  const msg = document.getElementById('addMsg');
+  msg.className = 'msg bad'; msg.textContent = data.error || data.status;
+}
+
+/* ---------- sync to harness ---------- */
+let syncCtx = null;
+async function openSync(provider, identity, title){
+  syncCtx = {provider, identity: decodeURIComponent(identity)};
+  document.getElementById('syncAcc').textContent = title + ' · ' + syncCtx.identity;
+  const msg = document.getElementById('syncMsg');
+  msg.textContent = ''; msg.className = 'msg';
+  document.getElementById('syncConfirm').style.display = 'none';
+  const data = await api('/api/provision/targets?provider=' + provider);
+  const box = document.getElementById('syncTargets');
+  box.innerHTML = data.targets.length ? '' : '<p class="hint">该平台暂无可写 harness</p>';
+  data.targets.forEach(t => {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = t.label;
+    b.onclick = () => doSync(t.key, false);
+    box.appendChild(b);
+  });
+  document.getElementById('syncModal').classList.add('show');
+}
+function closeSync(){ document.getElementById('syncModal').classList.remove('show'); }
+async function doSync(harness, confirmed){
+  const msg = document.getElementById('syncMsg');
+  msg.className = 'msg'; msg.textContent = '写入中…';
+  const data = await api('/api/provision', {method:'POST', body:JSON.stringify({provider:syncCtx.provider, identity:syncCtx.identity, harness, confirmed})});
+  if (data.needs_confirm){
+    msg.textContent = data.conflict;
+    document.getElementById('syncConfirm').style.display = 'flex';
+    document.getElementById('syncYes').onclick = () => { document.getElementById('syncConfirm').style.display = 'none'; doSync(harness, true); };
+    return;
+  }
+  document.getElementById('syncConfirm').style.display = 'none';
+  if (data.ok) msg.textContent = data.message || '完成';
+  else { msg.className = 'msg bad'; msg.textContent = data.error || '失败'; }
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); toggleFocus(false); } });
+refreshQuota(false);
+setInterval(() => refreshQuota(false), 60000);
+</script>
 </body>
 </html>

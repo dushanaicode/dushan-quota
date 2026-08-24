@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from . import agentdb
 from .models import Account, QuotaResult
 from .providers import antigravity, claude, cursor, cursor_agent, deepseek, grok, kimi, openai, zai
 
@@ -42,4 +43,7 @@ def fetch_all(accounts: list[Account]) -> list[QuotaResult]:
                 )
     order = {id(account): index for index, account in enumerate(accounts)}
     results.sort(key=lambda item: order.get(id(item.account), 0))
+    for item in results:
+        if item.sub_start or item.sub_end:
+            agentdb.update_plan_period(item.account.provider, item.account.identity, item.sub_start, item.sub_end)
     return results

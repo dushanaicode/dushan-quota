@@ -85,6 +85,8 @@ def fetch(account: Account) -> QuotaResult:
         user_id=user_id,
         plan=plan,
         auth_mode=account.auth_mode or "oauth",
+        sub_start=str(period.get("start") or config.get("billingPeriodStart") or ""),
+        sub_end=str(period.get("end") or config.get("billingPeriodEnd") or ""),
     )
 
 

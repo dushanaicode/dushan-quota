@@ -31,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"accounts": store.list_stored()})
             return
         if parsed.path == "/api/quota":
-            self._json({"results": _quota_payload()})
+            self._json(_quota_payload())
             return
         if parsed.path == "/api/provision/targets":
             provider = parse_qs(parsed.query).get("provider", [""])[0]
@@ -120,6 +120,34 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._json(provision.provision(account, harness, confirmed=bool(payload.get("confirmed"))))
                 return
+            if path == "/api/hide":
+                _set_hidden(payload.get("provider") or "", payload.get("identity") or "", True)
+                self._json({"ok": True})
+                return
+            if path == "/api/unhide":
+                if payload.get("provider"):
+                    _set_hidden(payload.get("provider") or "", payload.get("identity") or "", False)
+                else:
+                    _clear_hidden()
+                self._json({"ok": True})
+                return
+            if path == "/api/reset":
+                provider = payload.get("provider") or ""
+                identity = payload.get("identity") or ""
+                if provider != "openai":
+                    self._json({"ok": False, "error": "该平台不支持重置"}, 400)
+                    return
+                account = next(
+                    (a for a in collect_accounts() if a.provider == provider and a.identity == identity),
+                    None,
+                )
+                if account is None:
+                    self._json({"ok": False, "error": "未找到该账号"}, 404)
+                    return
+                from .providers import openai as openai_provider
+
+                self._json(openai_provider.reset_credits(account))
+                return
         except Exception as error:
             self._json({"error": str(error)}, 400)
             return
@@ -186,11 +214,42 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def _set_hidden(provider: str, identity: str, hidden: bool) -> None:
+    cfg = config.load_config()
+    items = cfg.get("hidden") or []
+    key = f"{provider}:{identity}"
+    if hidden and key not in items:
+        items.append(key)
+    if not hidden:
+        items = [item for item in items if item != key]
+    cfg["hidden"] = items
+    config.save_config(cfg)
+
+
+def _clear_hidden() -> None:
+    cfg = config.load_config()
+    cfg["hidden"] = []
+    config.save_config(cfg)
+
+
+def _reset_ts(reset_iso) -> int | None:
+    if not reset_iso:
+        return None
+    try:
+        return int(datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00")).timestamp())
+    except (TypeError, ValueError):
+        return None
+
+
 def _quota_payload():
     now = datetime.now().astimezone()
     stored = {item.get("identity"): item.get("id") for item in store.list_stored()}
+    hidden = set(config.load_config().get("hidden") or [])
     results = []
     for item in fetch_all(collect_accounts()):
+        key = f"{item.account.provider}:{item.account.identity}"
+        if key in hidden:
+            continue
         windows = []
         for window in item.windows:
             windows.append(
@@ -199,7 +258,9 @@ def _quota_payload():
                     "remaining_percent": window.remaining_percent,
                     "used": window.used,
                     "total": window.total,
+                    "text": window.text,
                     "reset": _reset_text(window.reset_iso, now),
+                    "reset_ts": _reset_ts(window.reset_iso),
                 }
             )
         results.append(
@@ -215,11 +276,15 @@ def _quota_payload():
                 "plan": item.plan or item.account.plan,
                 "auth_mode": item.auth_mode or item.account.auth_mode,
                 "source": item.account.source,
+                "sub_start": item.sub_start,
+                "sub_end": item.sub_end,
                 "windows": windows,
                 "stored_id": stored.get(item.account.identity),
             }
         )
-    return results
+    # 同类卡片归组：按标题、再按身份排序
+    results.sort(key=lambda r: (str(r["title"]).lower(), str(r["identity"])))
+    return {"results": results, "hidden_count": len(hidden)}
 
 
 def _save_oauth(provider: str, label: str, result: dict):

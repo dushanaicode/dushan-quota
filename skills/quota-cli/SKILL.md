@@ -1,6 +1,6 @@
 ---
 name: quota-cli
-description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cursor/Cursor Agent 额度，全平台令牌过期自动刷新。用户提到额度、quota、套餐、认证账号、添加 API Key、环境变量、令牌过期、刷新令牌时使用。
+description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cursor/Cursor Agent 额度；全平台令牌过期自动刷新并汇总进 agent.db；可写入 OpenCode/OMP/各官方 CLI；Web UI 支持重置 OpenAI 额度、隐藏卡片、主题切换。用户提到额度、quota、套餐、认证账号、添加 API Key、环境变量、令牌过期、刷新令牌、写入凭证、重置额度时使用。
 ---
 
 # Quota CLI
@@ -13,7 +13,7 @@ description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cur
 quota
 quota ui
 quota show --once
-quota float      # 桌面悬浮窗（托盘图标，任务栏无显示）
+quota float      # 桌面悬浮窗（托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度）
 ```
 
 Agent 用一次性命令，不要进交互菜单。
@@ -37,9 +37,25 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 
 平台：`grok` `openai` `claude` `zai` `kimi` `deepseek` `antigravity` `cursor` `cursor_agent`
 
+## Web UI（http://127.0.0.1:18765）
+
+界面能力：响应式卡片、左侧平台筛选、右侧「关注」面板（用量最低榜/即将重置榜，100% 不进榜）、四款主题（暗黑鎏金/蓝天白云/粉红少女/绿意盎然）、卡片 ✕（本地账号删除、其他隐藏可恢复）、订阅起止时间展示（xAI、Cursor Agent 已接入，记录进 agent.db）。
+
+Agent 可用的 HTTP API（先 `quota ui` 启动）：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/quota` | 额度 JSON（results + hidden_count） |
+| POST | `/api/reset` | 重置 OpenAI 额度，body `{"provider":"openai","identity":"<identity>"}`，消费一次 banked reset credit |
+| GET | `/api/provision/targets?provider=<p>` | 查某平台可写入的 harness |
+| POST | `/api/provision` | 写入 harness，body `{"provider","identity","harness","confirmed"}`；返回 `needs_confirm` 时用 `confirmed:true` 重发 |
+| POST | `/api/hide` / `/api/unhide` | 隐藏/恢复卡片，body `{"provider","identity"}`；unhide 空 body 全恢复 |
+| GET | `/api/rules` | 平台与添加方式 |
+| POST | `/api/accounts/key` | 添加 API Key，body `{"provider","key"}` |
+
 ## 中央凭证库（agent.db，自动刷新）
 
-`%USERPROFILE%\.quota-cli\agent.db`（SQLite，表 `accounts`）汇总**所有来源**账号的凭证：API Key 全量 + 脱敏版（`api_key_masked`）、access/refresh 令牌、到期时间、套餐、来源。每轮发现账号自动同步快照，刷新后立刻更新行，**库里永远是最新可用票**（按到期时间裁决，Cockpit 等只读来源的旧票不会盖掉库里的新票）。这是第二阶段"从本库选账号写入 OpenCode / OMP / Grok CLI / Cursor 等 harness"的数据底座。
+`%USERPROFILE%\.quota-cli\agent.db`（SQLite，表 `accounts`）汇总**所有来源**账号的凭证：API Key 全量 + 脱敏版（`api_key_masked`）、access/refresh 令牌、到期时间、套餐、来源、订阅起止（`plan_start/plan_end`）。每轮发现账号自动同步快照，刷新后立刻更新行，**库里永远是最新可用票**（按到期时间裁决，Cockpit 等只读来源的旧票不会盖掉库里的新票）。这是"从本库选账号写入各 harness"的数据底座。
 
 所有 OAuth 平台**过期自动刷新**（提前 60 秒或 401 时触发），新票写回中央库并回写来源工具：
 
@@ -53,6 +69,8 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 | Cursor Agent | `api2.cursor.sh/auth/exchange_user_api_key`（`crsr_` 每次换新，天然不过期） | 无需回写 |
 | Kimi/Zhipu/Z.ai/DeepSeek | API Key 不过期 | — |
 
+OpenAI 重置额度接口：`POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`，body `{"redeem_request_id": "<uuid>"}`，Bearer + `ChatGPT-Account-ID` 头；可用次数在 `/wham/usage` 的 `rate_limit_reset_credits.available_count`。
+
 ## Cursor 两套票（不能混用）
 
 | | IDE / 网页（provider `cursor`） | Agent（provider `cursor_agent`） |
@@ -65,9 +83,9 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 
 关键事实：`auth.json` 里 accessToken/refreshToken 常是同一段 1 小时短寿 JWT，真正能换票的是 `apiKey`（`crsr_`）；`api_key_token` 进不了 IDE 和 cursor.com 网页接口；IDE 刷新返回 `shouldLogout:true` 表示服务器要求重新登录。
 
-## 写入 harness（第二阶段）
+## 写入 harness
 
-菜单 8 或 Web UI 账号卡「写入到…」：从 agent.db 选账号 → 选目标 → 冲突时询问 → 写入。写入前自动刷新令牌、自动备份目标文件、记录 provisions 历史表。
+菜单 8、Web UI 账号卡「写入到…」、或 `/api/provision`：从 agent.db 选账号 → 选目标 → 冲突时询问 → 写入。写入前自动刷新令牌、自动备份目标文件、记录 provisions 历史表。
 
 | harness | 位置 | 支持 provider |
 | --- | --- | --- |
@@ -82,7 +100,7 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 | Kimi Code CLI | `~/.kimi-code/config.toml` | kimi（managed:kimi-code 段 api_key） |
 | GLM → Claude Code | `~/.claude/settings.json` | zai（env.ANTHROPIC_BASE_URL=api.z.ai 或 bigmodel.cn/api/anthropic + ANTHROPIC_AUTH_TOKEN；GLM 无官方独立 CLI，这是 Z.ai 官方接入方式） |
 
-OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`，`identity_key="account:<sub>"`；api_key 行：`data={"key","source"}`。
+OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`，`identity_key="account:<sub>"`；api_key 行：`data={"key","source"}`。cursor_agent 的 refresh 必须填 `crsr_`，不能填短寿 JWT。
 
 ## 环境变量
 

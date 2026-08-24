@@ -72,6 +72,49 @@ def _usage(account: Account, access: str):
     return request_json(USAGE_URL, headers=headers)
 
 
+def reset_credits(account: Account) -> dict:
+    """消费一次 banked rate-limit reset credit（Codex 官方接口）。"""
+    import uuid
+
+    access = tokenstore.ensure_fresh(account)
+    if not access:
+        return {"ok": False, "error": "缺少 access token"}
+    status, _, usage = _usage(account, access)
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        status, _, usage = _usage(account, access)
+    if status == 200 and isinstance(usage, dict):
+        credits = usage.get("rate_limit_reset_credits")
+        if isinstance(credits, dict):
+            available = credits.get("available_count")
+            if isinstance(available, (int, float)) and available <= 0:
+                return {"ok": False, "error": "当前没有可用的重置次数"}
+    status, text, data = _consume(account, access, uuid.uuid4().hex)
+    if status == 401:
+        access = tokenstore.refresh_account(account) or access
+        status, text, data = _consume(account, access, uuid.uuid4().hex)
+    if status == 200 and isinstance(data, dict):
+        return {"ok": True, "message": "已使用一次重置", "data": data}
+    return {"ok": False, "error": f"{status} {text[:120]}"}
+
+
+def _consume(account: Account, access: str, redeem_id: str):
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "Content-Type": "application/json",
+        "User-Agent": "OpenCode-Quota-Toast/1.0",
+    }
+    account_id = account.secret.get("account_id") or _account_id(access)
+    if account_id:
+        headers["ChatGPT-Account-ID"] = account_id
+    return request_json(
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+        method="POST",
+        headers=headers,
+        body={"redeem_request_id": redeem_id},
+    )
+
+
 def _reset_credits(data: dict) -> list[Window]:
     credits = data.get("rate_limit_reset_credits")
     if not isinstance(credits, dict):
