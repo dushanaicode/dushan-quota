@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quota CLI</title>
+  <style>
+    :root { --bg:#0f1115; --card:#171a21; --line:#2a3140; --text:#e8edf5; --muted:#8b95a7; --acc:#6ea8fe; --ok:#3dd68c; --bad:#ff6b6b; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.5 ui-sans-serif,system-ui; background:var(--bg); color:var(--text); }
+    header { padding:18px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    h1 { margin:0; font-size:18px; }
+    main { padding:20px 24px 40px; max-width:1100px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+    button, select, input, textarea { font:inherit; }
+    button { background:#243044; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 12px; cursor:pointer; }
+    button.primary { background:var(--acc); color:#081018; border:0; font-weight:600; }
+    button.danger { background:#3a1d22; color:#ffd5d5; }
+    .grid { display:grid; gap:12px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+    .muted { color:var(--muted); }
+    .ok { color:var(--ok); }
+    .bad { color:var(--bad); }
+    .bar { height:8px; background:#222834; border-radius:99px; overflow:hidden; margin:6px 0; }
+    .bar > i { display:block; height:100%; background:var(--ok); }
+    .modal { position:fixed; inset:0; background:#0008; display:none; align-items:center; justify-content:center; padding:20px; }
+    .modal.show { display:flex; }
+    .panel { width:min(560px,100%); background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+    label { display:block; margin:10px 0 4px; color:var(--muted); }
+    input, select, textarea { width:100%; background:#10141c; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+    textarea { min-height:120px; }
+    .meta { display:grid; grid-template-columns:64px 1fr; gap:4px 10px; margin:8px 0 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Quota 账号与额度</h1>
+    <div class="row" style="margin:0">
+      <button onclick="loadQuota()">刷新额度</button>
+      <button class="primary" onclick="openAdd()">添加账号</button>
+    </div>
+  </header>
+  <main>
+    <p class="muted">认证逻辑对齐 Cockpit / OpenCode quota：OAuth、API Key、JSON、本机导入、环境变量。仅本机 127.0.0.1。</p>
+    <div id="list" class="grid"></div>
+  </main>
+  <div id="addModal" class="modal">
+    <div class="panel">
+      <h2>添加账号</h2>
+      <label>平台</label>
+      <select id="provider"></select>
+      <label>方式</label>
+      <select id="mode"></select>
+      <div id="fields"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" onclick="submitAdd()">确认</button>
+        <button onclick="closeAdd()">取消</button>
+      </div>
+      <p id="addMsg" class="muted"></p>
+    </div>
+  </div>
+  <script>
+    const rules = {};
+    async function api(path, opt={}) {
+      const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opt));
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return data;
+    }
+    function bar(p){ const n=Math.max(0,Math.min(100,p||0)); return `<div class="bar"><i style="width:${n}%"></i></div>`; }
+    async function loadQuota(){
+      const box=document.getElementById('list');
+      box.innerHTML='<p class="muted">加载中...</p>';
+      const data=await api('/api/quota');
+      box.innerHTML='';
+      data.results.forEach(item=>{
+        const wins=(item.windows||[]).map(w=>`<div>${w.name} ${Math.round(w.remaining_percent)}% left ${w.used!=null?`| ${w.used}/${w.total}`:''} ${w.reset||''}${bar(w.remaining_percent)}</div>`).join('');
+        box.innerHTML += `<section class="card">
+          <strong>${item.title}</strong>
+          <div class="meta">
+            <span class="muted">账号</span><span>${item.email||'-'} ${item.name||''}</span>
+            <span class="muted">用户</span><span>${item.user_id||'-'}</span>
+            <span class="muted">套餐</span><span>${item.plan||'-'}</span>
+            <span class="muted">认证</span><span>${item.auth_mode||'-'} / ${item.source||'-'}</span>
+          </div>
+          ${item.ok?wins:`<div class="bad">${item.error||'失败'}</div>`}
+          ${item.stored_id?`<button class="danger" onclick="delAcc('${item.stored_id}')">删除本地账号</button>`:''}
+        </section>`;
+      });
+    }
+    async function openAdd(){
+      const data=await api('/api/rules');
+      Object.assign(rules, data.rules);
+      const p=document.getElementById('provider');
+      p.innerHTML=Object.entries(rules).map(([k,v])=>`<option value="${k}">${v.title}</option>`).join('');
+      p.onchange=renderModes; renderModes();
+      document.getElementById('addMsg').textContent='';
+      document.getElementById('addModal').classList.add('show');
+    }
+    function closeAdd(){ document.getElementById('addModal').classList.remove('show'); }
+    function renderModes(){
+      const provider=document.getElementById('provider').value;
+      const modes=rules[provider].modes;
+      document.getElementById('mode').innerHTML=modes.map(m=>`<option value="${m}">${modeLabel(m)}</option>`).join('');
+      document.getElementById('mode').onchange=renderFields; renderFields();
+    }
+    function modeLabel(m){return {oauth:'OAuth 授权',api_key:'API Key',json:'Token / JSON',local:'本机导入',env:'环境变量'}[m]||m;}
+    function renderFields(){
+      const mode=document.getElementById('mode').value;
+      const f=document.getElementById('fields');
+      if(mode==='api_key') f.innerHTML='<label>API Key</label><input id="apiKey" />';
+      else if(mode==='json') f.innerHTML='<label>JSON</label><textarea id="jsonText"></textarea>';
+      else if(mode==='env') f.innerHTML='<p class="muted">将读取并导入该平台已配置的环境变量。</p>';
+      else if(mode==='local') f.innerHTML='<p class="muted">从 OpenCode / Cockpit / 官方本机目录导入。</p>';
+      else if(mode==='oauth') f.innerHTML='<p class="muted">复制授权链接到你常用的浏览器打开；完成后会自动回到本页。Grok 会另显示验证码。</p><div id="oauthBox" class="row" style="margin-top:8px"></div>';
+      else f.innerHTML='';
+    }
+    async function submitAdd(){
+      const provider=document.getElementById('provider').value;
+      const mode=document.getElementById('mode').value;
+      const msg=document.getElementById('addMsg');
+      try{
+        if(mode==='api_key') await api('/api/accounts/key',{method:'POST',body:JSON.stringify({provider,key:document.getElementById('apiKey').value})});
+        else if(mode==='json') await api('/api/accounts/json',{method:'POST',body:JSON.stringify({text:document.getElementById('jsonText').value})});
+        else if(mode==='env') await api('/api/accounts/env',{method:'POST',body:JSON.stringify({provider})});
+        else if(mode==='local') await api('/api/accounts/local',{method:'POST',body:JSON.stringify({provider})});
+        else if(mode==='oauth'){ await startOAuth(provider); return; }
+        msg.textContent='已保存'; closeAdd(); loadQuota();
+      }catch(e){ msg.textContent=e.message; }
+    }
+    async function startOAuth(provider){
+      const data=await api('/api/oauth/'+provider+'/start',{method:'POST',body:'{}'});
+      const url=data.verification_uri_complete;
+      const box=document.getElementById('oauthBox');
+      box.innerHTML='';
+      if(data.user_code){
+        const p=document.createElement('p');
+        p.innerHTML='验证码 <b></b>';
+        p.querySelector('b').textContent=data.user_code;
+        box.appendChild(p);
+      }
+      const input=document.createElement('input');
+      input.readOnly=true; input.value=url; input.style.flex='1';
+      box.appendChild(input);
+      const copy=document.createElement('button');
+      copy.type='button'; copy.textContent='复制链接';
+      copy.onclick=()=>{ navigator.clipboard.writeText(url); copy.textContent='已复制'; setTimeout(()=>copy.textContent='复制链接',1200); };
+      box.appendChild(copy);
+      const open=document.createElement('button');
+      open.type='button'; open.textContent='默认浏览器打开';
+      open.onclick=()=>window.open(url,'_blank');
+      box.appendChild(open);
+      pollOAuth(provider, data.login_id);
+    }
+    async function pollOAuth(provider, id){
+      const data=await api('/api/oauth/'+provider+'/poll?login_id='+id);
+      if(data.status==='ok'){ document.getElementById('addMsg').textContent='授权成功'; closeAdd(); loadQuota(); return; }
+      if(data.status==='pending'){ setTimeout(()=>pollOAuth(provider,id), 2500); return; }
+      document.getElementById('addMsg').textContent=data.error||data.status;
+    }
+    async function delAcc(id){ await api('/api/accounts/'+id,{method:'DELETE'}); loadQuota(); }
+    loadQuota();
+  </script>
+</body>
+</html>
