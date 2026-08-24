@@ -38,6 +38,7 @@ def main():
     sub.add_parser("rules", help="查看认证规则")
     sub.add_parser("config", help="查看配置和环境变量")
     sub.add_parser("ui", help="打开本机 Web UI")
+    sub.add_parser("float", help="打开悬浮窗（置顶可拖动）")
 
     env_cmd = sub.add_parser("env", help="设置环境变量")
     env_cmd.add_argument("name")
@@ -73,6 +74,10 @@ def main():
     if args.command == "ui":
         from lib.web import serve
         serve()
+        return
+    if args.command == "float":
+        from lib.float_win import serve_float
+        serve_float()
         return
     if args.command == "show" or args.once or args.watch:
         interval = args.watch

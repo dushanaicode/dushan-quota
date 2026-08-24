@@ -17,6 +17,8 @@
 | Antigravity | Gemini / Claude+GPT 周/5h 窗口 | Cockpit / Google OAuth |
 | Cursor | 用量汇总 | 本机 state.vscdb / 官方登录流 |
 
+悬浮窗（`quota float`）：无边框置顶小窗，半透明背景（20%–100% 可调），可拖动；点击 ⚙ 可按平台勾选显示内容、只看百分比行，设置持久化到 `~/.quota-cli/config.json`。需要 `pywebview`（Windows 用 Edge WebView2）。
+
 认证读取顺序：OpenCode `auth.json` → Cockpit 账号库（需 pycryptodome）→ 本机官方目录 → quota-cli 本地库 → 环境变量。按账号身份去重，支持多账号。
 
 ## 安装
@@ -38,8 +40,9 @@ macOS / Linux：`sh install.sh`，之后执行 `quota`。
 ## 使用
 
 ```
-quota            # 交互菜单：查看 / 动态刷新 / 账号管理 / 环境变量 / Web UI
+quota            # 交互菜单：查看 / 动态刷新 / 账号管理 / 环境变量 / Web UI / 悬浮窗
 quota ui         # 打开本机 Web UI（127.0.0.1），网页里添加账号、走 OAuth
+quota float      # 桌面悬浮窗：半透明、可拖动、置顶
 quota show       # 动态刷新额度（默认 15s，可在 config 改）
 quota show --once  # 查一次就退出（脚本/Agent 用）
 quota accounts   # 查看本地账号库

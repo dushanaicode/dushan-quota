@@ -14,6 +14,7 @@ def run_shell(show_fn) -> None:
         print("  4) 环境变量 / 配置")
         print("  5) 认证规则")
         print("  6) 打开 Web UI")
+        print("  7) 悬浮窗")
         print("  0) 退出")
         choice = input("> ").strip()
         if choice in {"0", "q", "quit", "exit"}:
@@ -37,6 +38,10 @@ def run_shell(show_fn) -> None:
         if choice == "6":
             from .web import serve
             serve()
+            continue
+        if choice == "7":
+            from .float_win import serve_float
+            serve_float()
             continue
         print("无效选项")
 

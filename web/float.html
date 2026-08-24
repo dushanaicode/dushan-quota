@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  :root { --alpha: .85; --pick: 1; }
+  * { margin:0; padding:0; box-sizing:border-box; font:12px/1.45 ui-sans-serif,system-ui; }
+  html,body { background:transparent; overflow:hidden; }
+  body { color:#e8edf5; user-select:none; }
+  #panel {
+    background:rgba(16,19,26,var(--alpha));
+    border:1px solid rgba(120,140,180,.25);
+    border-radius:12px;
+    padding:8px 10px;
+    max-height:100vh; overflow-y:auto;
+  }
+  #panel::-webkit-scrollbar { width:0; }
+  .hdr { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .hdr b { font-size:12px; }
+  .hdr .sp { flex:1; }
+  .ico { cursor:pointer; opacity:.6; font-size:12px; padding:0 2px; }
+  .ico:hover { opacity:1; }
+  .card { margin-bottom:7px; }
+  .card .name { display:flex; gap:6px; align-items:baseline; }
+  .card .name b { font-size:12px; }
+  .card .name span { font-size:10px; color:#8b95a7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row { display:flex; align-items:center; gap:6px; margin:2px 0; }
+  .row .lbl { width:52px; font-size:10px; color:#8b95a7; flex:none; }
+  .bar { flex:1; height:5px; border-radius:99px; background:rgba(255,255,255,.08); overflow:hidden; }
+  .bar i { display:block; height:100%; border-radius:99px; }
+  .pct { width:52px; text-align:right; font-size:10px; flex:none; }
+  .g { color:#3dd68c; } .y { color:#f4c95d; } .r { color:#ff6b6b; }
+  .bar i.g { background:#3dd68c; } .bar i.y { background:#f4c95d; } .bar i.r { background:#ff6b6b; }
+  .err { color:#ff6b6b; font-size:10px; }
+  .txt { font-size:10px; color:#cdd6e4; }
+  #cfg {
+    display:none; margin-top:6px; padding-top:6px; border-top:1px solid rgba(120,140,180,.25);
+  }
+  #cfg label { display:flex; justify-content:space-between; font-size:10px; color:#8b95a7; margin:3px 0; cursor:pointer; }
+  #cfg input[type=range] { width:100%; }
+  #cfg .btns { display:flex; gap:6px; margin-top:6px; }
+  #cfg button { flex:1; font-size:10px; padding:3px 0; border:0; border-radius:6px; background:#2c3947; color:#e8edf5; cursor:pointer; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="hdr">
+    <b>Quota</b><span class="sp"></span>
+    <span class="ico" id="tCfg" title="设置">⚙</span>
+    <span class="ico" id="tRef" title="刷新">↻</span>
+    <span class="ico" id="tQuit" title="退出">✕</span>
+  </div>
+  <div id="list"></div>
+  <div id="cfg">
+    <label>不透明度 <span id="aVal"></span><input type="range" id="alpha" min="20" max="100" style="display:none"></label>
+    <input type="range" id="alphaR" min="20" max="100">
+    <div id="pick"></div>
+    <div class="btns">
+      <button id="bAll">全选</button>
+      <button id="bNone">全不选</button>
+    </div>
+  </div>
+</div>
+<script>
+let S = { alpha:85, show:{}, only_percent:false };
+const $ = id => document.getElementById(id);
+
+function color(p){ return p>=40?'g':p>=15?'y':'r'; }
+function esc(s){ return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function row(w){
+  if(w.text!=null) return `<div class="row"><span class="lbl">${esc(w.name)}</span><span class="txt">${esc(w.text)}</span></div>`;
+  const p = Math.round(w.remaining_percent||0), c = color(p);
+  return `<div class="row"><span class="lbl">${esc(w.name)}</span><span class="bar"><i class="${c}" style="width:${p}%"></i></span><span class="pct ${c}">${p}%</span></div>`;
+}
+
+function render(items){
+  const list = $('list');
+  let html = '';
+  for(const it of items){
+    if(S.show[it.title]===false) continue;
+    const ws = S.only_percent ? it.windows.filter(w=>w.text==null) : it.windows;
+    const meta = [];
+    if(S.show['#email']!==false && it.email) meta.push(esc(it.email));
+    if(S.show['#plan']!==false && it.plan) meta.push(esc(it.plan));
+    html += `<div class="card"><div class="name"><b>${esc(it.title)}</b><span>${meta.join(' · ')}</span></div>`;
+    html += it.ok ? ws.map(row).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
+    html += `</div>`;
+  }
+  list.innerHTML = html || '<div class="txt">没有账号</div>';
+}
+
+async function load(){
+  try { render(await pywebview.api.quota()); } catch(e) { $('list').innerHTML = '<div class="err">'+esc(e)+'</div>'; }
+}
+
+function applyAlpha(){
+  document.documentElement.style.setProperty('--alpha', (S.alpha/100).toFixed(2));
+  $('aVal').textContent = S.alpha + '%';
+  $('alphaR').value = S.alpha;
+}
+
+function buildPick(items){
+  const names = [...new Set(items.map(i=>i.title))];
+  const box = $('pick');
+  box.innerHTML = names.map(n=>`<label><span>${esc(n)}</span><input type="checkbox" data-n="${esc(n)}" ${S.show[n]!==false?'checked':''}></label>`).join('')
+    + `<label><span>显示邮箱</span><input type="checkbox" data-n="#email" ${S.show['#email']!==false?'checked':''}></label>`
+    + `<label><span>显示套餐</span><input type="checkbox" data-n="#plan" ${S.show['#plan']!==false?'checked':''}></label>`
+    + `<label><span>只看百分比行</span><input type="checkbox" data-n="#onlyp" ${S.only_percent?'checked':''}></label>`;
+  box.querySelectorAll('input').forEach(el=>{
+    el.onchange = ()=>{
+      const n = el.dataset.n;
+      if(n==='#onlyp'){ S.only_percent = el.checked; }
+      else { S.show[n] = el.checked; }
+      save(); render(cache);
+    };
+  });
+}
+
+let cache = [];
+async function refresh(){ cache = await pywebview.api.quota(); render(cache); buildPick(cache); }
+function save(){ pywebview.api.save_settings(JSON.stringify(S)); }
+
+$('tRef').onclick = refresh;
+$('tQuit').onclick = ()=>pywebview.api.quit();
+$('tCfg').onclick = ()=>{ const c=$('cfg'); c.style.display = c.style.display==='block'?'none':'block'; };
+$('alphaR').oninput = e=>{ S.alpha = +e.target.value; applyAlpha(); save(); };
+$('bAll').onclick = ()=>{ Object.keys(S.show).forEach(k=>S.show[k]=true); S.only_percent=false; save(); refresh(); };
+$('bNone').onclick = ()=>{ Object.keys(S.show).forEach(k=>S.show[k]=false); save(); render(cache); };
+
+(async ()=>{
+  try { S = Object.assign(S, await pywebview.api.settings()); } catch(e){}
+  applyAlpha(); await refresh();
+  setInterval(refresh, 60000);
+})();
+</script>
+</body>
+</html>
