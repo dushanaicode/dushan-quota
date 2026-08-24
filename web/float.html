@@ -11,6 +11,16 @@
     height:100vh;
     display:flex; flex-direction:column;
     overflow:hidden;
+    position:relative;
+  }
+  .rs {
+    position:absolute; right:0; bottom:0; width:18px; height:18px;
+    cursor:nwse-resize; z-index:5;
+    background:
+      linear-gradient(135deg, transparent 0 46%, rgba(255,255,255,.28) 46% 54%, transparent 54% 66%, rgba(255,255,255,.28) 66% 74%, transparent 74% 86%, rgba(255,255,255,.28) 86% 94%, transparent 94%);
+  }
+  .rs:hover { background:
+      linear-gradient(135deg, transparent 0 46%, rgba(110,168,254,.75) 46% 54%, transparent 54% 66%, rgba(110,168,254,.75) 66% 74%, transparent 74% 86%, rgba(110,168,254,.75) 86% 94%, transparent 94%);
   }
   .hdr {
     display:flex; align-items:center; gap:7px;
@@ -74,6 +84,7 @@
     <div class="sec">显示内容</div>
     <div id="pick"></div>
   </div>
+  <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
 let S = { alpha:82, show:{}, on_top:true };
@@ -150,13 +161,22 @@ async function init(){
   $('alphaR').oninput = e=>{ S.alpha = +e.target.value; applyAlpha(); };
   $('alphaR').onchange = ()=>save();
 
-  // 按下标题栏 → 系统原生接管拖动（零延迟、可跨屏）；图标不触发
+  // 按下标题栏 → 系统原生接管拖动（可跨屏）；必须把按下时的坐标传过去，
+  // 桥有延迟，Python 侧再用当前光标会算错抓取点
   const hdr = $('hdr');
   hdr.addEventListener('pointerdown', e=>{
     if(e.target.closest('.ico')) return;
     if(e.button !== 0) return;
     e.preventDefault();
-    try{ api.begin_drag(); }catch(err){}
+    try{ api.begin_drag(e.screenX, e.screenY); }catch(err){}
+  });
+
+  // 右下角手柄 → 系统原生接管缩放（WM_NCLBUTTONDOWN + HTBOTTOMRIGHT）
+  $('rsHdl').addEventListener('pointerdown', e=>{
+    if(e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try{ api.begin_resize(e.screenX, e.screenY); }catch(err){}
   });
 
   await refresh();

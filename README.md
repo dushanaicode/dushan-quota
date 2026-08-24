@@ -28,6 +28,8 @@ OAuth 平台**过期自动刷新**（提前 60 秒或 401 触发）：Grok/xAI�
 
 Cursor 是两套票：`cursor`（IDE session，cookie 查 `cursor.com/api/usage-summary`）与 `cursor_agent`（`crsr_` Key，换票后走 Connect-RPC `aiserver.v1.DashboardService`），不可混用。
 
+写入 harness（菜单 8 / Web UI「写入到…」按钮）：从 agent.db 选账号写入 OpenCode、OMP、Grok CLI、Cursor Agent、Cursor IDE、Antigravity IDE、Codex CLI/App、Claude Code、Kimi Code CLI、GLM→Claude Code。写入前自动刷新令牌、备份目标、冲突询问、记录 provisions 历史。
+
 ## 安装
 
 要求 Python 3.10+。

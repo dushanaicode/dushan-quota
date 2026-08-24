@@ -33,6 +33,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/quota":
             self._json({"results": _quota_payload()})
             return
+        if parsed.path == "/api/provision/targets":
+            provider = parse_qs(parsed.query).get("provider", [""])[0]
+            from . import provision
+
+            targets = [
+                {"key": key, "label": provision.HARNESSES[key]["label"]}
+                for key in provision.compatible_harnesses(provider)
+            ]
+            self._json({"targets": targets})
+            return
         if parsed.path == "/oauth-callback":
             self._antigravity_callback(parse_qs(parsed.query))
             return
@@ -94,6 +104,21 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/env":
                 config.set_env_value(payload.get("name") or "", payload.get("value") or "", persist_user=bool(payload.get("user")))
                 self._json({"ok": True})
+                return
+            if path == "/api/provision":
+                from . import provision
+
+                provider = payload.get("provider") or ""
+                identity = payload.get("identity") or ""
+                harness = payload.get("harness") or ""
+                account = next(
+                    (a for a in collect_accounts() if a.provider == provider and a.identity == identity),
+                    None,
+                )
+                if account is None:
+                    self._json({"ok": False, "error": "未找到该账号的实时凭证"}, 404)
+                    return
+                self._json(provision.provision(account, harness, confirmed=bool(payload.get("confirmed"))))
                 return
         except Exception as error:
             self._json({"error": str(error)}, 400)
@@ -180,6 +205,8 @@ def _quota_payload():
         results.append(
             {
                 "title": item.title,
+                "provider": item.account.provider,
+                "identity": item.account.identity,
                 "ok": item.ok,
                 "error": item.error,
                 "email": item.email or item.account.email,

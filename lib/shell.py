@@ -15,8 +15,14 @@ def run_shell(show_fn) -> None:
         print("  5) 认证规则")
         print("  6) 打开 Web UI")
         print("  7) 悬浮窗")
+        print("  8) 同步到 harness")
         print("  0) 退出")
-        choice = input("> ").strip()
+        choice = ""
+        try:
+            choice = input("> ").strip()
+        except KeyboardInterrupt:
+            print()
+            continue
         if choice in {"0", "q", "quit", "exit"}:
             return
         if choice == "1":
@@ -44,7 +50,66 @@ def run_shell(show_fn) -> None:
             started = launch_float()
             print("悬浮窗已启动（任务栏无图标，点窗口 ✕ 退出）" if started else "悬浮窗已在运行")
             continue
+        if choice == "8":
+            _sync_menu()
+            continue
         print("无效选项")
+
+
+def _sync_menu() -> None:
+    try:
+        _sync_flow()
+    except KeyboardInterrupt:
+        print("\n已取消")
+
+
+def _sync_flow() -> None:
+    from . import agentdb, provision
+    from .discover import collect_accounts
+
+    rows = agentdb.list_accounts()
+    if not rows:
+        print("agent.db 还没有账号数据，先查一次额度")
+        return
+    print()
+    print("同步账号到 harness（数据来自 agent.db，写入前自动刷新令牌）")
+    for index, row in enumerate(rows, start=1):
+        label = row["email"] or row["identity"]
+        masked = f"  {row['api_key_masked']}" if row["api_key_masked"] else ""
+        print(f"  {index}. {row['provider']}  {label}  {row['plan']}{masked}")
+    raw = input("选择账号编号（回车取消）: ").strip()
+    if not raw.isdigit() or not (1 <= int(raw) <= len(rows)):
+        return
+    chosen = rows[int(raw) - 1]
+    targets = provision.compatible_harnesses(chosen["provider"])
+    if not targets:
+        print("该平台暂无可写 harness")
+        return
+    for index, key in enumerate(targets, start=1):
+        print(f"  {index}. {provision.HARNESSES[key]['label']}")
+    raw = input("选择目标编号（回车取消）: ").strip()
+    if not raw.isdigit() or not (1 <= int(raw) <= len(targets)):
+        return
+    harness = targets[int(raw) - 1]
+    account = next(
+        (
+            item
+            for item in collect_accounts()
+            if item.provider == chosen["provider"] and item.identity == chosen["identity"]
+        ),
+        None,
+    )
+    if account is None:
+        print("未找到该账号的实时凭证")
+        return
+    result = provision.provision(account, harness)
+    if result.get("needs_confirm"):
+        answer = input(result["conflict"] + " [y/N] ").strip().lower()
+        if answer != "y":
+            print("已取消")
+            return
+        result = provision.provision(account, harness, confirmed=True)
+    print(result.get("message") or result.get("error") or result)
 
 
 def _accounts_menu() -> None:

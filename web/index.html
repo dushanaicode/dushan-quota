@@ -59,6 +59,19 @@
       <p id="addMsg" class="muted"></p>
     </div>
   </div>
+  <div id="syncModal" class="modal">
+    <div class="panel">
+      <h2>写入到 harness</h2>
+      <p id="syncAcc" class="muted"></p>
+      <div id="syncTargets" class="row"></div>
+      <p id="syncMsg" class="muted"></p>
+      <div class="row" id="syncConfirm" style="display:none">
+        <button class="danger" id="syncYes">确认覆盖</button>
+        <button onclick="closeSync()">取消</button>
+      </div>
+      <div class="row"><button onclick="closeSync()">关闭</button></div>
+    </div>
+  </div>
   <script>
     const rules = {};
     async function api(path, opt={}) {
@@ -84,7 +97,10 @@
             <span class="muted">认证</span><span>${item.auth_mode||'-'} / ${item.source||'-'}</span>
           </div>
           ${item.ok?wins:`<div class="bad">${item.error||'失败'}</div>`}
-          ${item.stored_id?`<button class="danger" onclick="delAcc('${item.stored_id}')">删除本地账号</button>`:''}
+          <div class="row" style="margin:8px 0 0">
+            <button onclick="openSync('${item.provider}','${encodeURIComponent(item.identity||'')}','${item.title}')">写入到…</button>
+            ${item.stored_id?`<button class="danger" onclick="delAcc('${item.stored_id}')">删除本地账号</button>`:''}
+          </div>
         </section>`;
       });
     }
@@ -159,6 +175,40 @@
       document.getElementById('addMsg').textContent=data.error||data.status;
     }
     async function delAcc(id){ await api('/api/accounts/'+id,{method:'DELETE'}); loadQuota(); }
+    let syncCtx = null;
+    async function openSync(provider, identity, title){
+      identity = decodeURIComponent(identity);
+      syncCtx = {provider, identity};
+      document.getElementById('syncAcc').textContent = title + '  ' + identity;
+      document.getElementById('syncMsg').textContent = '';
+      document.getElementById('syncConfirm').style.display = 'none';
+      const data = await api('/api/provision/targets?provider='+provider);
+      const box = document.getElementById('syncTargets');
+      box.innerHTML = '';
+      if(!data.targets.length){ box.innerHTML = '<span class="muted">该平台暂无可写 harness</span>'; }
+      data.targets.forEach(t=>{
+        const b = document.createElement('button');
+        b.textContent = '写入 ' + t.label;
+        b.onclick = ()=>doSync(t.key, false);
+        box.appendChild(b);
+      });
+      document.getElementById('syncModal').classList.add('show');
+    }
+    function closeSync(){ document.getElementById('syncModal').classList.remove('show'); }
+    async function doSync(harness, confirmed){
+      const msg = document.getElementById('syncMsg');
+      msg.textContent = '写入中…';
+      const data = await api('/api/provision', {method:'POST', body:JSON.stringify({provider:syncCtx.provider, identity:syncCtx.identity, harness, confirmed})});
+      if(data.needs_confirm){
+        msg.textContent = data.conflict;
+        const bar = document.getElementById('syncConfirm');
+        bar.style.display = 'flex';
+        document.getElementById('syncYes').onclick = ()=>{ bar.style.display='none'; doSync(harness, true); };
+        return;
+      }
+      document.getElementById('syncConfirm').style.display = 'none';
+      msg.textContent = data.message || data.error || JSON.stringify(data);
+    }
     loadQuota();
   </script>
 </body>

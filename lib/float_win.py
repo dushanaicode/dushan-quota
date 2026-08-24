@@ -31,10 +31,32 @@ _SWP_NOACTIVATE = 0x0010
 _SWP_FRAMECHANGED = 0x0020
 _WM_NCLBUTTONDOWN = 0x00A1
 _HTCAPTION = 2
+_HT_BOTTOMRIGHT = 17
 
 
 def _is_windows() -> bool:
     return sys.platform == "win32"
+
+
+def _enable_dpi_awareness() -> None:
+    """Per-Monitor DPI 感知：否则 Windows 对进程返回虚拟化坐标（150% 屏 = 物理/1.5），
+    与 WebView2 的物理像素不一致，导致拖动抓取点偏移、整窗模糊。"""
+    if not _is_windows():
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+def _primary_scale() -> float:
+    try:
+        return ctypes.windll.user32.GetDpiForSystem() / 96.0
+    except Exception:
+        return 1.0
 
 
 def _fetch_payload() -> list[dict]:
@@ -110,24 +132,57 @@ def _set_alpha(window, alpha_percent: int) -> None:
         pass
 
 
-def _hide_from_taskbar(window) -> None:
-    """改为工具窗口：不出现在任务栏与 Alt+Tab。"""
+def _delete_taskbar_tab(hwnd: int) -> None:
+    """用 ITaskbarList.DeleteTab 强制从任务栏摘掉按钮。"""
+    try:
+        import uuid
+
+        class GUID(ctypes.Structure):
+            _fields_ = (
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            )
+
+            def __init__(self, text: str):
+                u = uuid.UUID(text)
+                super().__init__()
+                self.Data1 = u.time_low
+                self.Data2 = u.time_mid
+                self.Data3 = u.time_hi_version
+                for i, byte in enumerate(u.bytes[8:]):
+                    self.Data4[i] = byte
+
+        ole32 = ctypes.oledll.ole32
+        clsid = GUID("56FDF344-FD6D-11d0-958A-006097C9A090")
+        iid = GUID("56FDF342-FD6D-11d0-958A-006097C9A090")
+        ptr = ctypes.c_void_p()
+        if ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(ptr)) != 0:
+            return
+        if not ptr.value:
+            return
+        vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        hr_init = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p)(vtbl[3])
+        delete_tab = ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, wintypes.HWND)(vtbl[5])
+        release = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)(vtbl[2])
+        hr_init(ptr)
+        delete_tab(ptr, hwnd)
+        release(ptr)
+    except Exception:
+        pass
+
+
+def _apply_no_taskbar(window) -> None:
+    """只 DeleteTab，不动 WinForms 句柄。
+
+    ShowInTaskbar=False / 改 EXSTYLE 会重建句柄，WebView2 被销毁后整窗空白。
+    """
     if not _is_windows():
         return
     hwnd = _hwnd(window)
-    if not hwnd:
-        return
-    try:
-        user32, get_long, set_long = _user32()
-        style = int(get_long(hwnd, _GWL_EXSTYLE))
-        style = (style | _WS_EX_TOOLWINDOW) & ~_WS_EX_APPWINDOW
-        set_long(hwnd, _GWL_EXSTYLE, style)
-        user32.SetWindowPos(
-            hwnd, 0, 0, 0, 0, 0,
-            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
-        )
-    except Exception:
-        pass
+    if hwnd:
+        _delete_taskbar_tab(hwnd)
 
 
 def _set_round_corners(window) -> None:
@@ -212,33 +267,66 @@ class Api:
             _set_alpha(self._window, int(percent))
         return {"ok": True}
 
-    def begin_drag(self):
-        """在 UI 线程让系统按标题栏拖动原生接管移动，零延迟、可跨屏。"""
+    def _nc_action(self, hit: int, x, y, after=None) -> dict:
+        """在 UI 线程让系统按非客户区按钮接管（拖动/缩放循环都在 SendMessage 内同步完成）。
+
+        x/y 必须是 pointerdown 时的鼠标屏幕坐标（物理像素）。
+        不能用执行时的 GetCursorPos：JS→Python 桥有延迟，鼠标已移动会导致抓取点漂移。
+        """
         if not _is_windows() or not self._window:
             return {"ok": False}
+        try:
+            press_x = int(x)
+            press_y = int(y)
+        except (TypeError, ValueError):
+            return {"ok": False}
 
-        def _drag():
+        def _run():
             hwnd = _hwnd(self._window)
             if not hwnd:
                 return
             user32 = ctypes.windll.user32
             point = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(point))
+            px, py = press_x, press_y
+            # 坐标系异常兜底：偏差过大说明单位不一致，退回当前光标位置
+            if abs(point.x - px) > 80 or abs(point.y - py) > 80:
+                px, py = point.x, point.y
             user32.ReleaseCapture()
-            # lParam 必须带鼠标屏幕坐标（低位 x、高位 y），否则系统按 (0,0) 抓取导致错位
-            lparam = (point.x & 0xFFFF) | ((point.y & 0xFFFF) << 16)
-            user32.SendMessageW(hwnd, _WM_NCLBUTTONDOWN, _HTCAPTION, lparam)
+            lparam = (px & 0xFFFF) | ((py & 0xFFFF) << 16)
+            user32.SendMessageW(hwnd, _WM_NCLBUTTONDOWN, hit, lparam)
+            if after is not None:
+                after()
 
         try:
             from System import Action
 
-            self._window.native.BeginInvoke(Action(_drag))
+            self._window.native.BeginInvoke(Action(_run))
         except Exception:
             try:
-                _drag()
+                _run()
             except Exception:
                 return {"ok": False}
         return {"ok": True}
+
+    def begin_drag(self, x, y):
+        """标题栏拖动：系统原生接管，可跨屏、跟手。"""
+        return self._nc_action(_HTCAPTION, x, y)
+
+    def begin_resize(self, x, y):
+        """右下角缩放：系统原生接管，结束后持久化窗口尺寸。"""
+
+        def _persist():
+            try:
+                cfg = config.load_config()
+                data = cfg.setdefault("float", {})
+                data["width"] = int(self._window.width)
+                data["height"] = int(self._window.height)
+                config.save_config(cfg)
+            except Exception:
+                pass
+
+        return self._nc_action(_HT_BOTTOMRIGHT, x, y, after=_persist)
 
     def quit(self):
         if self._window:
@@ -347,20 +435,28 @@ class _Tray:
             _invoke_on_ui(window, lambda: window.native.Close())
 
 
-def launch_float() -> bool:
-    """以无控制台的 pythonw 分离进程启动悬浮窗，任务栏与 Alt+Tab 均无显示。
-
-    已运行则只把窗口带到前台，返回是否新启动了进程。
-    """
+def _close_existing_float() -> None:
+    """关掉已有 Quota 窗。不能只 Restore：旧实例若已空白会一直卡住。"""
     if not _is_windows():
-        serve_float()
-        return True
+        return
     user32 = ctypes.windll.user32
     existing = user32.FindWindowW(None, "Quota")
     if existing:
-        user32.ShowWindow(existing, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(existing)
-        return False
+        user32.PostMessageW(existing, 0x0010, 0, 0)  # WM_CLOSE
+        import time
+
+        for _ in range(20):
+            if not user32.IsWindow(existing):
+                break
+            time.sleep(0.05)
+
+
+def launch_float() -> bool:
+    """以无控制台的 pythonw 分离进程启动悬浮窗。"""
+    if not _is_windows():
+        serve_float()
+        return True
+    _close_existing_float()
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     exe = str(pythonw) if pythonw.is_file() else sys.executable
     script = Path(__file__).resolve().parent.parent / "quota.py"
@@ -375,17 +471,20 @@ def launch_float() -> bool:
 
 
 def serve_float():
+    _enable_dpi_awareness()
+    scale = _primary_scale()
     config.apply_config_env()
+    saved_float = config.load_config().get("float", {})
     api = Api()
     html = (WEB_DIR / "float.html").read_text(encoding="utf-8") if (WEB_DIR / "float.html").is_file() else ""
     window = webview.create_window(
         title="Quota",
         html=html,
         js_api=api,
-        width=290,
-        height=430,
-        x=60,
-        y=60,
+        width=int(saved_float.get("width") or 290 * scale),
+        height=int(saved_float.get("height") or 430 * scale),
+        x=int(60 * scale),
+        y=int(60 * scale),
         resizable=True,
         frameless=True,
         easy_drag=False,
@@ -399,10 +498,19 @@ def serve_float():
         api._on_top = bool(saved.get("on_top", True))
         _set_round_corners(window)
         _set_alpha(window, int(saved.get("alpha", 82)))
-        # WinForms 的 ShowInTaskbar 会反复把窗口加回任务栏，必须在 UI 线程关掉
-        _invoke_on_ui(window, lambda: setattr(window.native, "ShowInTaskbar", False))
-        _hide_from_taskbar(window)
+        _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
         _set_topmost(window, api._on_top)
+
+    def _on_shown():
+        _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
+
+    try:
+        window.events.shown += _on_shown
+        window.events.loaded += _on_shown
+    except Exception:
+        pass
+    threading.Timer(0.4, _on_shown).start()
+    threading.Timer(1.2, _on_shown).start()
 
     tray = _Tray(api)
     tray.start()

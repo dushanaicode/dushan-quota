@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS accounts (
   UNIQUE(provider, identity)
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS provisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL,
+  identity TEXT NOT NULL,
+  harness TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  written_at INTEGER NOT NULL
+);
 """
 
 # 令牌冲突裁决：只有来源票据的到期时间不早于库里的，才允许覆盖；
@@ -150,6 +158,32 @@ def get_tokens(provider: str, identity: str) -> dict | None:
         "expires": row[5],
         "source": row[6],
     }
+
+
+def record_provision(provider: str, identity: str, harness: str, detail: str = "") -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO provisions (provider, identity, harness, detail, written_at) VALUES (?,?,?,?,?)",
+            (provider, identity, harness, detail, int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_provisions() -> list[dict]:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT provider, identity, harness, detail, written_at FROM provisions ORDER BY written_at DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {"provider": r[0], "identity": r[1], "harness": r[2], "detail": r[3], "written_at": r[4]}
+        for r in rows
+    ]
 
 
 def list_accounts() -> list[dict]:

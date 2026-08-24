@@ -65,9 +65,24 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 
 关键事实：`auth.json` 里 accessToken/refreshToken 常是同一段 1 小时短寿 JWT，真正能换票的是 `apiKey`（`crsr_`）；`api_key_token` 进不了 IDE 和 cursor.com 网页接口；IDE 刷新返回 `shouldLogout:true` 表示服务器要求重新登录。
 
-## OMP 配置（参考）
+## 写入 harness（第二阶段）
 
-OMP 凭证库 `~\.omp\agent\agent.db` 表 `auth_credentials`，Cursor 行字段映射：`data.access`=JWT、`data.refresh`=`crsr_` Key（不要填 JWT）、`data.expires`=JWT `exp*1000 - 5分钟`、`identity_key`=`account:<sub>`。OMP 刷新地址同为 `api2.cursor.sh/auth/exchange_user_api_key`。
+菜单 8 或 Web UI 账号卡「写入到…」：从 agent.db 选账号 → 选目标 → 冲突时询问 → 写入。写入前自动刷新令牌、自动备份目标文件、记录 provisions 历史表。
+
+| harness | 位置 | 支持 provider |
+| --- | --- | --- |
+| OpenCode | `~/.local/share/opencode/auth.json` | grok(xai)/openai/claude → oauth 条目；kimi/zai/deepseek → api 条目 |
+| OMP | `~/.omp/agent/agent.db` `auth_credentials` | grok→xai-oauth、openai→codex、claude、cursor_agent→cursor、kimi→kimi-code、zai→zhipu-coding-plan、deepseek→deepseek |
+| Grok CLI | `~/.grok/auth.json` | grok（issuer::client 条目） |
+| Cursor Agent | `%APPDATA%\Cursor\auth.json` | cursor_agent（accessToken + apiKey） |
+| Cursor IDE | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` `cursorAuth/*` | cursor（仅 session 票） |
+| Antigravity IDE | `%APPDATA%\Antigravity IDE\User\globalStorage\state.vscdb` `antigravityUnifiedStateSync.oauthToken` | antigravity（base64+protobuf 嵌套：f1=access/f2=Bearer/f3=refresh/f4=expiry，写时保留其余字段原样） |
+| Codex CLI/App | `~/.codex/auth.json` | openai（CLI 与 App 共用；tokens.access/refresh/account_id，id_token 用 access claims 合成，codex 刷新后自动换真） |
+| Claude Code | `~/.claude/.credentials.json` | claude（claudeAiOauth.accessToken/refreshToken/expiresAt/scopes） |
+| Kimi Code CLI | `~/.kimi-code/config.toml` | kimi（managed:kimi-code 段 api_key） |
+| GLM → Claude Code | `~/.claude/settings.json` | zai（env.ANTHROPIC_BASE_URL=api.z.ai 或 bigmodel.cn/api/anthropic + ANTHROPIC_AUTH_TOKEN；GLM 无官方独立 CLI，这是 Z.ai 官方接入方式） |
+
+OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`，`identity_key="account:<sub>"`；api_key 行：`data={"key","source"}`。
 
 ## 环境变量
 
