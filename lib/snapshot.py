@@ -21,7 +21,10 @@ from .models import Account, QuotaResult, Window
 from .store import store_dir
 
 
-_SCHEMA_VERSION = 1
+# Version display-only cache records whenever normalized result fields change.
+# A mismatch forces a fresh provider read instead of decoding an old record as
+# if newly added fields were explicitly unavailable.
+_SCHEMA_VERSION = 2
 _LOCK_STALE_SECONDS = 75.0
 _LOCK_WAIT_SECONDS = 45.0
 _LOCK_POLL_SECONDS = 0.1
@@ -280,6 +283,7 @@ def _encode_result(item: QuotaResult) -> dict:
         "auth_mode": item.auth_mode,
         "sub_start": item.sub_start,
         "sub_end": item.sub_end,
+        "sub_status": item.sub_status,
     }
 
 
@@ -327,4 +331,5 @@ def _decode_result(raw: dict) -> QuotaResult:
         auth_mode=str(raw.get("auth_mode") or ""),
         sub_start=str(raw.get("sub_start") or ""),
         sub_end=str(raw.get("sub_end") or ""),
+        sub_status=str(raw.get("sub_status") or ""),
     )

@@ -62,8 +62,8 @@ Windows 运行 `install.cmd`，macOS / Linux 运行 `sh install.sh`。之后任�
 
 ```
 quota            # 交互菜单：查看 / 动态刷新 / 账号管理 / 配置 / Web UI / 悬浮窗 / 写入 harness
-quota ui         # 打开本机 Web UI，网页里添加账号、走 OAuth
-quota float      # 启动桌面悬浮窗
+quota ui         # 后台启动本机 Web UI 并立即返回，网页里添加账号、走 OAuth
+quota float      # 启动桌面悬浮窗；刷新时显示进度及快照状态
 quota show       # 终端动态刷新额度
 quota show --once  # 查一次就退出（脚本 / Agent 用）
 quota show --once --force  # 明确忽略共享快照并立即联网刷新
@@ -71,6 +71,8 @@ quota add        # 交互式添加账号
 quota accounts   # 查看本地账号库
 quota config     # 查看配置
 ```
+
+Web UI 卡片右上角的“✕”会先弹出确认框；确认关闭后，卡片进入右上角“历史”，并保留套餐、订阅周期等展示信息，不会删除账号、登录态或认证文件。历史记录支持逐个恢复或全部恢复，旧版隐藏记录会自动兼容。
 
 Antigravity 的 Google OAuth 需先在 Google Cloud Console 自建 OAuth 客户端，然后：
 
@@ -84,7 +86,7 @@ quota env QUOTA_AGY_CLIENT_SECRET <secret>
 | 平台 | 额度内容 | 认证方式 |
 |---|---|---|
 | Grok / xAI | 周额度、高频/普通任务、套餐、订阅周期 | OAuth / API Key / 本机登录 |
-| OpenAI | 5h/周/月窗口、剩余重置次数、套餐 | OAuth |
+| OpenAI | 5h/周/月窗口、剩余重置次数、套餐、认证声明提供的订阅起止时间 | OAuth |
 | Claude Code | 额度窗口 | OAuth / 本机登录 |
 | Zhipu / Z.ai | 5h/周/月窗口 | API Key |
 | Kimi Code | 周/5h 窗口 | API Key |
@@ -92,6 +94,8 @@ quota env QUOTA_AGY_CLIENT_SECRET <secret>
 | Antigravity | Gemini / Claude+GPT 周/5h 窗口、套餐 | Google OAuth |
 | Cursor | 用量汇总 | IDE 登录态 |
 | Cursor Agent | 用量汇总、套餐、订阅周期 | API Key（`crsr_`）/ 本机登录 |
+
+OpenAI 的订阅周期按 Cockpit Tools 的只读流程查询：先从 `accounts/check` 选择当前账号/组织的 entitlement，再用 `subscriptions` 补充生效时间及过期数据，最后才回退到 Codex 本地 ID token。额度窗口的 `reset_at` 不会被当作订阅到期时间；Free 账号若存在历史付费订阅，会保留并显示其真实到期日。
 
 ## 数据与安全
 

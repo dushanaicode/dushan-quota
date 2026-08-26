@@ -58,10 +58,11 @@ def _primary_scale() -> float:
         return 1.0
 
 
-def _fetch_payload(force: bool = False) -> list[dict]:
+def _fetch_payload(force: bool = False) -> dict:
     now = datetime.now().astimezone()
+    shared = get_snapshot(force=force)
     results = []
-    for item in get_snapshot(force=force).results:
+    for item in shared.results:
         windows = [
             {
                 "name": window.name,
@@ -76,14 +77,28 @@ def _fetch_payload(force: bool = False) -> list[dict]:
         results.append(
             {
                 "title": item.title,
+                "provider": item.account.provider,
                 "ok": item.ok,
                 "error": item.error,
                 "email": item.email or item.account.email,
                 "plan": item.plan or item.account.plan,
+                "sub_start": item.sub_start,
+                "sub_end": item.sub_end,
+                "sub_status": item.sub_status,
                 "windows": [w for w in windows if w["text"] is not None or w["remaining_percent"] is not None],
             }
         )
-    return results
+    return {
+        "results": results,
+        "snapshot": {
+            "state": "stale" if shared.stale else "cached" if shared.from_cache else "fresh",
+            "fetched_at": datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat(),
+            "age_seconds": round(shared.age_seconds, 1),
+            "from_cache": shared.from_cache,
+            "stale": shared.stale,
+            "generation": shared.generation,
+        },
+    }
 
 
 def _hwnd(window) -> int:
@@ -235,8 +250,11 @@ class Api:
     def quota(self, force=False):
         try:
             return _fetch_payload(bool(force))
-        except Exception as error:
-            return [{"title": "错误", "ok": False, "error": str(error), "windows": []}]
+        except Exception:
+            return {
+                "results": [{"title": "错误", "ok": False, "error": "刷新失败，请稍后重试", "windows": []}],
+                "snapshot": {"state": "error", "error": "刷新失败，请稍后重试"},
+            }
 
     def settings(self):
         saved = config.load_config().get("float", {})
@@ -423,7 +441,7 @@ class _Tray:
         window = self._api._window
         if window:
             try:
-                window.evaluate_js("refresh()")
+                window.evaluate_js("refresh(true)")
             except Exception:
                 pass
 

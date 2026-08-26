@@ -33,6 +33,7 @@ def default_config() -> dict:
         "watch_seconds": 15,
         "env": {name: "" for name in ENV_KEYS if name != "QUOTA_CLI_HOME"},
         "hidden": [],
+        "history": [],
         "float": {},
     }
 
@@ -57,6 +58,26 @@ def load_config() -> dict:
                 data["env"][name] = value
     if isinstance(raw.get("hidden"), list):
         data["hidden"] = [str(item) for item in raw["hidden"] if isinstance(item, str)]
+    if isinstance(raw.get("history"), list):
+        allowed = {
+            "key",
+            "provider",
+            "identity",
+            "title",
+            "email",
+            "name",
+            "plan",
+            "source",
+            "sub_start",
+            "sub_end",
+            "sub_status",
+            "archived_at",
+        }
+        data["history"] = [
+            {key: value for key, value in item.items() if key in allowed and isinstance(value, str)}
+            for item in raw["history"]
+            if isinstance(item, dict)
+        ]
     if isinstance(raw.get("float"), dict):
         data["float"] = dict(raw["float"])
     return data

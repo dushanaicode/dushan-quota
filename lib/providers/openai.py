@@ -1,24 +1,67 @@
-import json
 import base64
+import json
+from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+ACCOUNT_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
+ACCOUNT_CHECK_URL = f"https://chatgpt.com{ACCOUNT_CHECK_PATH}"
+SUBSCRIPTIONS_PATH = "/backend-api/subscriptions"
+SUBSCRIPTIONS_URL = f"https://chatgpt.com{SUBSCRIPTIONS_PATH}"
 WINDOW_KIND = {18000: "5h quota", 604800: "Week quota", 2592000: "Month quota", 2628000: "Month quota"}
+OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
 def fetch(account: Account) -> QuotaResult:
+    id_token = str(account.secret.get("id_token") or "")
+    token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type")
     access = tokenstore.ensure_fresh(account)
     if not access:
-        return QuotaResult(account=account, ok=False, title="OpenAI", error="缺少 access token")
+        sub_start, sub_end, sub_status = _token_subscription(id_token, token_plan_type or account.plan)
+        return QuotaResult(
+            account=account,
+            ok=False,
+            title="OpenAI",
+            error="缺少 access token",
+            plan=_plan(token_plan_type) if token_plan_type else account.plan,
+            sub_start=sub_start,
+            sub_end=sub_end,
+            sub_status=sub_status,
+        )
     status, text, data = _usage(account, access)
     if status == 401:
         access = tokenstore.refresh_account(account) or access
         status, text, data = _usage(account, access)
+    plan_hint = data.get("plan_type") if isinstance(data, dict) else None
+    plan_hint = plan_hint or token_plan_type or account.plan
+    sub_start, sub_end, sub_status, subscription_plan = _subscription_status(
+        account,
+        access,
+        plan_hint,
+        id_token,
+    )
     if status != 200 or not isinstance(data, dict):
-        return QuotaResult(account=account, ok=False, title="OpenAI", error=f"{status} {text[:80]}")
+        return QuotaResult(
+            account=account,
+            ok=False,
+            title="OpenAI",
+            error=f"{status} {text[:80]}",
+            plan=(
+                _plan(token_plan_type or subscription_plan)
+                if (token_plan_type or subscription_plan)
+                else account.plan
+            ),
+            sub_start=sub_start,
+            sub_end=sub_end,
+            sub_status=sub_status,
+        )
+
+    plan_type = data.get("plan_type") or subscription_plan or token_plan_type or account.plan
+    plan = _plan(plan_type)
 
     windows: list[Window] = []
     rate = data.get("rate_limit") if isinstance(data.get("rate_limit"), dict) else {}
@@ -41,13 +84,15 @@ def fetch(account: Account) -> QuotaResult:
             email=email or "",
             name=_name(access) or account.name,
             user_id=account.secret.get("account_id") or _account_id(access) or account.user_id,
-            plan=_plan(data.get("plan_type")),
+            plan=plan,
             auth_mode=account.auth_mode or "oauth",
+            sub_start=sub_start,
+            sub_end=sub_end,
+            sub_status=sub_status,
         )
     email = _email(access) or account.email
     name = _name(access) or account.name
     user_id = account.secret.get("account_id") or _account_id(access) or account.user_id
-    plan = _plan(data.get("plan_type"))
     return QuotaResult(
         account=account,
         ok=True,
@@ -58,6 +103,9 @@ def fetch(account: Account) -> QuotaResult:
         user_id=user_id or "",
         plan=plan,
         auth_mode=account.auth_mode or "oauth",
+        sub_start=sub_start,
+        sub_end=sub_end,
+        sub_status=sub_status,
     )
 
 
@@ -201,8 +249,6 @@ def _parse_remaining(window, name: str) -> Window | None:
 def _reset(window: dict) -> str | None:
     reset_at = window.get("reset_at")
     if isinstance(reset_at, (int, float)) and reset_at > 0:
-        from datetime import datetime, timezone
-
         return datetime.fromtimestamp(reset_at, tz=timezone.utc).isoformat()
     return None
 
@@ -225,7 +271,294 @@ def _name(token: str) -> str | None:
 
 
 def _account_id(token: str) -> str | None:
-    return (_jwt(token).get("https://api.openai.com/auth") or {}).get("chatgpt_account_id")
+    return _auth_claims(token).get("chatgpt_account_id")
+
+
+def _auth_claims(token: str) -> dict:
+    claims = _jwt(token).get(OPENAI_AUTH_CLAIM)
+    return claims if isinstance(claims, dict) else {}
+
+
+def _token_subscription(id_token: str, plan_type) -> tuple[str, str, str]:
+    """Fallback for accounts whose dedicated read-only endpoints are unavailable."""
+    claims = _auth_claims(id_token)
+    start = _subscription_iso(claims.get("chatgpt_subscription_active_start"))
+    end = _subscription_iso(claims.get("chatgpt_subscription_active_until"))
+    if start or end:
+        return start, end, "expired" if end and _subscription_expired(end) else "known"
+    if "free" in str(plan_type or "").lower():
+        return "", "", "not_applicable"
+    return "", "", "unavailable"
+
+
+def _subscription_status(
+    account: Account,
+    access: str,
+    plan_type,
+    id_token: str = "",
+) -> tuple[str, str, str, str]:
+    """Fetch subscription metadata using Cockpit Tools' read-only endpoint flow.
+
+    accounts/check supplies the matching entitlement and its access expiry. The
+    subscriptions endpoint enriches it with active_start and is also the fallback
+    when the entitlement expiry is missing or already past. Quota reset timestamps
+    are deliberately never accepted as subscription dates.
+    """
+    token_start, token_end, token_status = _token_subscription(id_token, plan_type)
+    check: dict = {}
+    subscriptions: dict = {}
+
+    status, _, payload = _subscription_request(
+        access,
+        ACCOUNT_CHECK_PATH,
+        {"timezone_offset_min": _timezone_offset_min()},
+    )
+    if status == 200:
+        check = _parse_account_check(payload, account, access)
+
+    account_id = (
+        _scalar(check.get("account_id"))
+        or _scalar(account.secret.get("account_id"))
+        or _account_id(access)
+        or ""
+    )
+    if account_id:
+        status, _, payload = _subscription_request(
+            access,
+            SUBSCRIPTIONS_PATH,
+            {"account_id": account_id},
+        )
+        if status == 200:
+            subscriptions = _parse_subscriptions(payload)
+
+    check_start = _subscription_iso(check.get("sub_start"))
+    check_end = _subscription_iso(check.get("sub_end"))
+    api_start = _subscription_iso(subscriptions.get("sub_start"))
+    api_end = _subscription_iso(subscriptions.get("sub_end"))
+
+    start = api_start or check_start or token_start
+    end = check_end
+    check_expired = bool(check_end and _subscription_expired(check_end))
+    if not end or check_expired:
+        end = api_end or end
+    end = end or token_end
+
+    check_plan = _scalar(check.get("plan_type"))
+    api_plan = _scalar(subscriptions.get("plan_type"))
+    subscription_plan = (
+        (check_plan or api_plan)
+        if check_end and not check_expired
+        else (api_plan or check_plan)
+    )
+
+    if start or end:
+        sub_status = "expired" if end and _subscription_expired(end) else "known"
+    elif token_status == "not_applicable" or "free" in str(subscription_plan or plan_type or "").lower():
+        sub_status = "not_applicable"
+    else:
+        sub_status = "unavailable"
+    return start, end, sub_status, subscription_plan
+
+
+def _subscription_request(access: str, path: str, query: dict):
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "Accept": "application/json",
+        "Referer": "https://chatgpt.com/",
+        "User-Agent": "Mozilla/5.0 Quota-CLI/1.0",
+        "x-openai-target-path": path,
+        "x-openai-target-route": path,
+    }
+    url = {
+        ACCOUNT_CHECK_PATH: ACCOUNT_CHECK_URL,
+        SUBSCRIPTIONS_PATH: SUBSCRIPTIONS_URL,
+    }.get(path, f"https://chatgpt.com{path}")
+    if query:
+        url += "?" + urlencode(query)
+    return request_json(url, headers=headers)
+
+
+def _parse_account_check(payload, account: Account, access: str) -> dict:
+    records = _account_check_records(payload)
+    if not records:
+        return {}
+    preferred_org = _scalar(account.secret.get("organization_id")) or _organization_id(access)
+    preferred_accounts = [
+        value
+        for value in (
+            _scalar(account.secret.get("account_id")),
+            _account_id(access),
+        )
+        if value
+    ]
+
+    selected = None
+    if preferred_org:
+        selected = next((node for key, node in records if key == preferred_org), None)
+    if selected is None and preferred_accounts:
+        selected = next(
+            (
+                node
+                for _, node in records
+                if _record_account_id(node) in preferred_accounts
+            ),
+            None,
+        )
+    if selected is None:
+        selected = next(
+            (
+                node
+                for _, node in records
+                if _record_parts(node)[0].get("is_default") is True
+            ),
+            None,
+        )
+    if selected is None:
+        selected = next(
+            (
+                node
+                for _, node in records
+                if "free" not in _record_plan(node).lower()
+            ),
+            None,
+        )
+    selected = selected or records[0][1]
+    account_node, entitlement = _record_parts(selected)
+    return {
+        "account_id": _record_account_id(selected),
+        "plan_type": _field(entitlement, "subscription_plan")
+        or _field(account_node, "plan_type", "planType"),
+        "sub_start": _field(entitlement, "active_start", "starts_at", "started_at")
+        or _field(account_node, "active_start", "starts_at", "started_at"),
+        "sub_end": _field(entitlement, "expires_at", "active_until")
+        or _field(account_node, "expires_at", "active_until"),
+    }
+
+
+def _parse_subscriptions(payload) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "plan_type": _field(payload, "subscription_plan", "plan_type"),
+        "sub_start": _field(payload, "active_start", "starts_at", "started_at"),
+        "sub_end": _field(payload, "active_until", "expires_at"),
+    }
+
+
+def _account_check_records(payload) -> list[tuple[str, dict]]:
+    raw = payload.get("accounts") if isinstance(payload, dict) else None
+    if isinstance(raw, dict):
+        return [
+            (str(key), value)
+            for key, value in raw.items()
+            if isinstance(value, dict)
+        ]
+    if isinstance(raw, list):
+        return [("", value) for value in raw if isinstance(value, dict)]
+    if isinstance(payload, list):
+        return [("", value) for value in payload if isinstance(value, dict)]
+    return []
+
+
+def _record_parts(record: dict) -> tuple[dict, dict]:
+    account_node = record.get("account") if isinstance(record.get("account"), dict) else record
+    entitlement = record.get("entitlement") if isinstance(record.get("entitlement"), dict) else {}
+    return account_node, entitlement
+
+
+def _record_account_id(record: dict) -> str:
+    account_node, _ = _record_parts(record)
+    return _field(account_node, "account_id", "id", "chatgpt_account_id", "workspace_id")
+
+
+def _record_plan(record: dict) -> str:
+    account_node, entitlement = _record_parts(record)
+    return _field(entitlement, "subscription_plan") or _field(account_node, "plan_type", "planType")
+
+
+def _field(record: dict, *keys: str) -> str:
+    for key in keys:
+        value = _scalar(record.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _scalar(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    return ""
+
+
+def _organization_id(access: str) -> str:
+    claims = _auth_claims(access)
+    for key in (
+        "organization_id",
+        "chatgpt_organization_id",
+        "chatgpt_org_id",
+        "org_id",
+        "poid",
+        "POID",
+    ):
+        value = _scalar(claims.get(key))
+        if value:
+            return value
+    organizations = claims.get("organizations")
+    if not isinstance(organizations, list):
+        return ""
+    records = [item for item in organizations if isinstance(item, dict)]
+    selected = next((item for item in records if item.get("is_default") is True), None)
+    selected = selected or (records[0] if records else {})
+    return _field(selected, "id")
+
+
+def _timezone_offset_min() -> int:
+    offset = datetime.now().astimezone().utcoffset()
+    return -int(offset.total_seconds() / 60) if offset else 0
+
+
+def _subscription_iso(value) -> str:
+    if value is None or isinstance(value, bool):
+        return ""
+    parsed = None
+    if isinstance(value, (int, float)):
+        timestamp = float(value)
+        if timestamp <= 0:
+            return ""
+        if timestamp > 1e12:
+            timestamp /= 1000
+        try:
+            parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return ""
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                return _subscription_iso(float(text))
+            except ValueError:
+                return ""
+    else:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _subscription_expired(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc)
 
 
 def _plan(plan_type) -> str:

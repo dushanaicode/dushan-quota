@@ -89,3 +89,4 @@ class QuotaResult:
     auth_mode: str = ""
     sub_start: str = ""
     sub_end: str = ""
+    sub_status: str = ""

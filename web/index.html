@@ -89,6 +89,10 @@
   .btn:disabled { opacity:.45; cursor:default; }
   .btn.primary { background:var(--text); color:var(--bg); border-color:transparent; font-weight:600; }
   .btn.primary:hover { opacity:.9; }
+  .header-count { min-width:17px; height:17px; display:none; align-items:center; justify-content:center;
+    margin-left:1px; border-radius:99px; padding:0 5px; background:var(--accent-soft);
+    color:var(--accent); font-size:9.5px; font-variant-numeric:tabular-nums; }
+  .header-count.show { display:inline-flex; }
   .btn .spin {
     display:inline-block; width:10px; height:10px; vertical-align:-1px;
     border:1.5px solid var(--faint); border-top-color:currentColor;
@@ -121,9 +125,6 @@
   #sideNav button:hover { background:var(--accent-soft); color:var(--text); }
   #sideNav button.on { background:var(--accent-soft); color:var(--accent); }
   #sideNav .cnt { font-size:10px; color:var(--faint); font-variant-numeric:tabular-nums; }
-  #hiddenNote { margin:16px 0 0 11px; font-size:11px; color:var(--faint); }
-  #hiddenNote a { color:var(--accent); cursor:pointer; text-decoration:none; }
-  #hiddenNote a:hover { text-decoration:underline; }
   @media (max-width:900px) {
     .layout { flex-direction:column; }
     #side { width:100%; position:static; }
@@ -144,15 +145,13 @@
   @keyframes rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
   .card.loading-dim { opacity:.55; transition:opacity .3s; }
   .card .x {
-    position:absolute; top:10px; right:10px; width:22px; height:22px;
+    position:absolute; top:10px; right:10px; width:24px; height:24px;
     display:flex; align-items:center; justify-content:center;
-    border:0; background:transparent; color:var(--faint); font-size:11px; border-radius:7px;
-    opacity:0; transition:opacity .2s, color .2s, background .2s;
+    border:0; border-radius:7px; background:transparent; color:var(--faint);
+    font-size:12px; opacity:.6; transition:opacity .2s, color .2s, background .2s;
   }
-  .card:hover .x { opacity:1; }
-  .card .x:hover { color:var(--bad); background:rgba(207,122,109,.12); }
-  .card .x.arm { opacity:1; color:var(--bad); width:auto; padding:0 8px; font-size:10.5px; }
-  .card-head { display:flex; align-items:center; gap:9px; margin-bottom:3px; padding-right:24px; }
+  .card .x:hover { opacity:1; color:var(--bad); background:rgba(207,122,109,.12); }
+  .card-head { display:flex; align-items:center; gap:9px; margin-bottom:3px; padding-right:28px; }
   .card-head h2 { font-size:13.5px; font-weight:600; letter-spacing:.02em; white-space:nowrap; }
   .pill {
     font-size:9.5px; letter-spacing:.06em; padding:2px 8px; border-radius:99px;
@@ -206,8 +205,8 @@
   #toast.show { opacity:1; transform:translateX(-50%); }
   #toast.bad { color:var(--bad); border-color:rgba(205,97,89,.4); }
 
-  /* ---------- focus panel（右侧 1/3 滑出） ---------- */
-  #focusPanel {
+  /* ---------- overview panel（右侧 1/3 滑出） ---------- */
+  #focusPanel, #historyPanel {
     position:fixed; top:0; right:0; z-index:45;
     width:min(33vw, 460px); min-width:320px; height:100vh;
     background:var(--surface); border-left:1px solid var(--line);
@@ -215,21 +214,52 @@
     transform:translateX(106%); transition:transform .38s var(--ease);
     display:flex; flex-direction:column;
   }
-  #focusPanel.show { transform:translateX(0); }
-  .fp-head { display:flex; align-items:center; justify-content:space-between; padding:16px 18px 12px; border-bottom:1px solid var(--line-soft); }
+  #focusPanel.show, #historyPanel.show { transform:translateX(0); }
+  .fp-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px 18px 12px; }
+  .fp-title { min-width:0; }
+  .fp-title b { display:block; font-size:15px; font-weight:600; letter-spacing:.08em; }
+  .fp-title span { display:block; margin-top:2px; color:var(--faint); font-size:10.5px; }
+  .fp-toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 18px 12px; border-bottom:1px solid var(--line-soft); }
   .fp-tabs { display:flex; gap:4px; background:var(--track); border-radius:9px; padding:3px; }
   .fp-tabs button { border:0; background:transparent; color:var(--muted); font-size:12px; padding:5px 13px; border-radius:7px; transition:all .2s var(--ease); }
   .fp-tabs button.on { background:var(--surface); color:var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.15); }
+  .fp-count { color:var(--faint); font-size:10.5px; white-space:nowrap; font-variant-numeric:tabular-nums; }
   .fp-x { border:0; background:transparent; color:var(--faint); font-size:12px; width:24px; height:24px; border-radius:7px; }
   .fp-x:hover { color:var(--bad); background:rgba(205,97,89,.12); }
   #fpList { flex:1; overflow-y:auto; padding:8px 18px 20px; }
-  .fp-item { display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line-soft); animation:rise .4s var(--ease) both; }
+  .fp-item { display:flex; align-items:center; gap:10px; padding:11px 0; border-bottom:1px solid var(--line-soft); animation:rise .4s var(--ease) both; }
   .fp-item .t { flex:1; min-width:0; font-size:12px; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .fp-item .t b { font-weight:600; }
-  .fp-item .t span { color:var(--faint); margin-left:7px; font-size:11px; }
+  .fp-item .t b { display:inline; font-weight:600; }
+  .fp-item .t > span { color:var(--faint); margin-left:7px; font-size:11px; }
+  .fp-item .t small { display:block; margin-top:1px; color:var(--faint); font-size:9.5px; overflow:hidden; text-overflow:ellipsis; }
   .fp-item .r { font-size:10px; color:var(--faint); white-space:nowrap; }
   .fp-item .p { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .fp-sub-item { align-items:flex-start; }
+  .fp-period { display:flex; flex-direction:column; align-items:flex-end; gap:1px; color:var(--muted); font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .fp-period i { width:28px; display:inline-block; color:var(--faint); font-style:normal; }
+  .fp-state { min-width:38px; margin-top:1px; border-radius:99px; padding:2px 7px; text-align:center; font-size:9.5px; white-space:nowrap; background:var(--accent-soft); color:var(--accent); }
+  .fp-state.expired, .fp-state.unavailable { background:rgba(205,97,89,.12); color:var(--bad); }
+  .fp-state.free { background:var(--track); color:var(--muted); }
   .fp-empty { color:var(--faint); font-size:12px; padding:18px 0; }
+  .history-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:0 18px 12px; border-bottom:1px solid var(--line-soft); }
+  .history-toolbar span { color:var(--faint); font-size:10.5px; }
+  .history-toolbar .btn { padding:4px 10px; font-size:10.5px; }
+  #historyList { flex:1; overflow-y:auto; padding:8px 18px 20px; }
+  .history-item { padding:13px 0; border-bottom:1px solid var(--line-soft); animation:rise .4s var(--ease) both; }
+  .history-item .row1 { display:flex; align-items:center; gap:8px; min-width:0; }
+  .history-item .row1 b { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; }
+  .history-item .row1 .pill { flex:none; }
+  .history-item .who { margin-top:3px; color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .history-item .when { margin-top:2px; color:var(--faint); font-size:9.5px; }
+  .history-item .actions-row { display:flex; justify-content:flex-end; margin-top:9px; }
+  .history-item .actions-row .btn { padding:4px 10px; font-size:10.5px; }
+  .history-empty { padding:22px 2px; color:var(--muted); font-size:12px; line-height:1.8; }
+  .history-empty b { display:block; margin-bottom:4px; color:var(--text); font-size:13px; }
+  .confirm-panel { width:min(430px,100%); }
+  .confirm-account { margin:2px 0 12px; color:var(--text); font-size:12.5px; word-break:break-word; }
+  .confirm-note { padding:11px 12px; border:1px solid var(--line-soft); border-radius:9px;
+    background:var(--track); color:var(--muted); font-size:11.5px; line-height:1.7; }
 
   /* ---------- add panel（cockpit 式：左提供商 / 右配置） ---------- */
   .add-panel { width:min(880px,100%); }
@@ -316,7 +346,8 @@
       <button data-t="green" style="--dot:#55b579" title="绿意盎然"></button>
     </div>
     <a class="btn" href="https://github.com/dushanaicode/quota-cli" target="_blank" rel="noopener" title="GitHub 仓库">GitHub</a>
-    <button class="btn" id="btnFocus" onclick="toggleFocus(true)">关注</button>
+    <button class="btn" id="btnHistory" onclick="toggleHistory(true)">历史<span class="header-count" id="historyBadge">0</span></button>
+    <button class="btn" id="btnFocus" onclick="toggleFocus(true)">总览</button>
     <button class="btn" id="btnRefresh" onclick="refreshQuota(true)">刷新</button>
     <button class="btn" onclick="openSet()">设置</button>
     <button class="btn primary" onclick="openAdd()">添加账号</button>
@@ -327,20 +358,53 @@
 <div class="layout">
   <aside id="side">
     <nav id="sideNav"></nav>
-    <p id="hiddenNote"></p>
   </aside>
   <main><div id="list" class="grid"></div></main>
 </div>
 
 <div id="focusPanel">
   <div class="fp-head">
+    <div class="fp-title">
+      <b>总览</b>
+      <span id="fpHint">按剩余额度从低到高排列</span>
+    </div>
+    <button class="fp-x" onclick="toggleFocus(false)" aria-label="关闭总览">✕</button>
+  </div>
+  <div class="fp-toolbar">
     <div class="fp-tabs">
       <button data-tab="low" class="on" onclick="setFpTab('low')">用量最低</button>
-      <button data-tab="soon" onclick="setFpTab('soon')">即将重置</button>
+      <button data-tab="subscription" onclick="setFpTab('subscription')">订阅时间</button>
     </div>
-    <button class="fp-x" onclick="toggleFocus(false)">✕</button>
+    <span class="fp-count" id="fpCount">0 项</span>
   </div>
   <div id="fpList"></div>
+</div>
+
+<div id="historyPanel">
+  <div class="fp-head">
+    <div class="fp-title">
+      <b>历史</b>
+      <span>关闭的卡片保存在这里，可随时恢复</span>
+    </div>
+    <button class="fp-x" onclick="toggleHistory(false)" aria-label="关闭历史">✕</button>
+  </div>
+  <div class="history-toolbar">
+    <span id="historySummary">0 条历史记录</span>
+    <button class="btn" id="restoreAllButton" onclick="restoreAllHistory()">全部恢复</button>
+  </div>
+  <div id="historyList"></div>
+</div>
+
+<div id="closeCardModal" class="modal" onclick="if(event.target===this)closeCardConfirm()">
+  <div class="panel confirm-panel">
+    <h2>关闭这张卡片？</h2>
+    <p class="confirm-account" id="closeCardAccount"></p>
+    <p class="confirm-note">关闭后，这张卡片会从首页移到“历史”。账号、登录状态和认证凭证不会被删除，之后可以随时恢复。</p>
+    <div class="row end">
+      <button class="btn" onclick="closeCardConfirm()">取消</button>
+      <button class="btn primary" id="closeCardYes" onclick="confirmCloseCard()">确认关闭</button>
+    </div>
+  </div>
 </div>
 
 <div id="setModal" class="modal" onclick="if(event.target===this)closeSet()">
@@ -358,11 +422,6 @@
     <div class="row" style="margin-top:0">
       <button class="btn" id="btnFloat">启动悬浮窗</button>
       <span class="hint" style="align-self:center">托盘图标，可拖动/缩放/置顶</span>
-    </div>
-    <label>隐藏卡片</label>
-    <div class="row" style="margin-top:0">
-      <span class="hint" id="setHidden" style="align-self:center">无隐藏</span>
-      <button class="btn" id="btnUnhide">全部恢复</button>
     </div>
     <label>数据</label>
     <p class="hint">凭证库 <code>~/.quota-cli/agent.db</code> · 订阅周期与刷新令牌自动记录</p>
@@ -411,8 +470,8 @@
 const rules = {};
 let firstLoad = true;
 let cache = [];
+let historyItems = [];
 let filter = '*';
-let hiddenCount = 0;
 let fpTab = 'low';
 
 async function api(path, opt={}) {
@@ -464,6 +523,21 @@ function fmtDate(iso){
   if (isNaN(d)) return '';
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
+function subscriptionLine(item){
+  const start = fmtDate(item.sub_start), end = fmtDate(item.sub_end);
+  if (start && end) {
+    const endLabel = item.sub_status === 'expired' ? '已到期' : '到期';
+    return `<div class="meta dim">订阅生效 ${esc(start)} · ${endLabel} ${esc(end)}</div>`;
+  }
+  if (end) return `<div class="meta dim">${item.sub_status === 'expired' ? '历史订阅已到期' : '订阅到期'} ${esc(end)}</div>`;
+  if (start) return `<div class="meta dim">订阅生效 ${esc(start)}</div>`;
+  const status = item.sub_status || '';
+  if (status === 'not_applicable') return '<div class="meta dim">订阅 免费方案 · 到期 不适用</div>';
+  if (status === 'unavailable') {
+    return '<div class="meta dim">订阅信息暂未取得，请刷新重试</div>';
+  }
+  return '';
+}
 
 /* 两行式额度行（同悬浮窗）：名称+重置+百分比一行，细条整行 */
 function winRow(w){
@@ -489,8 +563,6 @@ function renderSide(){
   };
   mk('*', '全部', cache.length);
   Object.keys(counts).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).forEach(t => mk(t, t, counts[t]));
-  document.getElementById('hiddenNote').innerHTML =
-    hiddenCount > 0 ? `已隐藏 ${hiddenCount} 张 · <a onclick="unhideAll()">全部恢复</a>` : '';
 }
 
 function renderCards(){
@@ -501,8 +573,7 @@ function renderCards(){
   items.forEach((item, i) => {
     const line1 = [item.email, item.name].filter(Boolean).map(esc).join('<i>·</i>');
     const line2 = [item.user_id && item.user_id !== item.email ? item.user_id : '', [item.auth_mode, item.source].filter(Boolean).join(' / ')].filter(Boolean).map(esc).join('<i>·</i>');
-    const subLine = (item.sub_start || item.sub_end)
-      ? `<div class="meta dim">订阅 ${esc(fmtDate(item.sub_start)) || '?'} · 到期 ${esc(fmtDate(item.sub_end)) || '?'}</div>` : '';
+    const subLine = subscriptionLine(item);
     const wins = (item.windows || []).map(winRow).join('');
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(item.plan)}">${esc(item.plan)}</span>` : '';
     const credit = item.reset_credits || {};
@@ -519,7 +590,7 @@ function renderCards(){
     sec.className = 'card';
     sec.style.animationDelay = (i * 45) + 'ms';
     sec.innerHTML = `
-      <button class="x" title="${item.stored_id ? '删除本地账号' : '隐藏此卡片'}">✕</button>
+      <button class="x" title="关闭卡片" aria-label="关闭 ${esc(item.title)}">✕</button>
       <div class="card-head"><h2>${esc(item.title)}</h2>${pill}</div>
       <div class="meta">${line1 || '-'}</div>
       <div class="meta dim">${line2 || ' '}</div>
@@ -529,7 +600,7 @@ function renderCards(){
         <button class="btn act-sync">写入到…</button>
         ${resetButton}
       </div>`;
-    sec.querySelector('.x').onclick = e => closeCard(item, e.currentTarget);
+    sec.querySelector('.x').onclick = () => openCloseCardConfirm(item);
     sec.querySelector('.act-sync').onclick = () => openSync(item.provider, encodeURIComponent(item.identity || ''), item.title);
     const rb = sec.querySelector('.act-reset');
     if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
@@ -537,20 +608,51 @@ function renderCards(){
   });
 }
 
-function closeCard(item, btn){
-  if (item.stored_id) {
-    if (btn.dataset.arm) {
-      api('/api/accounts/' + item.stored_id, {method:'DELETE'}).then(() => { toast('已删除'); refreshQuota(false); });
-    } else {
-      btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认删除';
-      setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = '✕'; }, 2600);
-    }
-    return;
-  }
-  api('/api/hide', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})})
-    .then(() => { toast('已隐藏，可在左侧恢复'); refreshQuota(false); });
+let closeCardCtx = null;
+function openCloseCardConfirm(item){
+  closeCardCtx = item;
+  const account = [item.title, item.email || item.name, item.plan].filter(Boolean).join(' · ');
+  document.getElementById('closeCardAccount').textContent = account;
+  const btn = document.getElementById('closeCardYes');
+  btn.disabled = false;
+  btn.textContent = '确认关闭';
+  document.getElementById('closeCardModal').classList.add('show');
 }
-async function unhideAll(){ await api('/api/unhide', {method:'POST', body:'{}'}); refreshQuota(false); }
+function closeCardConfirm(){
+  closeCardCtx = null;
+  document.getElementById('closeCardModal').classList.remove('show');
+}
+async function confirmCloseCard(){
+  if (!closeCardCtx) return;
+  const item = closeCardCtx;
+  const btn = document.getElementById('closeCardYes');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>关闭中';
+  try {
+    await api('/api/archive', {
+      method:'POST',
+      body:JSON.stringify({
+        provider:item.provider,
+        identity:item.identity,
+        title:item.title,
+        email:item.email,
+        name:item.name,
+        plan:item.plan,
+        source:item.source,
+        sub_start:item.sub_start,
+        sub_end:item.sub_end,
+        sub_status:item.sub_status,
+      }),
+    });
+    closeCardConfirm();
+    toast('卡片已关闭，可从历史恢复');
+    await refreshQuota(false);
+  } catch(e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = '确认关闭';
+  }
+}
 
 async function resetOpenAI(item, btn){
   if (!btn.dataset.arm) {
@@ -579,8 +681,8 @@ async function refreshQuota(manual){
   try {
     const data = await api('/api/quota' + (manual ? '?force=1' : ''));
     cache = data.results || [];
-    hiddenCount = data.hidden_count || 0;
-    renderSide(); renderCards(); renderFocus();
+    historyItems = data.history || [];
+    renderSide(); renderCards(); renderFocus(); renderHistory();
     firstLoad = false;
   } catch(e) {
     if (firstLoad) list.innerHTML = `<p class="hint">加载失败：${esc(e.message)}</p>`;
@@ -600,8 +702,9 @@ function restartTick(){
   }));
 }
 
-/* ---------- 关注面板（右侧 1/3） ---------- */
+/* ---------- 总览面板（右侧 1/3） ---------- */
 function toggleFocus(open){
+  if (open) document.getElementById('historyPanel').classList.remove('show');
   document.getElementById('focusPanel').classList.toggle('show', open);
   if (open) renderFocus();
 }
@@ -612,29 +715,149 @@ function setFpTab(tab){
 }
 function renderFocus(){
   const box = document.getElementById('fpList');
+  const hint = document.getElementById('fpHint');
+  const count = document.getElementById('fpCount');
   const rows = [];
   cache.forEach(it => {
     if (!it.ok) return;
     (it.windows || []).forEach(w => {
       if (w.remaining_percent == null) return;
-      rows.push({title: it.title, name: w.name, pct: Math.round(w.remaining_percent), reset: w.reset || '', ts: w.reset_ts || 0});
+      rows.push({
+        title: it.title,
+        account: it.email || it.name || '',
+        name: w.name,
+        pct: Math.round(w.remaining_percent),
+        reset: w.reset || '',
+        ts: w.reset_ts || 0,
+      });
     });
   });
-  let items;
   if (fpTab === 'low') {
-    items = rows.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct || a.ts - b.ts);
-  } else {
-    items = rows.filter(r => r.ts > 0).sort((a, b) => a.ts - b.ts);
+    const items = rows.filter(r => r.pct < 100).sort((a, b) => a.pct - b.pct || a.ts - b.ts);
+    hint.textContent = '按剩余额度从低到高排列';
+    count.textContent = `${items.length} 项`;
+    box.innerHTML = items.length ? '' : '<p class="fp-empty">暂无可比较的用量数据</p>';
+    items.forEach((r, i) => {
+      const c = colorOf(r.pct);
+      const div = document.createElement('div');
+      div.className = 'fp-item';
+      div.style.animationDelay = (i * 25) + 'ms';
+      div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span>${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="r">${esc(r.reset)}</span><span class="p ${c}">${r.pct}%</span>`;
+      box.appendChild(div);
+    });
+    return;
   }
-  box.innerHTML = items.length ? '' : '<p class="fp-empty">暂无数据</p>';
-  items.forEach((r, i) => {
-    const c = colorOf(r.pct);
+
+  const subscriptions = cache.map(it => {
+    const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
+    const status = it.sub_status || '';
+    if (!start && !end && !status) return null;
+    const endTimestamp = Date.parse(it.sub_end || '');
+    const inferredExpired = Number.isFinite(endTimestamp) && endTimestamp <= Date.now();
+    const state = status === 'expired' || (!status && inferredExpired)
+      ? {label:'已到期', cls:'expired', rank:0}
+      : status === 'known' || (!status && (start || end))
+        ? {label:'有效', cls:'known', rank:1}
+        : status === 'not_applicable'
+          ? {label:'免费', cls:'free', rank:2}
+          : {label:'未知', cls:'unavailable', rank:3};
+    const timestamp = endTimestamp || Date.parse(it.sub_start || '') || Number.MAX_SAFE_INTEGER;
+    return {
+      title: it.title,
+      plan: it.plan || '',
+      account: it.email || it.name || '',
+      start,
+      end,
+      state,
+      timestamp,
+    };
+  }).filter(Boolean).sort((a, b) => a.state.rank - b.state.rank || a.timestamp - b.timestamp || a.title.localeCompare(b.title));
+
+  hint.textContent = '查看各账号的生效时间与到期时间';
+  count.textContent = `${subscriptions.length} 个账号`;
+  box.innerHTML = subscriptions.length ? '' : '<p class="fp-empty">暂无订阅时间数据</p>';
+  subscriptions.forEach((r, i) => {
     const div = document.createElement('div');
-    div.className = 'fp-item';
+    div.className = 'fp-item fp-sub-item';
     div.style.animationDelay = (i * 25) + 'ms';
-    div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span></span><span class="r">${esc(r.reset)}</span><span class="p ${c}">${r.pct}%</span>`;
+    let period = '';
+    if (r.start) period += `<span><i>生效</i>${esc(r.start)}</span>`;
+    if (r.end) period += `<span><i>到期</i>${esc(r.end)}</span>`;
+    if (!period) period = r.state.cls === 'free'
+      ? '<span>免费方案 · 到期不适用</span>'
+      : '<span>时间暂不可获取</span>';
+    div.innerHTML = `<span class="t"><b>${esc(r.title)}</b>${r.plan ? `<span>${esc(r.plan)}</span>` : ''}${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="fp-period">${period}</span><span class="fp-state ${r.state.cls}">${r.state.label}</span>`;
     box.appendChild(div);
   });
+}
+
+/* ---------- 历史（保存关闭的卡片，不删除账号） ---------- */
+function toggleHistory(open){
+  if (open) document.getElementById('focusPanel').classList.remove('show');
+  document.getElementById('historyPanel').classList.toggle('show', open);
+  if (open) renderHistory();
+}
+function archivedTime(iso){
+  if (!iso) return '由旧版隐藏记录迁移';
+  const date = new Date(iso);
+  if (isNaN(date)) return '';
+  return `关闭于 ${date.toLocaleString([], {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}`;
+}
+function renderHistory(){
+  const box = document.getElementById('historyList');
+  const badge = document.getElementById('historyBadge');
+  const summary = document.getElementById('historySummary');
+  const restoreAll = document.getElementById('restoreAllButton');
+  badge.textContent = String(historyItems.length);
+  badge.classList.toggle('show', historyItems.length > 0);
+  summary.textContent = `${historyItems.length} 条历史记录`;
+  restoreAll.disabled = historyItems.length === 0;
+  if (!historyItems.length) {
+    box.innerHTML = '<div class="history-empty"><b>暂无历史记录</b>关闭过的卡片会保存在这里。关闭不会删除登录、凭证或账号，之后可以随时恢复。</div>';
+    return;
+  }
+  box.innerHTML = '';
+  historyItems.forEach((item, i) => {
+    const div = document.createElement('div');
+    const who = [item.email, item.name].filter(Boolean).join(' · ') || item.identity || '';
+    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}">${esc(item.plan)}</span>` : '';
+    div.className = 'history-item';
+    div.style.animationDelay = (i * 25) + 'ms';
+    div.innerHTML = `
+      <div class="row1"><b>${esc(item.title || item.provider)}</b>${pill}</div>
+      <div class="who">${esc(who)}${item.source ? ` · ${esc(item.source)}` : ''}</div>
+      ${subscriptionLine(item)}
+      <div class="when">${esc(archivedTime(item.archived_at))}</div>
+      <div class="actions-row"><button class="btn">恢复到首页</button></div>`;
+    div.querySelector('.actions-row .btn').onclick = e => restoreHistoryItem(item, e.currentTarget);
+    box.appendChild(div);
+  });
+}
+async function restoreHistoryItem(item, btn){
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>恢复中';
+  try {
+    await api('/api/restore', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})});
+    toast('已恢复到首页');
+    await refreshQuota(false);
+  } catch(e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = '恢复到首页';
+  }
+}
+async function restoreAllHistory(){
+  const btn = document.getElementById('restoreAllButton');
+  btn.disabled = true;
+  try {
+    await api('/api/restore', {method:'POST', body:'{}'});
+    toast('已全部恢复到首页');
+    await refreshQuota(false);
+  } catch(e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = historyItems.length === 0;
+  }
 }
 
 /* ---------- add account（左提供商 / 右配置） ---------- */
@@ -776,7 +999,6 @@ function armTimer(){
 async function openSet(){
   const cfg = await api('/api/config');
   document.getElementById('setWatch').value = String(cfg.watch_seconds ?? 60);
-  document.getElementById('setHidden').textContent = hiddenCount > 0 ? `已隐藏 ${hiddenCount} 张` : '无隐藏';
   document.getElementById('setModal').classList.add('show');
 }
 function closeSet(){ document.getElementById('setModal').classList.remove('show'); }
@@ -789,9 +1011,7 @@ document.getElementById('btnFloat').onclick = async () => {
   await api('/api/float', {method:'POST', body:'{}'});
   toast('悬浮窗已启动');
 };
-document.getElementById('btnUnhide').onclick = () => { unhideAll(); closeSet(); };
-
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); toggleFocus(false); closeSet(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); } });
 (async () => {
   try {
     const cfg = await api('/api/config');

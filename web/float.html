@@ -29,11 +29,19 @@
     cursor:move; flex:none;
   }
   .hdr .dot { width:7px; height:7px; border-radius:50%; background:#3dd68c; flex:none; box-shadow:0 0 6px rgba(61,214,140,.8); }
+  .hdr .dot.loading { background:#f5c664; box-shadow:0 0 7px rgba(245,198,100,.85); animation:pulse .8s ease-in-out infinite alternate; }
+  .hdr .dot.error { background:#f87171; box-shadow:0 0 7px rgba(248,113,113,.8); }
   .hdr b { font-size:12.5px; font-weight:600; letter-spacing:.5px; }
+  .status { min-width:0; max-width:92px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#77839a; font-size:9px; }
   .hdr .sp { flex:1; }
-  .ico { cursor:pointer; opacity:.45; font-size:11px; line-height:1; padding:2px 3px; border-radius:5px; }
+  .ico { display:inline-flex; align-items:center; justify-content:center; cursor:pointer; opacity:.45; font-size:11px; line-height:1; padding:2px 3px; border-radius:5px; }
   .ico:hover { opacity:1; background:rgba(255,255,255,.10); }
   .ico.on { opacity:1; background:rgba(110,168,254,.25); }
+  .ico.loading { opacity:1; pointer-events:none; animation:spin .7s linear infinite; }
+  #panel.refreshed { animation:flash .55s ease-out; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes pulse { to { opacity:.45; transform:scale(.82); } }
+  @keyframes flash { 0% { box-shadow:inset 0 0 0 1px rgba(61,214,140,.7); } 100% { box-shadow:inset 0 0 0 1px transparent; } }
   #body { overflow-y:auto; padding:2px 12px 6px; flex:1; }
   #body::-webkit-scrollbar { width:3px; }
   #body::-webkit-scrollbar-thumb { background:rgba(255,255,255,.16); border-radius:99px; }
@@ -43,6 +51,7 @@
   .name b { font-size:12px; font-weight:600; color:#f0f5fb; white-space:nowrap; }
   .pill { font-size:9px; padding:1px 6px; border-radius:99px; background:rgba(110,168,254,.15); color:#9ec2ff; white-space:nowrap; flex:none; }
   .name span { font-size:10px; color:#77839a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sub { color:#657188; font-size:9px; margin:-2px 0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row { margin:5px 0 1px; }
   .row .top { display:flex; align-items:baseline; gap:7px; margin-bottom:3px; }
   .row .lbl { font-size:10.5px; color:#93a0b6; white-space:nowrap; }
@@ -71,7 +80,7 @@
 <body>
 <div id="panel">
   <div class="hdr" id="hdr">
-    <span class="dot"></span><b>Quota</b><span class="sp"></span>
+    <span class="dot" id="stateDot"></span><b>Quota</b><span class="status" id="status" title="">准备中</span><span class="sp"></span>
     <span class="ico" id="tPin" title="置顶">📌</span>
     <span class="ico" id="tCfg" title="设置">⚙</span>
     <span class="ico" id="tRef" title="刷新">↻</span>
@@ -90,15 +99,33 @@
 let S = { alpha:82, show:{}, on_top:true };
 let cache = [];
 let api = null;
+let refreshing = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const color = p => p>=40?'g':p>=15?'y':'r';
 
 function row(w){
   if(w.text!=null) return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"></span><span class="txt">${esc(w.text)}</span></div></div>`;
-  const p = Math.round(w.remaining_percent||0), c = color(p);
+  if(w.remaining_percent==null) return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"></span><span class="txt">未知/暂不可获取</span></div></div>`;
+  const p = Math.round(w.remaining_percent), c = color(p);
   const rst = w.reset ? esc(w.reset) : '';
   return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${rst}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
+}
+
+function fmtDate(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  if(isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function subscriptionText(it){
+  const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
+  if(start && end) return `订阅生效 ${start} · ${it.sub_status === 'expired' ? '已到期' : '到期'} ${end}`;
+  if(end) return `${it.sub_status === 'expired' ? '历史订阅已到期' : '订阅到期'} ${end}`;
+  if(start) return `订阅生效 ${start}`;
+  if(it.sub_status === 'not_applicable') return '订阅 免费方案 · 到期 不适用';
+  if(it.sub_status === 'unavailable') return '订阅信息暂未取得，请刷新重试';
+  return '';
 }
 
 function render(items){
@@ -109,6 +136,8 @@ function render(items){
     if(S.show['#email']!==false && it.email) meta.push(`<span>${esc(it.email)}</span>`);
     const pill = (S.show['#plan']!==false && it.plan) ? `<span class="pill">${esc(it.plan)}</span>` : '';
     html += `<div class="card"><div class="name"><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
+    const sub = subscriptionText(it);
+    if(sub) html += `<div class="sub">${esc(sub)}</div>`;
     html += it.ok ? it.windows.map(row).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
     html += `</div>`;
   }
@@ -129,8 +158,47 @@ function buildPick(){
   });
 }
 
+function setRefreshState(text, state='ok', detail=''){
+  const status = $('status'), dot = $('stateDot');
+  status.textContent = text;
+  status.title = detail || text;
+  dot.classList.toggle('loading', state === 'loading');
+  dot.classList.toggle('error', state === 'error');
+}
+function flashUpdated(){
+  const panel = $('panel');
+  panel.classList.remove('refreshed');
+  void panel.offsetWidth;
+  panel.classList.add('refreshed');
+}
+function resultLabel(meta, forced){
+  const stamp = new Date(meta.fetched_at || Date.now()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  if(meta.state === 'stale' || meta.stale) return [`旧数据 · ${stamp}`, 'error', '刷新失败，正在显示上一次成功快照'];
+  if(meta.state === 'error') return ['刷新失败', 'error', meta.error || '刷新失败，请稍后重试'];
+  if(meta.from_cache && !forced) return [`缓存 · ${Math.round(meta.age_seconds || 0)}s`, 'ok', `快照时间 ${stamp}`];
+  return [`已更新 · ${stamp}`, 'ok', meta.from_cache ? '已读取其他客户端完成的共享刷新' : '已完成 Provider 刷新'];
+}
 async function refresh(force=false){
-  try{ cache = await api.quota(!!force); render(cache); buildPick(); }catch(e){}
+  if(refreshing) return;
+  refreshing = true;
+  $('tRef').classList.add('loading');
+  setRefreshState('刷新中…', 'loading', force ? '正在强制刷新共享快照' : '正在读取共享快照');
+  try{
+    const payload = await api.quota(!!force);
+    const meta = Array.isArray(payload) ? {} : (payload.snapshot || {});
+    const next = Array.isArray(payload) ? payload : (payload.results || []);
+    if(next.length || !cache.length) cache = next;
+    render(cache); buildPick();
+    const [text, state, detail] = resultLabel(meta, !!force);
+    setRefreshState(text, state, detail);
+    if(state === 'ok' && force) flashUpdated();
+  }catch(e){
+    setRefreshState('刷新失败', 'error', e && e.message ? e.message : '刷新失败，请稍后重试');
+    if(!cache.length) $('list').innerHTML = '<div class="err" style="padding:6px 0">刷新失败，请稍后重试</div>';
+  }finally{
+    refreshing = false;
+    $('tRef').classList.remove('loading');
+  }
 }
 function save(){ try{ api.save_settings(JSON.stringify(S)); }catch(e){} }
 function applyAlpha(){

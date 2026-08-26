@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -21,13 +22,16 @@ class SnapshotTests(unittest.TestCase):
             label="OpenAI",
             source="test",
             identity="account-1",
-            secret={"access": "super-secret-token"},
+            secret={"access": "super-secret-token", "id_token": "super-secret-id-token"},
         )
         self.result = QuotaResult(
             account=self.account,
             ok=True,
             title="OpenAI",
             windows=[Window(name="Week quota", remaining_percent=99)],
+            sub_start="2030-01-02T03:04:05+00:00",
+            sub_end="2030-02-03T04:05:06+00:00",
+            sub_status="known",
         )
         snapshot.invalidate()
 
@@ -48,7 +52,10 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(1, fetch.call_count)
         raw = Path(snapshot.cache_path()).read_text(encoding="utf-8")
         self.assertNotIn("super-secret-token", raw)
+        self.assertNotIn("super-secret-id-token", raw)
         self.assertNotIn('"secret"', raw)
+        self.assertEqual("2030-02-03T04:05:06+00:00", second.results[0].sub_end)
+        self.assertEqual("known", second.results[0].sub_status)
 
     def test_force_creates_a_new_snapshot(self):
         with patch.object(snapshot, "collect_accounts", return_value=[self.account]), patch.object(
@@ -57,6 +64,31 @@ class SnapshotTests(unittest.TestCase):
             snapshot.get_snapshot(max_age=300)
             snapshot.get_snapshot(force=True, max_age=300)
         self.assertEqual(2, fetch.call_count)
+
+    def test_old_schema_is_refreshed_instead_of_inventing_missing_fields(self):
+        path = snapshot.cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": snapshot._SCHEMA_VERSION - 1,
+                    "generation": "old-schema",
+                    "fetched_at": time.time(),
+                    "results": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch.object(snapshot, "collect_accounts", return_value=[self.account]), patch.object(
+            snapshot, "fetch_all", return_value=[self.result]
+        ) as fetch:
+            refreshed = snapshot.get_snapshot(max_age=300)
+
+        self.assertEqual(1, fetch.call_count)
+        self.assertFalse(refreshed.from_cache)
+        self.assertEqual("known", refreshed.results[0].sub_status)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(snapshot._SCHEMA_VERSION, payload["schema"])
 
     def test_manual_only_mode_keeps_existing_snapshot_until_forced(self):
         Path(self.temporary.name, "config.json").write_text(

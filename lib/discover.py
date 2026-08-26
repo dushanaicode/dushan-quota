@@ -69,6 +69,7 @@ def _from_codex_local(home: Path, add):
     if not isinstance(tokens, dict):
         return
     access = str(tokens.get("access_token") or "").strip()
+    id_token = str(tokens.get("id_token") or "").strip()
     if not access:
         return
     payload = _jwt_payload(access)
@@ -86,6 +87,7 @@ def _from_codex_local(home: Path, add):
             user_id=account_id or identity,
             secret={
                 "access": access,
+                "id_token": id_token,
                 "account_id": account_id,
                 "expiry": payload.get("exp"),
             },
@@ -126,6 +128,7 @@ def _from_opencode(auth: dict, add):
                 name=_openai_name(openai.get("access")) or "",
                 secret={
                     "access": openai.get("access", ""),
+                    "id_token": openai.get("id_token") or openai.get("idToken") or "",
                     "refresh": openai.get("refresh", ""),
                     "account_id": openai.get("accountId") or _openai_account_id(openai.get("access")),
                     "expires": openai.get("expires"),

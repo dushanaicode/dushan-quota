@@ -38,6 +38,9 @@ def main():
     sub.add_parser("rules", help="查看认证规则")
     sub.add_parser("config", help="查看配置和环境变量")
     sub.add_parser("ui", help="打开本机 Web UI")
+    ui_run = sub.add_parser("ui-run", help=argparse.SUPPRESS)
+    ui_run.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
+    ui_run.add_argument("--port", type=int, default=18765, help=argparse.SUPPRESS)
     sub.add_parser("float", help="打开悬浮窗（置顶可拖动）")
     sub.add_parser("float-run", help=argparse.SUPPRESS)
 
@@ -74,8 +77,19 @@ def main():
         remove(args.account_id)
         return
     if args.command == "ui":
+        from lib.web import launch_web
+
+        result = launch_web()
+        if result["ok"]:
+            state = "已启动" if result["started"] else "已在运行"
+            print(f"Quota Web UI {state}: {result['url']}")
+        else:
+            print(result["error"])
+        return
+    if args.command == "ui-run":
         from lib.web import serve
-        serve()
+
+        serve(host=args.host, port=args.port, open_browser=False)
         return
     if args.command == "float":
         from lib.float_win import launch_float

@@ -1,4 +1,10 @@
 import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +31,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/rules":
             self._json({"rules": AUTH_RULES})
+            return
+        if parsed.path == "/api/health":
+            self._json({"ok": True, "service": "quota-cli"})
             return
         if parsed.path == "/api/accounts":
             self._json({"accounts": store.list_stored()})
@@ -139,15 +148,24 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self._json(provision.provision(account, harness, confirmed=bool(payload.get("confirmed"))))
                 return
-            if path == "/api/hide":
-                _set_hidden(payload.get("provider") or "", payload.get("identity") or "", True)
+            if path in {"/api/archive", "/api/hide"}:
+                _set_archived(
+                    payload.get("provider") or "",
+                    payload.get("identity") or "",
+                    True,
+                    payload,
+                )
                 self._json({"ok": True})
                 return
-            if path == "/api/unhide":
+            if path in {"/api/restore", "/api/unhide"}:
                 if payload.get("provider"):
-                    _set_hidden(payload.get("provider") or "", payload.get("identity") or "", False)
+                    _set_archived(
+                        payload.get("provider") or "",
+                        payload.get("identity") or "",
+                        False,
+                    )
                 else:
-                    _clear_hidden()
+                    _clear_archived()
                 self._json({"ok": True})
                 return
             if path == "/api/reset":
@@ -238,22 +256,114 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def _set_hidden(provider: str, identity: str, hidden: bool) -> None:
+_HISTORY_FIELDS = (
+    "title",
+    "email",
+    "name",
+    "plan",
+    "source",
+    "sub_start",
+    "sub_end",
+    "sub_status",
+)
+
+
+def _history_text(value, limit: int = 512) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _history_key(provider: str, identity: str) -> str:
+    return f"{provider}:{identity}"
+
+
+def _archived_records(cfg: dict) -> list[dict]:
+    records = []
+    seen = set()
+    for raw in cfg.get("history") or []:
+        if not isinstance(raw, dict):
+            continue
+        provider = _history_text(raw.get("provider"), 80)
+        identity = _history_text(raw.get("identity"))
+        key = _history_text(raw.get("key")) or _history_key(provider, identity)
+        if not provider and ":" in key:
+            provider, identity = key.split(":", 1)
+        if not provider or not identity or key in seen:
+            continue
+        record = {"key": key, "provider": provider, "identity": identity}
+        for field in (*_HISTORY_FIELDS, "archived_at"):
+            record[field] = _history_text(raw.get(field))
+        records.append(record)
+        seen.add(key)
+    # Preserve entries created by older builds that only stored hidden keys.
+    for raw_key in cfg.get("hidden") or []:
+        key = _history_text(raw_key)
+        if key in seen or ":" not in key:
+            continue
+        provider, identity = key.split(":", 1)
+        if not provider or not identity:
+            continue
+        records.append(
+            {
+                "key": key,
+                "provider": provider,
+                "identity": identity,
+                "archived_at": "",
+            }
+        )
+        seen.add(key)
+    return records
+
+
+def _set_archived(
+    provider: str,
+    identity: str,
+    archived: bool,
+    metadata: dict | None = None,
+) -> None:
+    provider = _history_text(provider, 80)
+    identity = _history_text(identity)
+    if not provider or not identity:
+        raise ValueError("缺少要关闭的账号标识")
     cfg = config.load_config()
-    items = cfg.get("hidden") or []
-    key = f"{provider}:{identity}"
-    if hidden and key not in items:
-        items.append(key)
-    if not hidden:
-        items = [item for item in items if item != key]
-    cfg["hidden"] = items
+    records = _archived_records(cfg)
+    key = _history_key(provider, identity)
+    hidden = {_history_text(item) for item in cfg.get("hidden") or []}
+    if archived:
+        previous = next((item for item in records if item.get("key") == key), {})
+        record = dict(previous)
+        record.update({"key": key, "provider": provider, "identity": identity})
+        metadata = metadata if isinstance(metadata, dict) else {}
+        for field in _HISTORY_FIELDS:
+            value = _history_text(metadata.get(field))
+            if value:
+                record[field] = value
+        record["archived_at"] = datetime.now().astimezone().isoformat()
+        records = [item for item in records if item.get("key") != key]
+        records.insert(0, record)
+        hidden.add(key)
+    else:
+        records = [item for item in records if item.get("key") != key]
+        hidden.discard(key)
+    cfg["history"] = records
+    cfg["hidden"] = sorted(item for item in hidden if item)
     config.save_config(cfg)
+
+
+def _clear_archived() -> None:
+    cfg = config.load_config()
+    cfg["hidden"] = []
+    cfg["history"] = []
+    config.save_config(cfg)
+
+
+def _set_hidden(provider: str, identity: str, hidden: bool) -> None:
+    """Backward-compatible alias for integrations using the old terminology."""
+    _set_archived(provider, identity, hidden)
 
 
 def _clear_hidden() -> None:
-    cfg = config.load_config()
-    cfg["hidden"] = []
-    config.save_config(cfg)
+    """Backward-compatible alias for integrations using the old terminology."""
+    _clear_archived()
 
 
 def _reset_ts(reset_iso) -> int | None:
@@ -269,12 +379,14 @@ def _quota_payload(force: bool = False):
     now = datetime.now().astimezone()
     shared = snapshot.get_snapshot(force=force)
     stored = {item.get("identity"): item.get("id") for item in store.list_stored()}
-    hidden = set(config.load_config().get("hidden") or [])
+    archived_records = _archived_records(config.load_config())
+    archived_by_key = {item["key"]: item for item in archived_records}
+    archived_keys = set(archived_by_key)
     results = []
+    history = []
+    history_seen = set()
     for item in shared.results:
-        key = f"{item.account.provider}:{item.account.identity}"
-        if key in hidden:
-            continue
+        key = _history_key(item.account.provider, item.account.identity)
         windows = []
         reset_credits = None
         for window in item.windows:
@@ -295,32 +407,46 @@ def _quota_payload(force: bool = False):
                     "meta": window.meta,
                 }
             )
-        results.append(
-            {
-                "title": item.title,
-                "provider": item.account.provider,
-                "identity": item.account.identity,
-                "ok": item.ok,
-                "error": item.error,
-                "email": item.email or item.account.email,
-                "name": item.name or item.account.name,
-                "user_id": item.user_id or item.account.user_id,
-                "plan": item.plan or item.account.plan,
-                "auth_mode": item.auth_mode or item.account.auth_mode,
-                "source": item.account.source,
-                "sub_start": item.sub_start,
-                "sub_end": item.sub_end,
-                "windows": windows,
-                "stored_id": stored.get(item.account.identity),
-                "reset_credits": reset_credits,
-            }
-        )
+        result = {
+            "title": item.title,
+            "provider": item.account.provider,
+            "identity": item.account.identity,
+            "ok": item.ok,
+            "error": item.error,
+            "email": item.email or item.account.email,
+            "name": item.name or item.account.name,
+            "user_id": item.user_id or item.account.user_id,
+            "plan": item.plan or item.account.plan,
+            "auth_mode": item.auth_mode or item.account.auth_mode,
+            "source": item.account.source,
+            "sub_start": item.sub_start,
+            "sub_end": item.sub_end,
+            "sub_status": item.sub_status,
+            "windows": windows,
+            "stored_id": stored.get(item.account.identity),
+            "reset_credits": reset_credits,
+        }
+        if key in archived_keys:
+            history.append(_history_payload(archived_by_key[key], result))
+            history_seen.add(key)
+        else:
+            results.append(result)
+    for record in archived_records:
+        if record["key"] not in history_seen:
+            history.append(_history_payload(record))
     # 同类卡片归组：按标题、再按身份排序
     results.sort(key=lambda r: (str(r["title"]).lower(), str(r["identity"])))
+    history.sort(
+        key=lambda item: (str(item.get("archived_at") or ""), str(item.get("title") or "").lower()),
+        reverse=True,
+    )
     fetched_at = datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat()
     return {
         "results": results,
-        "hidden_count": len(hidden),
+        "history": history,
+        "history_count": len(history),
+        # Kept for older Web clients; new clients use history/history_count.
+        "hidden_count": len(history),
         "snapshot": {
             "fetched_at": fetched_at,
             "age_seconds": round(shared.age_seconds, 1),
@@ -329,6 +455,28 @@ def _quota_payload(force: bool = False):
             "cache_seconds": snapshot.cache_ttl_seconds(),
         },
     }
+
+
+def _history_payload(record: dict, result: dict | None = None) -> dict:
+    provider = _history_text(record.get("provider"), 80)
+    identity = _history_text(record.get("identity"))
+    current = result if isinstance(result, dict) else {}
+    rule = AUTH_RULES.get(provider) if isinstance(AUTH_RULES.get(provider), dict) else {}
+    payload = {
+        "key": _history_key(provider, identity),
+        "provider": provider,
+        "identity": identity,
+        "title": _history_text(current.get("title") or record.get("title") or rule.get("title") or provider),
+        "email": _history_text(current.get("email") or record.get("email")),
+        "name": _history_text(current.get("name") or record.get("name")),
+        "plan": _history_text(current.get("plan") or record.get("plan")),
+        "source": _history_text(current.get("source") or record.get("source")),
+        "sub_start": _history_text(current.get("sub_start") or record.get("sub_start")),
+        "sub_end": _history_text(current.get("sub_end") or record.get("sub_end")),
+        "sub_status": _history_text(current.get("sub_status") or record.get("sub_status")),
+        "archived_at": _history_text(record.get("archived_at")),
+    }
+    return payload
 
 
 def _save_oauth(provider: str, label: str, result: dict):
@@ -359,3 +507,72 @@ def serve(host="127.0.0.1", port=18765, open_browser=True):
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n已停止 Web UI")
+
+
+def launch_web(host="127.0.0.1", port=18765, open_browser=True) -> dict:
+    """Start the local Web UI out of process so callers remain interactive."""
+    url = f"http://{host}:{port}/"
+    started = False
+    if not _web_ready(host, port):
+        try:
+            _spawn_web_process(host, port)
+        except OSError:
+            return {"ok": False, "started": False, "url": url, "error": "Web UI 后台进程启动失败"}
+        started = True
+        if not _wait_for_web(host, port):
+            return {"ok": False, "started": started, "url": url, "error": "Web UI 启动超时"}
+    if open_browser:
+        webbrowser.open(url)
+    return {"ok": True, "started": started, "url": url}
+
+
+def _spawn_web_process(host: str, port: int) -> subprocess.Popen:
+    script = Path(__file__).resolve().parent.parent / "quota.py"
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        executable = str(pythonw) if pythonw.is_file() else sys.executable
+        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+    else:
+        executable = sys.executable
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(
+        [executable, str(script), "ui-run", "--host", host, "--port", str(port)],
+        **kwargs,
+    )
+
+
+def _wait_for_web(host: str, port: int, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _web_ready(host, port):
+            return True
+        time.sleep(0.05)
+    return _web_ready(host, port)
+
+
+def _web_ready(host: str, port: int) -> bool:
+    health_url = f"http://{host}:{port}/api/health"
+    try:
+        with urllib.request.urlopen(health_url, timeout=0.25) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if response.status == 200 and payload == {"ok": True, "service": "quota-cli"}:
+            return True
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        pass
+
+    # Reuse quota-cli instances started by an older build that did not yet
+    # expose /api/health. This also avoids spawning a second process on the
+    # same port while the old foreground server is still being stopped.
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/api/rules", timeout=0.25) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return False
+    rules = payload.get("rules") if isinstance(payload, dict) else None
+    return response.status == 200 and isinstance(rules, dict) and "openai" in rules

@@ -42,8 +42,14 @@ def run_shell(show_fn) -> None:
             _print_rules()
             continue
         if choice == "6":
-            from .web import serve
-            serve()
+            from .web import launch_web
+
+            result = launch_web()
+            if result["ok"]:
+                state = "已启动" if result["started"] else "已在运行"
+                print(f"Web UI {state}: {result['url']}")
+            else:
+                print(result["error"])
             continue
         if choice == "7":
             from .float_win import launch_float

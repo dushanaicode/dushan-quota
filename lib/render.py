@@ -59,7 +59,35 @@ def _profile_lines(result: QuotaResult) -> list[str]:
         f"  {GRAY}用户{RESET}  {user_id or '-'}",
         f"  {GRAY}套餐{RESET}  {plan or '-'}    {GRAY}认证{RESET} {mode} / {account.source}",
     ]
+    sub_start = _date_text(result.sub_start)
+    sub_end = _date_text(result.sub_end)
+    if sub_start and sub_end:
+        lines.append(
+            f"  {GRAY}订阅生效{RESET}  {sub_start}    "
+            f"{GRAY}{'已到期' if result.sub_status == 'expired' else '到期'}{RESET} {sub_end}"
+        )
+    elif sub_end:
+        label = "历史订阅已到期" if result.sub_status == "expired" else "订阅到期"
+        lines.append(f"  {GRAY}{label}{RESET}  {sub_end}")
+    elif sub_start:
+        lines.append(f"  {GRAY}订阅生效{RESET}  {sub_start}")
+    elif result.sub_status == "not_applicable":
+        lines.append(f"  {GRAY}订阅{RESET}  免费方案    {GRAY}到期{RESET} 不适用")
+    elif result.sub_status == "unavailable":
+        lines.append(f"  {GRAY}订阅{RESET}  信息暂未取得，请刷新重试")
     return lines
+
+
+def _date_text(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone().strftime("%Y-%m-%d")
 
 
 def _window_line(window: Window, name_width: int, now: datetime) -> str:
