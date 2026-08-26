@@ -95,7 +95,7 @@ CLI、Web UI、悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。
 | harness | 位置 | 支持 provider |
 | --- | --- | --- |
 | OpenCode | `~/.local/share/opencode/auth.json` | grok(xai)/openai/claude → oauth 条目；kimi/zai/deepseek → api 条目 |
-| OMP | `~/.omp/agent/agent.db` `auth_credentials` | grok→xai-oauth、openai→codex、claude、cursor_agent→cursor、kimi→kimi-code、zai→zhipu-coding-plan、deepseek→deepseek |
+| OMP | `~/.omp/agent/agent.db` `auth_credentials` | grok→xai-oauth、OpenAI API Key→openai、OpenAI Codex OAuth→openai-codex、claude、cursor_agent→cursor、kimi→kimi-code、zai→zhipu-coding-plan、deepseek→deepseek |
 | Grok CLI | `~/.grok/auth.json` | grok（issuer::client 条目） |
 | Cursor Agent | `%APPDATA%\Cursor\auth.json` | cursor_agent（accessToken + apiKey） |
 | Cursor IDE | `%APPDATA%\Cursor\User\globalStorage\state.vscdb` `cursorAuth/*` | cursor（仅 session 票） |
@@ -105,7 +105,7 @@ CLI、Web UI、悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。
 | Kimi Code CLI | `~/.kimi-code/config.toml` | kimi（managed:kimi-code 段 api_key） |
 | GLM → Claude Code | `~/.claude/settings.json` | zai（env.ANTHROPIC_BASE_URL=api.z.ai 或 bigmodel.cn/api/anthropic + ANTHROPIC_AUTH_TOKEN；GLM 无官方独立 CLI，这是 Z.ai 官方接入方式） |
 
-OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`，`identity_key="account:<sub>"`；api_key 行：`data={"key","source"}`。cursor_agent 的 refresh 必须填 `crsr_`，不能填短寿 JWT。
+OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`；OpenAI Codex 额外写 `accountId/email/orgId/orgName`，provider 必须是 `openai-codex`，identity 为 `email:<email>|org:<workspace>`（缺 email 时回退 account）；api_key 行：`data={"key","source"}`。cursor_agent 的 refresh 必须填 `crsr_`，不能填短寿 JWT。
 
 注意（已内置看护）：OMP 的 `refreshCursorToken` 会把 `exchange_user_api_key` 返回的短寿 JWT 覆盖进 refresh，第二轮刷新必 403 并把凭证写进 `auth_credential_blocks` 拉黑。quota-cli 每轮拉取时自动修复（`lib/provision.py guard_omp_cursor`）：refresh 不是 crsr_ / 已过期 / 有 block → 换新票并清除拉黑，仅对已写入过 OMP 的账号生效。
 

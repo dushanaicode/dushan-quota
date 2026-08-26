@@ -97,6 +97,8 @@ quota env QUOTA_AGY_CLIENT_SECRET <secret>
 
 OpenAI 的订阅周期按 Cockpit Tools 的只读流程查询：先从 `accounts/check` 选择当前账号/组织的 entitlement，再用 `subscriptions` 补充生效时间及过期数据，最后才回退到 Codex 本地 ID token。额度窗口的 `reset_at` 不会被当作订阅到期时间；Free 账号若存在历史付费订阅，会保留并显示其真实到期日。
 
+写入 OMP 时会区分两套 OpenAI 认证：Platform API Key 写入 `openai`，ChatGPT/Codex OAuth 写入 `openai-codex`。旧版 quota-cli 误写的 `codex` 凭证会在下次同步时原位迁移，并补齐 OMP 续期和工作区识别需要的字段。
+
 ## 数据与安全
 
 - 凭据只存本机（`~/.quota-cli/`），不上传任何数据，无遥测

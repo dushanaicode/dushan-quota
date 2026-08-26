@@ -163,29 +163,32 @@ def _backup(path: Path) -> str:
     return ""
 
 
-def _jwt_sub(access: str) -> str:
+def _jwt_payload(token: str) -> dict:
     try:
-        part = access.split(".")[1]
+        part = token.split(".")[1]
         part += "=" * ((4 - len(part) % 4) % 4)
         payload = json.loads(base64.urlsafe_b64decode(part))
-        return str(payload.get("sub") or "")
+        return payload if isinstance(payload, dict) else {}
     except Exception:
-        return ""
+        return {}
+
+
+def _jwt_sub(access: str) -> str:
+    return str(_jwt_payload(access).get("sub") or "")
+
+
+def _openai_auth_claims(token: str) -> dict:
+    claims = _jwt_payload(token).get("https://api.openai.com/auth")
+    return claims if isinstance(claims, dict) else {}
 
 
 def _expires_ms(account: Account, access: str) -> int:
     raw = account.secret.get("expires") or account.secret.get("expiry")
     if isinstance(raw, (int, float)) and raw > 0:
         return int(raw if raw > 1e12 else raw * 1000)
-    try:
-        part = access.split(".")[1]
-        part += "=" * ((4 - len(part) % 4) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(part))
-        exp = payload.get("exp")
-        if isinstance(exp, (int, float)):
-            return int(exp) * 1000 - 5 * 60 * 1000
-    except Exception:
-        pass
+    exp = _jwt_payload(access).get("exp")
+    if isinstance(exp, (int, float)):
+        return int(exp) * 1000 - 5 * 60 * 1000
     return 0
 
 
@@ -242,7 +245,6 @@ def _write_opencode(account: Account, confirmed: bool) -> dict:
 
 _OMP_PROVIDER_KEY = {
     "grok": ("xai-oauth", "oauth"),
-    "openai": ("codex", "oauth"),
     "claude": ("claude", "oauth"),
     "cursor_agent": ("cursor", "oauth"),
     "kimi": ("kimi-code", "oauth"),
@@ -251,12 +253,95 @@ _OMP_PROVIDER_KEY = {
 }
 
 
+def _omp_target(account: Account) -> tuple[str, str]:
+    """Resolve OMP's model-provider id without conflating API and subscription auth."""
+    if account.provider != "openai":
+        return _OMP_PROVIDER_KEY[account.provider]
+    access = str(account.secret.get("access") or "").strip()
+    api_key = str(account.secret.get("api_key") or "").strip()
+    refresh = str(account.secret.get("refresh") or "").strip()
+    openai_auth = _openai_auth_claims(access or api_key)
+    is_oauth = (
+        account.auth_mode.lower() == "oauth"
+        or bool(refresh)
+        or not api_key
+        or bool(openai_auth)
+    )
+    return ("openai-codex", "oauth") if is_oauth else ("openai", "api_key")
+
+
+def _codex_local_tokens(account: Account, access: str) -> dict:
+    """Borrow the matching Codex login only for an explicit OMP provision."""
+    if account.source != "codex-local":
+        return {}
+    data = _load_json(_codex_auth_path())
+    tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+    stored_access = str(tokens.get("access_token") or "").strip()
+    if not stored_access:
+        return {}
+    requested_account_id = str(
+        _openai_auth_claims(access).get("chatgpt_account_id")
+        or account.secret.get("account_id")
+        or account.user_id
+        or ""
+    ).strip()
+    stored_account_id = str(
+        tokens.get("account_id")
+        or _openai_auth_claims(stored_access).get("chatgpt_account_id")
+        or ""
+    ).strip()
+    if stored_access != access and (
+        not requested_account_id or not stored_account_id or requested_account_id != stored_account_id
+    ):
+        return {}
+    return tokens
+
+
+def _openai_oauth_metadata(account: Account, access: str, id_token: str = "") -> dict:
+    access_claims = _jwt_payload(access)
+    auth = _openai_auth_claims(access)
+    id_auth = _openai_auth_claims(id_token)
+    profile = access_claims.get("https://api.openai.com/profile")
+    profile = profile if isinstance(profile, dict) else {}
+    account_id = str(
+        auth.get("chatgpt_account_id")
+        or account.secret.get("account_id")
+        or account.user_id
+        or ""
+    ).strip()
+    email = str(profile.get("email") or account.email or "").strip().lower()
+    plan_type = str(
+        auth.get("chatgpt_plan_type") or id_auth.get("chatgpt_plan_type") or ""
+    ).strip().lower()
+    metadata = {}
+    if account_id:
+        metadata["accountId"] = account_id
+        metadata["orgId"] = account_id
+    if email:
+        metadata["email"] = email
+    if plan_type:
+        metadata["orgName"] = plan_type
+    return metadata
+
+
+def _omp_identity_key(provider_key: str, account: Account, access: str, payload: dict) -> str:
+    if provider_key == "openai-codex":
+        email = str(payload.get("email") or "").strip().lower()
+        account_id = str(payload.get("accountId") or "").strip()
+        org_id = str(payload.get("orgId") or "").strip()
+        fallback = account_id or _jwt_sub(access) or account.identity
+        base = f"email:{email}" if email else f"account:{fallback}"
+        return f"{base}|org:{org_id}" if org_id else base
+    sub = _jwt_sub(access) or account.user_id or account.identity
+    return f"account:{sub}"
+
+
 @_register("omp", "OMP", ("grok", "openai", "claude", "cursor_agent", "kimi", "zai", "deepseek"))
 def _write_omp(account: Account, confirmed: bool) -> dict:
     db = _omp_db_path()
     if not db.is_file():
         return {"ok": False, "error": f"OMP 库不存在: {db}"}
-    provider_key, credential_type = _OMP_PROVIDER_KEY[account.provider]
+    provider_key, credential_type = _omp_target(account)
     access = account.secret.get("access") or ""
     api_key = (account.secret.get("api_key") or "").strip()
 
@@ -274,7 +359,10 @@ def _write_omp(account: Account, confirmed: bool) -> dict:
         else:
             if not access:
                 return {"ok": False, "error": "该账号没有访问令牌可写"}
-            payload_refresh = account.secret.get("refresh") or ""
+            codex_tokens = _codex_local_tokens(account, access) if account.provider == "openai" else {}
+            payload_refresh = account.secret.get("refresh") or codex_tokens.get("refresh_token") or ""
+            if provider_key == "openai-codex" and not payload_refresh:
+                return {"ok": False, "error": "OpenAI Codex OAuth 缺少 refresh token，无法写入可续期授权"}
         now_ms = int(time.time() * 1000)
         payload = {
             "access": access,
@@ -282,25 +370,34 @@ def _write_omp(account: Account, confirmed: bool) -> dict:
             "expires": _expires_ms(account, access),
             "authorizedAt": now_ms,
         }
-        sub = _jwt_sub(access) or account.user_id or account.identity
-        identity_key = f"account:{sub}"
+        if provider_key == "openai-codex":
+            id_token = account.secret.get("id_token") or codex_tokens.get("id_token") or ""
+            payload.update(_openai_oauth_metadata(account, access, id_token))
+        identity_key = _omp_identity_key(provider_key, account, access, payload)
     else:
         if not api_key:
             return {"ok": False, "error": "该账号没有 API Key 可写"}
-        payload = {"key": api_key, "source": "quota-cli"}
+        source = "login" if provider_key == "openai" else "quota-cli"
+        payload = {"key": api_key, "source": source}
         identity_key = None
 
     conn = sqlite3.connect(str(db), timeout=10)
     try:
         row = conn.execute(
-            "SELECT id, data FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL",
+            "SELECT id, data, provider FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL",
             (provider_key,),
         ).fetchone()
+        # quota-cli 旧版本误把 OMP 的导入类型 `codex` 当成模型 provider；
+        # 没有正确记录时就原位升级旧行，保留 credential id 与关联状态。
+        if row is None and provider_key == "openai-codex":
+            row = conn.execute(
+                "SELECT id, data, provider FROM auth_credentials WHERE provider = 'codex' AND disabled_cause IS NULL"
+            ).fetchone()
         if row and not confirmed:
             return {
                 "ok": False,
                 "needs_confirm": True,
-                "conflict": f"OMP 已有 {provider_key} 凭证 #{row[0]}，覆盖？",
+                "conflict": f"OMP 已有 {row[2]} 凭证 #{row[0]}，迁移/覆盖为 {provider_key}？",
             }
         # 合并旧 data 的未知字段，只覆盖我们管理的键，不破坏 OMP 需要的其他字段
         merged = {}
@@ -318,10 +415,10 @@ def _write_omp(account: Account, confirmed: bool) -> dict:
         if row:
             conn.execute(
                 """UPDATE auth_credentials
-                   SET credential_type = ?, data = ?, identity_key = ?,
+                   SET provider = ?, credential_type = ?, data = ?, identity_key = ?,
                        updated_at = CAST(strftime('%s','now') AS INTEGER)
                    WHERE id = ?""",
-                (credential_type, data_json, identity_key, row[0]),
+                (provider_key, credential_type, data_json, identity_key, row[0]),
             )
             action = f"updated #{row[0]}"
         else:
