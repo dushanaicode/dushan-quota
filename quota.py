@@ -10,11 +10,10 @@ if str(ROOT) not in sys.path:
 
 from lib import config
 from lib.add import add_api_key, add_from_env, add_interactive, add_json, add_local, print_accounts, remove
-from lib.discover import collect_accounts
-from lib.fetch import fetch_all
 from lib.models import AUTH_RULES, Account, QuotaResult
 from lib.render import render
 from lib.shell import run_shell
+from lib.snapshot import get_snapshot
 from lib.store import accounts_path
 
 
@@ -26,6 +25,7 @@ def main():
     show = sub.add_parser("show", help="查询额度")
     show.add_argument("--watch", type=int, default=0, metavar="SEC")
     show.add_argument("--once", action="store_true")
+    show.add_argument("--force", action="store_true", help="忽略共享快照并立即联网刷新")
 
     add = sub.add_parser("add", help="添加账号")
     add.add_argument("provider", nargs="?", choices=list(AUTH_RULES.keys()))
@@ -51,6 +51,7 @@ def main():
 
     parser.add_argument("--watch", type=int, default=0, metavar="SEC")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.command == "add":
@@ -91,7 +92,7 @@ def main():
             interval = 0
         elif interval <= 0:
             interval = config.load_config()["watch_seconds"]
-        watch(interval)
+        watch(interval, force=bool(getattr(args, "force", False)))
         return
     run_shell(watch)
 
@@ -111,7 +112,7 @@ def _enable_vt() -> None:
         pass
 
 
-def watch(interval: int):
+def watch(interval: int, force: bool = False):
     hide = "\033[?25l"
     show = "\033[?25h"
     if interval > 0:
@@ -119,9 +120,11 @@ def watch(interval: int):
         sys.stdout.write(hide)
         sys.stdout.flush()
     try:
+        force_next = force
         while True:
-            accounts = collect_accounts()
-            results = fetch_all(accounts)
+            shared = get_snapshot(force=force_next)
+            force_next = False
+            results = shared.results
             present = {item.account.provider for item in results}
             for provider, rule in AUTH_RULES.items():
                 if provider not in present:

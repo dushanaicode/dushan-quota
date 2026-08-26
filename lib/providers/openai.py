@@ -72,29 +72,53 @@ def _usage(account: Account, access: str):
     return request_json(USAGE_URL, headers=headers)
 
 
-def reset_credits(account: Account) -> dict:
-    """消费一次 banked rate-limit reset credit（Codex 官方接口）。"""
+def reset_credits(account: Account, *, confirmed: bool = False) -> dict:
+    """Consume one reset credit only after explicit confirmation and eligibility checks."""
     import uuid
 
+    if not confirmed:
+        return {"ok": False, "error": "需要明确确认后才能使用重置次数"}
     access = tokenstore.ensure_fresh(account)
     if not access:
         return {"ok": False, "error": "缺少 access token"}
     status, _, usage = _usage(account, access)
     if status == 401:
-        access = tokenstore.refresh_account(account) or access
-        status, _, usage = _usage(account, access)
-    if status == 200 and isinstance(usage, dict):
-        credits = usage.get("rate_limit_reset_credits")
-        if isinstance(credits, dict):
-            available = credits.get("available_count")
-            if isinstance(available, (int, float)) and available <= 0:
-                return {"ok": False, "error": "当前没有可用的重置次数"}
-    status, text, data = _consume(account, access, uuid.uuid4().hex)
+        refreshed = tokenstore.refresh_account(account)
+        if refreshed:
+            access = refreshed
+            status, _, usage = _usage(account, access)
+    if status != 200 or not isinstance(usage, dict):
+        return {"ok": False, "error": "无法确认当前重置次数，为保护额度未执行"}
+    available, applicable = _credit_counts(usage)
+    if available is None or applicable is None:
+        return {"ok": False, "error": "服务器未返回完整的重置状态，为保护额度未执行"}
+    if available <= 0:
+        return {"ok": False, "error": "当前没有剩余的重置次数"}
+    if applicable <= 0:
+        return {
+            "ok": False,
+            "error": f"仍剩余 {available} 次，但当前暂不可用；未使用任何次数",
+        }
+
+    redeem_id = uuid.uuid4().hex
+    status, text, data = _consume(account, access, redeem_id)
     if status == 401:
-        access = tokenstore.refresh_account(account) or access
-        status, text, data = _consume(account, access, uuid.uuid4().hex)
-    if status == 200 and isinstance(data, dict):
-        return {"ok": True, "message": "已使用一次重置", "data": data}
+        refreshed = tokenstore.refresh_account(account)
+        if refreshed:
+            access = refreshed
+            status, text, data = _consume(account, access, redeem_id)
+    if 200 <= status < 300:
+        return {
+            "ok": True,
+            "message": "已使用一次重置",
+            "data": data if isinstance(data, dict) else {},
+        }
+    if status == 0:
+        return {
+            "ok": False,
+            "uncertain": True,
+            "error": "请求结果未知；请先刷新重置次数，勿重复提交",
+        }
     return {"ok": False, "error": f"{status} {text[:120]}"}
 
 
@@ -116,15 +140,36 @@ def _consume(account: Account, access: str, redeem_id: str):
 
 
 def _reset_credits(data: dict) -> list[Window]:
+    available, applicable = _credit_counts(data)
+    if available is None and applicable is None:
+        return []
+    remaining = available if available is not None else applicable
+    text = f"剩余 {remaining} 次"
+    return [
+        Window(
+            name="重置次数",
+            text=text,
+            meta={
+                "kind": "reset_credits",
+                "available_count": available,
+                "applicable_available_count": applicable,
+            },
+        )
+    ]
+
+
+def _credit_counts(data: dict) -> tuple[int | None, int | None]:
     credits = data.get("rate_limit_reset_credits")
     if not isinstance(credits, dict):
-        return []
-    count = credits.get("applicable_available_count")
-    if count is None:
-        count = credits.get("available_count")
-    if not isinstance(count, (int, float)):
-        return []
-    return [Window(name="重置次数", text=f"可用 {int(count)} 次")]
+        return None, None
+
+    def count(name: str) -> int | None:
+        value = credits.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return max(0, int(value))
+
+    return count("available_count"), count("applicable_available_count")
 
 
 def _parse_rate(window) -> Window | None:

@@ -129,8 +129,8 @@ function buildPick(){
   });
 }
 
-async function refresh(){
-  try{ cache = await api.quota(); render(cache); buildPick(); }catch(e){}
+async function refresh(force=false){
+  try{ cache = await api.quota(!!force); render(cache); buildPick(); }catch(e){}
 }
 function save(){ try{ api.save_settings(JSON.stringify(S)); }catch(e){} }
 function applyAlpha(){
@@ -149,7 +149,7 @@ async function init(){
   try{ S = Object.assign(S, await api.settings()); }catch(e){}
   applyAlpha(); paintPin();
 
-  $('tRef').onclick = refresh;
+  $('tRef').onclick = ()=>refresh(true);
   $('tQuit').onclick = ()=>api.quit();
   $('tCfg').onclick = ()=>{ const c=$('cfg'); c.style.display = c.style.display==='block'?'none':'block'; };
   $('tPin').onclick = async ()=>{
@@ -180,7 +180,7 @@ async function init(){
   });
 
   await refresh();
-  setInterval(refresh, 60000);
+  setInterval(()=>refresh(false), 60000);
 }
 
 if(window.pywebview && window.pywebview.api) init();

@@ -29,7 +29,12 @@ def config_path() -> Path:
 
 
 def default_config() -> dict:
-    return {"watch_seconds": 15, "env": {name: "" for name in ENV_KEYS if name != "QUOTA_CLI_HOME"}}
+    return {
+        "watch_seconds": 15,
+        "env": {name: "" for name in ENV_KEYS if name != "QUOTA_CLI_HOME"},
+        "hidden": [],
+        "float": {},
+    }
 
 
 def load_config() -> dict:
@@ -43,13 +48,17 @@ def load_config() -> dict:
         return data
     if not isinstance(raw, dict):
         return data
-    if isinstance(raw.get("watch_seconds"), int) and raw["watch_seconds"] > 0:
+    if isinstance(raw.get("watch_seconds"), int) and raw["watch_seconds"] >= 0:
         data["watch_seconds"] = raw["watch_seconds"]
     env = raw.get("env")
     if isinstance(env, dict):
         for name, value in env.items():
             if name in data["env"] and isinstance(value, str):
                 data["env"][name] = value
+    if isinstance(raw.get("hidden"), list):
+        data["hidden"] = [str(item) for item in raw["hidden"] if isinstance(item, str)]
+    if isinstance(raw.get("float"), dict):
+        data["float"] = dict(raw["float"])
     return data
 
 

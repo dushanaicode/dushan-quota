@@ -13,6 +13,7 @@ description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cur
 quota
 quota ui
 quota show --once
+quota show --once --force  # 仅在用户明确要求立即联网时使用
 quota float      # 桌面悬浮窗（托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度）
 ```
 
@@ -45,8 +46,8 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/quota` | 额度 JSON（results + hidden_count） |
-| POST | `/api/reset` | 重置 OpenAI 额度，body `{"provider":"openai","identity":"<identity>"}`，消费一次 banked reset credit |
+| GET | `/api/quota` | 读取跨进程共享额度快照（results + hidden_count + snapshot）；用户明确要求立即联网时才用 `/api/quota?force=1` |
+| POST | `/api/reset` | 消费一次 OpenAI reset credit；必须由用户明确确认，body `{"provider":"openai","identity":"<identity>","confirmed":true}` |
 | GET | `/api/provision/targets?provider=<p>` | 查某平台可写入的 harness |
 | POST | `/api/provision` | 写入 harness，body `{"provider","identity","harness","confirmed"}`；返回 `needs_confirm` 时用 `confirmed:true` 重发 |
 | POST | `/api/hide` / `/api/unhide` | 隐藏/恢复卡片，body `{"provider","identity"}`；unhide 空 body 全恢复 |
@@ -71,7 +72,9 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 | Cursor Agent | `api2.cursor.sh/auth/exchange_user_api_key`（`crsr_` 每次换新，天然不过期） | 无需回写 |
 | Kimi/Zhipu/Z.ai/DeepSeek | API Key 不过期 | — |
 
-OpenAI 重置额度接口：`POST https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume`，body `{"redeem_request_id": "<uuid>"}`，Bearer + `ChatGPT-Account-ID` 头；可用次数在 `/wham/usage` 的 `rate_limit_reset_credits.available_count`。
+OpenAI 重置次数要区分两个字段：`available_count` 是总剩余，`applicable_available_count` 是当前可使用数。只有二者都大于 0、HTTP API 收到 `confirmed:true` 后，后端才允许调用消费端点；状态缺失或当前可用为 0 时一律 fail closed，不调用消费接口。
+
+CLI、Web UI、悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。跨进程锁把同一周期的并发请求合并为一次联网刷新，手动刷新或 `--force` 才绕过正常缓存周期；快照不写入任何认证密钥。
 
 ## Cursor 两套票（不能混用）
 
@@ -122,4 +125,5 @@ python C:\Users\Administrator\quota-cli\quota.py env CURSOR_API_KEY <value> --us
 
 - 不要把密钥写进回复
 - 查额度用 `show --once`
+- 不要替用户调用 `/api/reset`；只有用户明确要求消费并再次确认时才可提交 `confirmed:true`
 - 缺认证先 `add` 或 `env`，不要改 Cockpit/OpenCode 源码

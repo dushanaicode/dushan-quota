@@ -72,6 +72,7 @@ class Window:
     total: float | None = None
     reset_iso: str | None = None
     text: str | None = None
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass

@@ -1,25 +1,59 @@
-#!/usr/bin/env sh
+#!/bin/sh
 set -e
-echo "=== Quota CLI 安装 ==="
+ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+echo "=== Quota CLI install ==="
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "[错误] 未找到 python3，请先安装 Python 3.10+"
-    exit 1
+if command -v python3 >/dev/null 2>&1; then
+  PY=python3
+elif command -v python >/dev/null 2>&1; then
+  PY=python
+else
+  echo "[error] Python not found. Install Python 3.10+." >&2
+  exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-python3 -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet
+"$PY" -c "import sys; raise SystemExit(0 if sys.hexversion >= 0x030A0000 else 1)" || {
+  echo "[error] Python 3.10+ required." >&2
+  "$PY" --version >&2
+  exit 1
+}
+
+echo "Installing dependencies..."
+"$PY" -m pip install -r "$ROOT/requirements.txt"
 
 BINDIR="$HOME/.local/bin"
 mkdir -p "$BINDIR"
-ln -sf "$SCRIPT_DIR/quota.py" "$BINDIR/quota.py"
 cat > "$BINDIR/quota" <<EOF
-#!/usr/bin/env sh
-exec python3 "$BINDIR/quota.py" "\$@"
+#!/bin/sh
+exec "$PY" "$ROOT/quota.py" "\$@"
 EOF
 chmod +x "$BINDIR/quota"
 
-echo ""
-echo "已安装到 $BINDIR/quota（确认 ~/.local/bin 在 PATH 中）"
-echo "交互菜单: quota"
-echo "Web UI:   quota ui"
+case ":$PATH:" in
+  *":$BINDIR:"*) ;;
+  *)
+    SHELL_NAME=$(basename "${SHELL:-sh}")
+    case "$SHELL_NAME" in
+      zsh) PROFILE="${HOME}/.zshrc" ;;
+      bash) PROFILE="${HOME}/.bashrc" ;;
+      *) PROFILE="${HOME}/.profile" ;;
+    esac
+    if [ ! -f "$PROFILE" ] || ! grep -Fqs "$BINDIR" "$PROFILE"; then
+      printf '\nexport PATH="%s:$PATH"\n' "$BINDIR" >> "$PROFILE"
+      echo "Wrote PATH to $PROFILE"
+    fi
+    ;;
+esac
+
+SKILL_SRC="$ROOT/skills/quota-cli/SKILL.md"
+SKILL_DST="${HOME}/.config/opencode/skills/quota-cli"
+if [ -f "$SKILL_SRC" ]; then
+  mkdir -p "$SKILL_DST"
+  cp "$SKILL_SRC" "$SKILL_DST/SKILL.md"
+  echo "Skill copied to $SKILL_DST"
+fi
+
+export PATH="$BINDIR:$PATH"
+echo
+echo "Done. Open a new terminal and run: quota"
+echo "This terminal: $BINDIR/quota"

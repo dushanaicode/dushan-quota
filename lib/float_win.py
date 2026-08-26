@@ -10,9 +10,8 @@ from pathlib import Path
 import webview
 
 from . import config
-from .discover import collect_accounts
-from .fetch import fetch_all
 from .render import _reset_text
+from .snapshot import get_snapshot
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _GWL_EXSTYLE = -20
@@ -59,10 +58,10 @@ def _primary_scale() -> float:
         return 1.0
 
 
-def _fetch_payload() -> list[dict]:
+def _fetch_payload(force: bool = False) -> list[dict]:
     now = datetime.now().astimezone()
     results = []
-    for item in fetch_all(collect_accounts()):
+    for item in get_snapshot(force=force).results:
         windows = [
             {
                 "name": window.name,
@@ -233,9 +232,9 @@ class Api:
         self._window: webview.Window | None = None
         self._on_top = True
 
-    def quota(self):
+    def quota(self, force=False):
         try:
-            return _fetch_payload()
+            return _fetch_payload(bool(force))
         except Exception as error:
             return [{"title": "错误", "ok": False, "error": str(error), "windows": []}]
 

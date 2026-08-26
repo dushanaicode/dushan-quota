@@ -46,6 +46,7 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
         accounts.append(account)
 
     auth = opencode_auth(home)
+    _from_codex_local(home, add)
     _from_opencode(auth, add)
     _from_official_grok(home, add)
     _from_cockpit(home, add)
@@ -57,6 +58,39 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
         add(account)
     agentdb.sync_accounts(accounts)
     return accounts
+
+
+def _from_codex_local(home: Path, add):
+    """Read the active Codex login without taking ownership of token refresh."""
+    data = load_json(home / ".codex" / "auth.json")
+    if not isinstance(data, dict):
+        return
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict):
+        return
+    access = str(tokens.get("access_token") or "").strip()
+    if not access:
+        return
+    payload = _jwt_payload(access)
+    account_id = str(tokens.get("account_id") or _openai_account_id(access) or "").strip()
+    identity = account_id or _jwt_sub(access) or "codex-local"
+    add(
+        Account(
+            provider="openai",
+            label="OpenAI / Codex",
+            source="codex-local",
+            identity=identity,
+            auth_mode="oauth",
+            email=_openai_email(access) or "",
+            name=_openai_name(access) or "",
+            user_id=account_id or identity,
+            secret={
+                "access": access,
+                "account_id": account_id,
+                "expiry": payload.get("exp"),
+            },
+        )
+    )
 
 
 def _from_opencode(auth: dict, add):
@@ -450,6 +484,7 @@ def _from_store(add):
                     "expiry": item.get("expiry"),
                     "variant": item.get("variant") or provider,
                     "account_id": item.get("user_id") or "",
+                    "cached_quota": item.get("cached_quota"),
                 },
             )
         )

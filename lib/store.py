@@ -36,6 +36,12 @@ def save_store(data: dict) -> None:
     path = accounts_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    try:
+        from .snapshot import invalidate
+
+        invalidate()
+    except (ImportError, OSError):
+        pass
 
 
 def upsert_account(record: dict) -> dict:

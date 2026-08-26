@@ -505,6 +505,16 @@ function renderCards(){
       ? `<div class="meta dim">订阅 ${esc(fmtDate(item.sub_start)) || '?'} · 到期 ${esc(fmtDate(item.sub_end)) || '?'}</div>` : '';
     const wins = (item.windows || []).map(winRow).join('');
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(item.plan)}">${esc(item.plan)}</span>` : '';
+    const credit = item.reset_credits || {};
+    const creditTotal = Number.isFinite(credit.available_count) ? credit.available_count : null;
+    const creditNow = Number.isFinite(credit.applicable_available_count) ? credit.applicable_available_count : null;
+    const creditReady = creditTotal > 0 && creditNow > 0;
+    const resetLabel = creditReady
+      ? `使用重置次数（剩余 ${creditTotal}）`
+      : (creditTotal > 0 ? '重置额度' : (creditTotal === 0 ? '无重置次数' : '重置状态未知'));
+    const resetButton = item.provider === 'openai'
+      ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditReady ? '' : 'disabled'} title="${creditReady ? '将消费一次重置次数，需要再次确认' : '当前不会也不能消费重置次数'}">${esc(resetLabel)}</button>`
+      : '';
     const sec = document.createElement('section');
     sec.className = 'card';
     sec.style.animationDelay = (i * 45) + 'ms';
@@ -517,7 +527,7 @@ function renderCards(){
       ${item.ok ? `<div class="wins">${wins}</div>` : `<div class="err">${esc(item.error || '获取失败')}</div>`}
       <div class="foot">
         <button class="btn act-sync">写入到…</button>
-        ${item.provider === 'openai' ? '<button class="btn act-reset">重置额度</button>' : ''}
+        ${resetButton}
       </div>`;
     sec.querySelector('.x').onclick = e => closeCard(item, e.currentTarget);
     sec.querySelector('.act-sync').onclick = () => openSync(item.provider, encodeURIComponent(item.identity || ''), item.title);
@@ -544,16 +554,18 @@ async function unhideAll(){ await api('/api/unhide', {method:'POST', body:'{}'})
 
 async function resetOpenAI(item, btn){
   if (!btn.dataset.arm) {
-    btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认重置';
-    setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = '重置额度'; }, 2600);
+    btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认使用 1 次';
+    setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = btn.dataset.label || '使用重置次数'; }, 2600);
     return;
   }
+  delete btn.dataset.arm;
+  btn.classList.remove('arm');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>重置中';
   try {
-    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})});
+    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity, confirmed:true})});
     toast(r.ok ? (r.message || '已重置') : (r.error || '重置失败'), !r.ok);
   } catch(e) { toast(e.message, true); }
-  finally { btn.disabled = false; btn.textContent = '重置额度'; refreshQuota(false); }
+  finally { btn.disabled = false; btn.textContent = btn.dataset.label || '使用重置次数'; refreshQuota(false); }
 }
 
 async function refreshQuota(manual){
@@ -565,7 +577,7 @@ async function refreshQuota(manual){
   else list.querySelectorAll('.card').forEach(c => c.classList.add('loading-dim'));
   if (manual) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>刷新中'; }
   try {
-    const data = await api('/api/quota');
+    const data = await api('/api/quota' + (manual ? '?force=1' : ''));
     cache = data.results || [];
     hiddenCount = data.hidden_count || 0;
     renderSide(); renderCards(); renderFocus();

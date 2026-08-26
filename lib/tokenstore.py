@@ -53,6 +53,8 @@ def ensure_fresh(account) -> str:
 
 def refresh_account(account) -> str | None:
     """按平台刷新 access token，写中央库并回写来源。返回新 access 或 None。"""
+    if account.source == "codex-local":
+        return None
     refresh = (account.secret.get("refresh") or "").strip()
     if not refresh:
         return None

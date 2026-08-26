@@ -4,10 +4,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, oauth_antigravity, oauth_cursor, oauth_grok, store
+from . import config, oauth_antigravity, oauth_cursor, oauth_grok, snapshot, store
 from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json
 from .discover import collect_accounts
-from .fetch import fetch_all
 from .models import AUTH_RULES
 from .render import _reset_text
 from datetime import datetime
@@ -31,11 +30,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"accounts": store.list_stored()})
             return
         if parsed.path == "/api/quota":
-            self._json(_quota_payload())
+            force = parse_qs(parsed.query).get("force", [""])[0].lower() in {"1", "true", "yes"}
+            self._json(_quota_payload(force=force))
             return
         if parsed.path == "/api/config":
             cfg = config.load_config()
-            self._json({"watch_seconds": int(cfg.get("watch_seconds") or 60)})
+            seconds = cfg.get("watch_seconds")
+            self._json({"watch_seconds": int(seconds) if isinstance(seconds, int) else 60})
             return
         if parsed.path == "/api/provision/targets":
             provider = parse_qs(parsed.query).get("provider", [""])[0]
@@ -164,7 +165,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 from .providers import openai as openai_provider
 
-                self._json(openai_provider.reset_credits(account))
+                result = openai_provider.reset_credits(account, confirmed=payload.get("confirmed") is True)
+                if result.get("ok") or result.get("uncertain"):
+                    snapshot.invalidate()
+                self._json(result)
                 return
         except Exception as error:
             self._json({"error": str(error)}, 400)
@@ -176,6 +180,8 @@ class Handler(BaseHTTPRequestHandler):
         prefix = "/api/accounts/"
         if path.startswith(prefix):
             ok = store.remove_account(path[len(prefix):])
+            if ok:
+                snapshot.invalidate()
             self._json({"ok": ok})
             return
         self._json({"error": "not found"}, 404)
@@ -259,17 +265,24 @@ def _reset_ts(reset_iso) -> int | None:
         return None
 
 
-def _quota_payload():
+def _quota_payload(force: bool = False):
     now = datetime.now().astimezone()
+    shared = snapshot.get_snapshot(force=force)
     stored = {item.get("identity"): item.get("id") for item in store.list_stored()}
     hidden = set(config.load_config().get("hidden") or [])
     results = []
-    for item in fetch_all(collect_accounts()):
+    for item in shared.results:
         key = f"{item.account.provider}:{item.account.identity}"
         if key in hidden:
             continue
         windows = []
+        reset_credits = None
         for window in item.windows:
+            if window.meta.get("kind") == "reset_credits":
+                reset_credits = {
+                    "available_count": window.meta.get("available_count"),
+                    "applicable_available_count": window.meta.get("applicable_available_count"),
+                }
             windows.append(
                 {
                     "name": window.name,
@@ -279,6 +292,7 @@ def _quota_payload():
                     "text": window.text,
                     "reset": _reset_text(window.reset_iso, now),
                     "reset_ts": _reset_ts(window.reset_iso),
+                    "meta": window.meta,
                 }
             )
         results.append(
@@ -298,11 +312,23 @@ def _quota_payload():
                 "sub_end": item.sub_end,
                 "windows": windows,
                 "stored_id": stored.get(item.account.identity),
+                "reset_credits": reset_credits,
             }
         )
     # 同类卡片归组：按标题、再按身份排序
     results.sort(key=lambda r: (str(r["title"]).lower(), str(r["identity"])))
-    return {"results": results, "hidden_count": len(hidden)}
+    fetched_at = datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat()
+    return {
+        "results": results,
+        "hidden_count": len(hidden),
+        "snapshot": {
+            "fetched_at": fetched_at,
+            "age_seconds": round(shared.age_seconds, 1),
+            "from_cache": shared.from_cache,
+            "stale": shared.stale,
+            "cache_seconds": snapshot.cache_ttl_seconds(),
+        },
+    }
 
 
 def _save_oauth(provider: str, label: str, result: dict):
