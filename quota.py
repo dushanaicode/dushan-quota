@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
@@ -11,10 +10,11 @@ if str(ROOT) not in sys.path:
 from lib import config
 from lib.add import add_api_key, add_from_env, add_interactive, add_json, add_local, print_accounts, remove
 from lib.models import AUTH_RULES, Account, QuotaResult
-from lib.render import render
+from lib.render import render, render_loading
 from lib.shell import run_shell
 from lib.snapshot import get_snapshot
 from lib.store import accounts_path
+from lib.terminal import TerminalScreen
 
 
 def main():
@@ -111,61 +111,51 @@ def main():
     run_shell(watch)
 
 
-def _enable_vt() -> None:
-    """Windows 控制台默认可能不开 ANSI 转义，导致 \\033[H\\033[J 失效、画面向下堆积。"""
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-
-        handle = ctypes.windll.kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-        mode = ctypes.c_ulong()
-        if ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            ctypes.windll.kernel32.SetConsoleMode(handle, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
-    except Exception:
-        pass
-
-
 def watch(interval: int, force: bool = False):
-    hide = "\033[?25l"
-    show = "\033[?25h"
-    if interval > 0:
-        _enable_vt()
-        sys.stdout.write(hide)
-        sys.stdout.flush()
     try:
-        force_next = force
-        while True:
-            shared = get_snapshot(force=force_next)
-            force_next = False
-            results = shared.results
-            present = {item.account.provider for item in results}
-            for provider, rule in AUTH_RULES.items():
-                if provider not in present:
-                    results.append(
-                        QuotaResult(
-                            account=Account(provider=provider, label=rule["title"], source="-", identity="-"),
-                            ok=False,
-                            title=rule["title"],
-                            error="未找到认证，可在菜单里添加",
-                        )
-                    )
-            frame = render(results)
-            if interval > 0:
-                sys.stdout.write("\033[H\033[J")
-            sys.stdout.write(frame)
-            if interval > 0:
-                sys.stdout.write(f"\n每 {interval}s 刷新，Ctrl+C 返回菜单\n")
-            sys.stdout.flush()
-            if interval <= 0:
+        with TerminalScreen(sys.stdout, live=interval > 0) as screen:
+            # A redirected stream cannot be updated in place. Emit one clean snapshot
+            # instead of appending forever to a file or IDE output panel.
+            if interval > 0 and not screen.live:
+                interval = 0
+            if screen.live and not screen.draw(render_loading(width=screen.width, color=screen.color)):
                 return
-            time.sleep(interval)
+            force_next = force
+            while True:
+                shared = get_snapshot(force=force_next)
+                force_next = False
+                results = shared.results
+                present = {item.account.provider for item in results}
+                for provider, rule in AUTH_RULES.items():
+                    if provider not in present:
+                        results.append(
+                            QuotaResult(
+                                account=Account(provider=provider, label=rule["title"], source="-", identity="-"),
+                                ok=False,
+                                title=rule["title"],
+                                error="未找到认证，可在菜单里添加",
+                            )
+                        )
+                footer = f"↻ 每 {interval}s 自动刷新  ·  Ctrl+C 返回" if interval > 0 else ""
+                snapshot_state = "stale" if shared.stale else "cache" if shared.from_cache else "fresh"
+                frame = render(
+                    results,
+                    width=screen.width,
+                    color=screen.color,
+                    compact=bool(interval > 0 and screen.height < 38),
+                    footer=footer,
+                    updated_at=shared.fetched_at,
+                    snapshot_state=snapshot_state,
+                )
+                if not screen.draw(frame):
+                    return
+                if interval <= 0:
+                    return
+                time.sleep(interval)
     except KeyboardInterrupt:
-        sys.stdout.write("\n")
-    finally:
-        if interval > 0:
-            sys.stdout.write(show)
-            sys.stdout.flush()
+        return
+    except BrokenPipeError:
+        return
 
 
 def _handle_add(args):
@@ -210,8 +200,6 @@ def _print_config():
 
 
 if __name__ == "__main__":
-    if os.name == "nt":
-        os.system("")
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")

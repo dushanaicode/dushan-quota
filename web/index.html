@@ -579,12 +579,19 @@ function renderCards(){
     const credit = item.reset_credits || {};
     const creditTotal = Number.isFinite(credit.available_count) ? credit.available_count : null;
     const creditNow = Number.isFinite(credit.applicable_available_count) ? credit.applicable_available_count : null;
-    const creditReady = creditTotal > 0 && creditNow > 0;
-    const resetLabel = creditReady
+    // The card comes from a shared snapshot, so applicable_available_count may
+    // be stale or temporarily absent. Let an account with banked credits enter
+    // the confirmation flow; /api/reset re-fetches usage and fails closed before
+    // consuming anything when the credit is not currently applicable.
+    const creditAvailable = creditTotal > 0;
+    const resetLabel = creditAvailable
       ? `使用重置次数（剩余 ${creditTotal}）`
-      : (creditTotal > 0 ? '重置额度' : (creditTotal === 0 ? '无重置次数' : '重置状态未知'));
+      : (creditTotal === 0 ? '无重置次数' : '重置状态未知');
+    const resetTitle = creditAvailable
+      ? (creditNow > 0 ? '将消费一次重置次数，需要再次确认' : '点击后实时校验当前是否可用；不可用时不会消费次数')
+      : '当前没有可用的重置次数';
     const resetButton = item.provider === 'openai'
-      ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditReady ? '' : 'disabled'} title="${creditReady ? '将消费一次重置次数，需要再次确认' : '当前不会也不能消费重置次数'}">${esc(resetLabel)}</button>`
+      ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditAvailable ? '' : 'disabled'} title="${esc(resetTitle)}">${esc(resetLabel)}</button>`
       : '';
     const sec = document.createElement('section');
     sec.className = 'card';
