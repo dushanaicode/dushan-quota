@@ -53,14 +53,12 @@ def ensure_fresh(account) -> str:
 
 def refresh_account(account) -> str | None:
     """按平台刷新 access token，写中央库并回写来源。返回新 access 或 None。"""
-    if account.source == "codex-local":
-        return None
     refresh = (account.secret.get("refresh") or "").strip()
     if not refresh:
         return None
     handler = {
         "grok": lambda: _form_post(XAI_TOKEN_URL, {"grant_type": "refresh_token", "client_id": XAI_CLIENT_ID, "refresh_token": refresh}),
-        "openai": lambda: _form_post(OPENAI_TOKEN_URL, {"grant_type": "refresh_token", "client_id": OPENAI_CLIENT_ID, "refresh_token": refresh}),
+        "openai": lambda: _refresh_openai(refresh),
         "claude": lambda: _form_post(CLAUDE_TOKEN_URL, {"grant_type": "refresh_token", "client_id": CLAUDE_CLIENT_ID, "refresh_token": refresh}),
         "cursor": lambda: _json_post(CURSOR_TOKEN_URL, {"grant_type": "refresh_token", "client_id": CURSOR_CLIENT_ID, "refresh_token": refresh}),
         "antigravity": lambda: _refresh_google(refresh),
@@ -76,10 +74,38 @@ def refresh_account(account) -> str | None:
     if not access:
         return None
     new_refresh = token.get("refresh_token") or refresh
+    new_id_token = token.get("id_token") or account.secret.get("id_token") or ""
     expires_in = token.get("expires_in")
+    account.secret["access"] = access
+    account.secret["refresh"] = new_refresh
+    if new_id_token:
+        account.secret["id_token"] = new_id_token
+    if isinstance(expires_in, (int, float)):
+        account.secret["expiry"] = int(time.time()) + int(expires_in)
     record(account, access, new_refresh, expires_in)
-    _write_back(account, access, new_refresh, expires_in)
+    _write_back(account, access, new_refresh, expires_in, new_id_token)
     return access
+
+
+def _refresh_openai(refresh: str):
+    res = _json_post(
+        OPENAI_TOKEN_URL,
+        {
+            "grant_type": "refresh_token",
+            "client_id": OPENAI_CLIENT_ID,
+            "refresh_token": refresh,
+        },
+    )
+    if not res:
+        res = _form_post(
+            OPENAI_TOKEN_URL,
+            {
+                "grant_type": "refresh_token",
+                "client_id": OPENAI_CLIENT_ID,
+                "refresh_token": refresh,
+            },
+        )
+    return res
 
 
 def _refresh_google(refresh: str):
@@ -105,7 +131,7 @@ def _form_post(url: str, fields: dict):
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Quota-CLI/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -120,7 +146,7 @@ def _json_post(url: str, payload: dict):
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Quota-CLI/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -144,27 +170,31 @@ def _expiry_ts(account) -> float:
     return 0.0
 
 
-def _write_back(account, access: str, refresh: str, expires_in) -> None:
-    """把新票据写回来源工具，保证 OpenCode / Grok CLI / Cursor IDE 也用新票。"""
+def _write_back(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+    """把新票据写回来源工具，保证 OpenCode / Grok CLI / Cursor IDE / Codex 也用新票。"""
     writers = {
         "opencode": _write_opencode,
         "official-grok": _write_grok_cli,
         "quota-cli": _write_quota_store,
         "cursor-local": _write_cursor_ide,
+        "codex-local": _write_codex_auth,
     }
     writer = writers.get(account.source)
     if writer:
-        writer(account, access, refresh, expires_in)
+        if writer in {_write_opencode, _write_codex_auth, _write_quota_store}:
+            writer(account, access, refresh, expires_in, id_token)
+        else:
+            writer(account, access, refresh, expires_in)
     # grok 在 opencode 与 grok cli 中是同一个 xAI 账号，去重后只刷新了一个来源，
     # 另一个文件也必须同步，否则那边的认证会自然过期
     if account.provider == "grok":
         if account.source != "opencode":
-            _write_opencode(account, access, refresh, expires_in)
+            _write_opencode(account, access, refresh, expires_in, id_token)
         if account.source != "official-grok":
             _write_grok_cli(account, access, refresh, expires_in)
 
 
-def _write_opencode(account, access: str, refresh: str, expires_in) -> None:
+def _write_opencode(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
     entry_key = _OPENCODE_ENTRY_KEY.get(account.provider)
     if not entry_key:
         return
@@ -178,6 +208,8 @@ def _write_opencode(account, access: str, refresh: str, expires_in) -> None:
         return
     entry["access"] = access
     entry["refresh"] = refresh
+    if id_token:
+        entry["id_token"] = id_token
     if isinstance(expires_in, (int, float)):
         entry["expires"] = int(time.time() * 1000) + int(expires_in) * 1000
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -202,8 +234,57 @@ def _write_grok_cli(account, access: str, refresh: str, expires_in) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _write_quota_store(account, access: str, refresh: str, expires_in) -> None:
+def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+    import base64 as _b64
+    path = Path.home() / ".codex" / "auth.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    from .discover import _openai_account_id
+    account_id = _openai_account_id(access) or account.secret.get("account_id") or account.user_id or ""
+
+    # Pick the best id_token: use provided or stored, but ONLY if it's a real signed JWT
+    resolved_id_token = id_token or account.secret.get("id_token") or ""
+    if resolved_id_token:
+        try:
+            hdr_part = resolved_id_token.split(".")[0]
+            hdr_part += "=" * ((4 - len(hdr_part) % 4) % 4)
+            hdr = json.loads(_b64.urlsafe_b64decode(hdr_part))
+        except Exception:
+            hdr = {}
+        if hdr.get("alg") == "none" or not hdr.get("kid"):
+            resolved_id_token = ""
+
+    # No real id_token → use access_token directly (cockpit-tools approach)
+    if not resolved_id_token:
+        resolved_id_token = access
+
+    data["auth_mode"] = None
+    data["OPENAI_API_KEY"] = None
+    data.pop("personal_access_token", None)
+    data["tokens"] = {
+        "id_token": resolved_id_token,
+        "access_token": access,
+        "refresh_token": refresh,
+        "account_id": account_id,
+    }
+    data["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data["type"] = "codex"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _write_quota_store(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
     fields = {"access": access, "refresh": refresh}
+    if id_token:
+        fields["id_token"] = id_token
     if isinstance(expires_in, (int, float)):
         fields["expiry"] = int(time.time()) + int(expires_in)
     store.update_fields(account.provider, account.identity, fields)

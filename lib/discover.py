@@ -36,7 +36,6 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
         key = (account.provider, account.identity)
         api_key = str(account.secret.get("api_key") or "")
         if api_key:
-            # 同一把 API Key 可能同时来自本机文件与环境变量，按 key 去重
             key = (account.provider, f"key:{api_key[-6:]}")
         if not account.identity and not api_key:
             return
@@ -61,38 +60,141 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
 
 
 def _from_codex_local(home: Path, add):
-    """Read the active Codex login without taking ownership of token refresh."""
+    """Read active Codex login and all contained account tokens."""
     data = load_json(home / ".codex" / "auth.json")
     if not isinstance(data, dict):
         return
     tokens = data.get("tokens")
-    if not isinstance(tokens, dict):
-        return
-    access = str(tokens.get("access_token") or "").strip()
-    id_token = str(tokens.get("id_token") or "").strip()
-    if not access:
-        return
-    payload = _jwt_payload(access)
-    account_id = str(tokens.get("account_id") or _openai_account_id(access) or "").strip()
-    identity = account_id or _jwt_sub(access) or "codex-local"
-    add(
-        Account(
-            provider="openai",
-            label="OpenAI / Codex",
-            source="codex-local",
-            identity=identity,
-            auth_mode="oauth",
-            email=_openai_email(access) or "",
-            name=_openai_name(access) or "",
-            user_id=account_id or identity,
-            secret={
-                "access": access,
-                "id_token": id_token,
-                "account_id": account_id,
-                "expiry": payload.get("exp"),
-            },
+    if isinstance(tokens, dict):
+        access = str(tokens.get("access_token") or "").strip()
+        id_token = str(tokens.get("id_token") or "").strip()
+        refresh = str(tokens.get("refresh_token") or "").strip()
+        account_id_hint = str(tokens.get("account_id") or "").strip()
+
+        id_acc_id = _openai_account_id(id_token) if id_token else None
+        id_email = _openai_email(id_token) if id_token else None
+        id_name = _openai_name(id_token) if id_token else None
+        id_plan = _jwt_payload(id_token).get("https://api.openai.com/auth", {}).get("chatgpt_plan_type") if id_token else ""
+
+        acc_acc_id = _openai_account_id(access) if access else None
+        acc_email = _openai_email(access) if access else None
+        acc_name = _openai_name(access) if access else None
+        acc_plan = _jwt_payload(access).get("https://api.openai.com/auth", {}).get("chatgpt_plan_type") if access else ""
+
+        # Case 1: id_token and access belong to the same user or only one is present
+        if (id_acc_id and acc_acc_id and id_acc_id == acc_acc_id) or not id_acc_id or not acc_acc_id:
+            if access:
+                account_id = account_id_hint or acc_acc_id or id_acc_id or ""
+                identity = account_id or _jwt_sub(access) or "codex-local"
+                add(
+                    Account(
+                        provider="openai",
+                        label="OpenAI / Codex",
+                        source="codex-local",
+                        identity=identity,
+                        auth_mode="oauth",
+                        email=acc_email or id_email or "",
+                        name=acc_name or id_name or "",
+                        user_id=account_id or identity,
+                        plan=acc_plan or id_plan or "",
+                        secret={
+                            "access": access,
+                            "refresh": refresh,
+                            "id_token": id_token,
+                            "account_id": account_id,
+                            "expiry": _jwt_payload(access).get("exp"),
+                        },
+                    )
+                )
+                return
+        else:
+            # Case 2: Multi-account state in auth.json (id_token belongs to Account A, access belongs to Account B)
+            # 1) Add Account B (the access token account)
+            account_id_b = account_id_hint or acc_acc_id or ""
+            identity_b = account_id_b or _jwt_sub(access) or "codex-local"
+            add(
+                Account(
+                    provider="openai",
+                    label="OpenAI / Codex",
+                    source="codex-local",
+                    identity=identity_b,
+                    auth_mode="oauth",
+                    email=acc_email or "",
+                    name=acc_name or "",
+                    user_id=account_id_b or identity_b,
+                    plan=acc_plan or "",
+                    secret={
+                        "access": access,
+                        "refresh": refresh,
+                        "id_token": "",
+                        "account_id": account_id_b,
+                        "expiry": _jwt_payload(access).get("exp"),
+                    },
+                )
+            )
+            # 2) Add Account A (the id_token account, e.g. worrycj692@gmail.com)
+            identity_a = id_acc_id or id_email or "codex-id"
+            db_tokens = agentdb.get_tokens("openai", identity_a) or {}
+            saved_access = db_tokens.get("access") or ""
+            saved_refresh = db_tokens.get("refresh") or ""
+            add(
+                Account(
+                    provider="openai",
+                    label="OpenAI / Codex",
+                    source="codex-local",
+                    identity=identity_a,
+                    auth_mode="oauth",
+                    email=id_email or "",
+                    name=id_name or "",
+                    user_id=id_acc_id or identity_a,
+                    plan=id_plan or "",
+                    secret={
+                        "access": saved_access,
+                        "refresh": saved_refresh,
+                        "id_token": id_token,
+                        "account_id": id_acc_id or "",
+                        "expiry": _jwt_payload(saved_access).get("exp") if saved_access else None,
+                    },
+                )
+            )
+            return
+
+    pat = str(data.get("personal_access_token") or "").strip()
+    if pat:
+        payload = _jwt_payload(pat)
+        account_id = str(_openai_account_id(pat) or "").strip()
+        identity = account_id or _jwt_sub(pat) or "codex-local"
+        add(
+            Account(
+                provider="openai",
+                label="OpenAI / Codex",
+                source="codex-local",
+                identity=identity,
+                auth_mode="oauth",
+                email=_openai_email(pat) or "",
+                name=_openai_name(pat) or "",
+                user_id=account_id or identity,
+                secret={
+                    "access": pat,
+                    "account_id": account_id,
+                    "expiry": payload.get("exp"),
+                },
+            )
         )
-    )
+        return
+
+    api_key = str(data.get("OPENAI_API_KEY") or data.get("api_key") or data.get("apiKey") or "").strip()
+    if api_key and api_key != "null":
+        add(
+            Account(
+                provider="openai",
+                label="OpenAI / Codex",
+                source="codex-local",
+                identity=f"openai:key:{_mask(api_key)}",
+                auth_mode="api_key",
+                secret={"api_key": api_key},
+            )
+        )
 
 
 def _from_opencode(auth: dict, add):
@@ -373,10 +475,7 @@ def _from_cursor_local(home: Path, add):
 
 
 def _from_cursor_agent_local(home: Path, add):
-    """Cursor Agent（cursor-agent CLI）的凭证：%APPDATA%/Cursor/auth.json。
-
-    里面 accessToken 是短寿 JWT，真正可换票的是 apiKey（crsr_）。
-    """
+    """Cursor Agent（cursor-agent CLI）凭证：%APPDATA%/Cursor/auth.json。"""
     import sys
 
     if sys.platform == "win32":
@@ -469,21 +568,40 @@ def _from_store(add):
         provider = str(item.get("provider") or "")
         if not provider:
             continue
+        identity = str(item.get("identity") or item.get("id") or provider)
+        api_key = str(item.get("api_key") or "").strip()
+        access = str(item.get("access") or api_key or "").strip()
+        refresh = str(item.get("refresh") or "").strip()
+        id_token = str(item.get("id_token") or "").strip()
+
+        # Fallback to agent.db if tokens are in SQLite
+        if not access or not refresh:
+            db_token = agentdb.get_tokens(provider, identity)
+            if db_token:
+                if not access:
+                    access = str(db_token.get("access") or "").strip()
+                if not refresh:
+                    refresh = str(db_token.get("refresh") or "").strip()
+
+        if not access and not refresh and not api_key and not id_token:
+            continue
+
         add(
             Account(
                 provider=provider,
                 label=str(item.get("label") or provider),
                 source=str(item.get("source") or "quota-cli"),
-                identity=str(item.get("identity") or item.get("id") or provider),
+                identity=identity,
                 auth_mode=str(item.get("auth_mode") or ""),
                 email=str(item.get("email") or ""),
                 name=str(item.get("name") or ""),
                 user_id=str(item.get("user_id") or ""),
                 plan=str(item.get("plan") or ""),
                 secret={
-                    "api_key": item.get("api_key") or "",
-                    "access": item.get("access") or item.get("api_key") or "",
-                    "refresh": item.get("refresh") or "",
+                    "api_key": api_key,
+                    "access": access,
+                    "refresh": refresh,
+                    "id_token": id_token,
                     "expiry": item.get("expiry"),
                     "variant": item.get("variant") or provider,
                     "account_id": item.get("user_id") or "",
@@ -504,10 +622,14 @@ def _openai_account_id(token: str | None) -> str | None:
 def _openai_email(token: str | None) -> str | None:
     if not token:
         return None
-    return (_jwt_payload(token).get("https://api.openai.com/profile") or {}).get("email")
+    payload = _jwt_payload(token)
+    profile = payload.get("https://api.openai.com/profile") or {}
+    return profile.get("email") or payload.get("email")
 
 
 def _openai_name(token: str | None) -> str | None:
     if not token:
         return None
-    return (_jwt_payload(token).get("https://api.openai.com/profile") or {}).get("name")
+    payload = _jwt_payload(token)
+    profile = payload.get("https://api.openai.com/profile") or {}
+    return profile.get("name") or payload.get("name")

@@ -17,9 +17,9 @@ OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
 def fetch(account: Account) -> QuotaResult:
+    access = tokenstore.ensure_fresh(account)
     id_token = str(account.secret.get("id_token") or "")
     token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type")
-    access = tokenstore.ensure_fresh(account)
     if not access:
         sub_start, sub_end, sub_status = _token_subscription(id_token, token_plan_type or account.plan)
         return QuotaResult(
@@ -35,6 +35,8 @@ def fetch(account: Account) -> QuotaResult:
     status, text, data = _usage(account, access)
     if status == 401:
         access = tokenstore.refresh_account(account) or access
+        id_token = str(account.secret.get("id_token") or id_token)
+        token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type") or token_plan_type
         status, text, data = _usage(account, access)
     plan_hint = data.get("plan_type") if isinstance(data, dict) else None
     plan_hint = plan_hint or token_plan_type or account.plan

@@ -9,7 +9,7 @@ AUTH_RULES = {
     },
     "openai": {
         "title": "OpenAI",
-        "modes": ("api_key", "json", "env"),
+        "modes": ("oauth", "api_key", "json", "local", "env"),
         "env": ("OPENAI_API_KEY",),
     },
     "claude": {

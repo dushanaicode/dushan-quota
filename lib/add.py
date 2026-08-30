@@ -1,11 +1,11 @@
 import json
+import time
 from pathlib import Path
 
 from . import store
 from .discover import collect_accounts, load_json
 from .models import AUTH_RULES
 from .store import upsert_account
-
 
 PROVIDERS = list(AUTH_RULES.keys())
 
@@ -46,12 +46,86 @@ def add_interactive() -> None:
         add_local(provider)
         return
     if mode == "oauth":
-        print("OAuth 请用官方客户端或 OpenCode/Cockpit 完成登录，然后本工具会自动读取。")
+        if provider == "openai":
+            from . import oauth_openai
+
+            try:
+                data = oauth_openai.start_login()
+                print("请在浏览器中打开以下链接完成授权:")
+                print(f"  {data['verification_uri']}")
+                print(f"并在页面中输入用户码: {data['user_code']}")
+                print("等待授权中 (按 Ctrl+C 可取消)...")
+                while True:
+                    time.sleep(data.get("interval") or 5)
+                    result = oauth_openai.poll_login(data["login_id"])
+                    if result.get("status") == "ok":
+                        _save_oauth_account("openai", "OpenAI", result)
+                        print("OAuth 授权成功并已保存账号！")
+                        return
+                    if result.get("status") in {"cancelled", "expired", "error"}:
+                        print(f"授权结束: {result.get('error') or result.get('status')}")
+                        return
+            except KeyboardInterrupt:
+                oauth_openai.cancel_login(data.get("login_id", ""))
+                print("\n已取消授权")
+                return
+            except Exception as error:
+                print(f"发起 OAuth 失败: {error}")
+                return
+
+        if provider == "grok":
+            from . import oauth_grok
+
+            try:
+                data = oauth_grok.start_login()
+                print("请在浏览器中打开以下链接完成授权:")
+                print(f"  {data['verification_uri']}")
+                print(f"并在页面中输入用户码: {data['user_code']}")
+                print("等待授权中 (按 Ctrl+C 可取消)...")
+                while True:
+                    time.sleep(data.get("interval") or 5)
+                    result = oauth_grok.poll_login(data["login_id"])
+                    if result.get("status") == "ok":
+                        _save_oauth_account("grok", "Grok / xAI", result)
+                        print("OAuth 授权成功并已保存账号！")
+                        return
+                    if result.get("status") in {"cancelled", "expired", "error"}:
+                        print(f"授权结束: {result.get('error') or result.get('status')}")
+                        return
+            except KeyboardInterrupt:
+                oauth_grok.cancel_login(data.get("login_id", ""))
+                print("\n已取消授权")
+                return
+            except Exception as error:
+                print(f"发起 OAuth 失败: {error}")
+                return
+
+        print("OAuth 请用 Web UI (quota ui) 或官方客户端/OpenCode 完成登录，然后本工具会自动读取。")
         print("当前也支持把已有 token/JSON 导入。")
         raw = input("粘贴 access/refresh JSON，或回车取消: ").strip()
         if raw:
             add_raw_json(provider, raw)
         return
+
+
+def _save_oauth_account(provider: str, label: str, result: dict):
+    profile = result.get("profile") or {}
+    record = {
+        "provider": provider,
+        "auth_mode": "oauth",
+        "label": label,
+        "identity": profile.get("email") or profile.get("user_id") or profile.get("principal_id") or f"{provider}-oauth",
+        "email": profile.get("email") or "",
+        "name": profile.get("name") or "",
+        "user_id": profile.get("user_id") or profile.get("principal_id") or "",
+        "access": result.get("access") or "",
+        "refresh": result.get("refresh") or "",
+    }
+    if result.get("id_token"):
+        record["id_token"] = result["id_token"]
+    if profile.get("plan_type"):
+        record["plan"] = profile["plan_type"]
+    upsert_account(record)
 
 
 def add_api_key(provider: str, api_key: str, variant: str = "") -> None:
@@ -114,6 +188,7 @@ def add_raw_json(provider: str, raw: str) -> None:
             "api_key": api_key,
             "access": item.get("access") or item.get("access_token") or api_key,
             "refresh": item.get("refresh") or item.get("refresh_token") or "",
+            "id_token": item.get("id_token") or item.get("idToken") or "",
             "variant": item.get("variant") or current_provider,
         }
         upsert_account(record)
@@ -161,9 +236,11 @@ def add_local(provider: str) -> None:
                 "email": account.email,
                 "name": account.name,
                 "user_id": account.user_id,
+                "plan": account.plan,
                 "api_key": account.secret.get("api_key"),
                 "access": account.secret.get("access"),
                 "refresh": account.secret.get("refresh"),
+                "id_token": account.secret.get("id_token"),
                 "variant": account.secret.get("variant"),
                 "source": account.source,
             }

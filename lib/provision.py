@@ -532,47 +532,93 @@ def _kimi_config_path() -> Path:
 
 
 def _synthesize_id_token(access: str) -> str:
-    """codex 本地只解 claims 不验签，用 access 的 claims 拼一个无签名 id_token；
-    之后 codex 自己刷新时会拿到真实 id_token 覆盖。"""
-    try:
-        part = access.split(".")[1]
-        part += "=" * ((4 - len(part) % 4) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(part))
-    except Exception:
-        return ""
-    encode = lambda obj: base64.urlsafe_b64encode(json.dumps(obj, separators=(",", ":")).encode()).decode().rstrip("=")
-    return f"{encode({'alg': 'none', 'typ': 'JWT'})}.{encode(claims)}."
+    """当没有独立的 id_token 时，直接复用 access_token 作为 id_token。
+    Codex CLI 只解析其中的 claims，access_token 本身就是合法签名的 JWT，
+    完全可以作为 id_token 使用。参考 cockpit-tools 的做法。"""
+    return access
 
 
 @_register("codex", "Codex CLI/App", ("openai",))
 def _write_codex(account: Account, confirmed: bool) -> dict:
     path = _codex_auth_path()
-    access = account.secret.get("access") or ""
-    refresh = account.secret.get("refresh") or ""
-    if not access or not refresh:
-        return {"ok": False, "error": "该账号缺少 access/refresh 令牌"}
+    api_key = str(account.secret.get("api_key") or "").strip()
+    auth_mode = str(account.auth_mode or "").lower()
+
+    if auth_mode == "api_key" or (api_key and not account.secret.get("access") and not account.secret.get("refresh")):
+        if not api_key:
+            return {"ok": False, "error": "该账号没有 API Key 可写"}
+        data = _load_json(path)
+        if (data.get("tokens") or data.get("OPENAI_API_KEY")) and not confirmed:
+            return {
+                "ok": False,
+                "needs_confirm": True,
+                "conflict": "Codex 已有凭据配置，覆盖为当前 API Key？",
+            }
+        backup = _backup(path)
+        data["auth_mode"] = "apiKey"
+        data["OPENAI_API_KEY"] = api_key
+        data["tokens"] = None
+        data.pop("personal_access_token", None)
+        data["type"] = "codex"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        agentdb.record_provision(account.provider, account.identity, "codex", f"apiKey backup={backup}")
+        return {"ok": True, "message": "已写入 Codex（API Key 模式）"}
+
+    access = tokenstore.ensure_fresh(account) or (account.secret.get("access") or "")
+    if not access:
+        return {"ok": False, "error": "该账号缺少 access 令牌"}
+
     data = _load_json(path)
     existing_tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
-    if existing_tokens.get("access_token") and not confirmed:
+    if (existing_tokens.get("access_token") or data.get("OPENAI_API_KEY")) and not confirmed:
         return {
             "ok": False,
             "needs_confirm": True,
-            "conflict": "Codex 已有登录态（tokens.access_token），覆盖？",
+            "conflict": "Codex 已有登录态，覆盖？",
         }
-    account_id = account.secret.get("account_id") or account.user_id or existing_tokens.get("account_id") or ""
-    data["OPENAI_API_KEY"] = data.get("OPENAI_API_KEY")
+
+    account_id = (
+        _openai_auth_claims(access).get("chatgpt_account_id")
+        or account.secret.get("account_id")
+        or account.user_id
+        or ""
+    )
+    refresh = account.secret.get("refresh") or ""
+
+    # Resolve id_token: must be a REAL signed JWT belonging to THIS account
+    id_token = account.secret.get("id_token") or ""
+    if id_token:
+        try:
+            hdr_part = id_token.split(".")[0]
+            hdr_part += "=" * ((4 - len(hdr_part) % 4) % 4)
+            hdr = json.loads(base64.urlsafe_b64decode(hdr_part))
+        except Exception:
+            hdr = {}
+        # Reject fake synthesized tokens (alg:none or missing kid = not a real OpenAI JWT)
+        if hdr.get("alg") == "none" or not hdr.get("kid"):
+            id_token = ""
+
+    # No real id_token? Just use access_token directly (cockpit-tools approach)
+    if not id_token:
+        id_token = access
+
+    backup = _backup(path)
+    data["auth_mode"] = None
+    data["OPENAI_API_KEY"] = None
+    data.pop("personal_access_token", None)
     data["tokens"] = {
-        "id_token": existing_tokens.get("id_token") or _synthesize_id_token(access),
+        "id_token": id_token,
         "access_token": access,
         "refresh_token": refresh,
         "account_id": account_id,
     }
     data["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    backup = _backup(path)
+    data["type"] = "codex"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    agentdb.record_provision(account.provider, account.identity, "codex", f"backup={backup}")
-    return {"ok": True, "message": "已写入 Codex（CLI 与 App 共用）"}
+    agentdb.record_provision(account.provider, account.identity, "codex", f"oauth backup={backup}")
+    return {"ok": True, "message": f"已切换并写入 Codex ({account.email or account_id})"}
 
 
 # ---------------- Claude Code ----------------

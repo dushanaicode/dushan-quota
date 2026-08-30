@@ -6,16 +6,16 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, oauth_antigravity, oauth_cursor, oauth_grok, snapshot, store
+from . import config, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
 from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json
 from .discover import collect_accounts
 from .models import AUTH_RULES
 from .render import _reset_text
-from datetime import datetime
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -67,6 +67,13 @@ class Handler(BaseHTTPRequestHandler):
                 _save_oauth("grok", "Grok / xAI", result)
             self._json(result)
             return
+        if parsed.path == "/api/oauth/openai/poll":
+            login_id = parse_qs(parsed.query).get("login_id", [""])[0]
+            result = oauth_openai.poll_login(login_id)
+            if result.get("status") == "ok":
+                _save_oauth("openai", "OpenAI", result)
+            self._json(result)
+            return
         if parsed.path == "/api/oauth/antigravity/poll":
             login_id = parse_qs(parsed.query).get("login_id", [""])[0]
             result = oauth_antigravity.poll_login(login_id)
@@ -105,6 +112,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/oauth/grok/start":
                 self._json(oauth_grok.start_login())
+                return
+            if path == "/api/oauth/openai/start":
+                self._json(oauth_openai.start_login())
                 return
             if path == "/api/oauth/antigravity/start":
                 redirect = f"http://{self.server.server_address[0]}:{self.server.server_address[1]}/oauth-callback"
@@ -481,19 +491,22 @@ def _history_payload(record: dict, result: dict | None = None) -> dict:
 
 def _save_oauth(provider: str, label: str, result: dict):
     profile = result.get("profile") or {}
-    store.upsert_account(
-        {
-            "provider": provider,
-            "auth_mode": "oauth",
-            "label": label,
-            "identity": profile.get("email") or profile.get("user_id") or profile.get("principal_id") or f"{provider}-oauth",
-            "email": profile.get("email") or "",
-            "name": profile.get("name") or "",
-            "user_id": profile.get("user_id") or profile.get("principal_id") or "",
-            "access": result.get("access") or "",
-            "refresh": result.get("refresh") or "",
-        }
-    )
+    record = {
+        "provider": provider,
+        "auth_mode": "oauth",
+        "label": label,
+        "identity": profile.get("email") or profile.get("user_id") or profile.get("principal_id") or f"{provider}-oauth",
+        "email": profile.get("email") or "",
+        "name": profile.get("name") or "",
+        "user_id": profile.get("user_id") or profile.get("principal_id") or "",
+        "access": result.get("access") or "",
+        "refresh": result.get("refresh") or "",
+    }
+    if result.get("id_token"):
+        record["id_token"] = result["id_token"]
+    if profile.get("plan_type"):
+        record["plan"] = profile["plan_type"]
+    store.upsert_account(record)
 
 
 def serve(host="127.0.0.1", port=18765, open_browser=True):
