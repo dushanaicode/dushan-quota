@@ -82,6 +82,20 @@ def remove_account(account_id: str) -> bool:
     return len(data["accounts"]) < before
 
 
+def remove_by_identity(provider: str, identity: str) -> bool:
+    data = load_store()
+    before = len(data["accounts"])
+    data["accounts"] = [
+        item
+        for item in data["accounts"]
+        if not (item.get("provider") == provider and item.get("identity") == identity)
+    ]
+    if len(data["accounts"]) == before:
+        return False
+    save_store(data)
+    return True
+
+
 def update_fields(provider: str, identity: str, fields: dict) -> bool:
     data = load_store()
     changed = False

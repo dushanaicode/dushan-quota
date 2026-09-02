@@ -5,7 +5,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from lib import config, web
+from lib import config, store, web
 from lib.models import Account, QuotaResult, Window
 from lib.snapshot import Snapshot
 
@@ -90,6 +90,47 @@ class WebHistoryTests(unittest.TestCase):
         self.assertEqual(1, len(payload["history"]))
         self.assertEqual("person@example.test", payload["history"][0]["email"])
         self.assertEqual("", payload["history"][0]["archived_at"])
+
+    def test_forget_removes_history_and_stored_credentials(self):
+        store.upsert_account(
+            {
+                "provider": "openai",
+                "identity": "account-1",
+                "email": "person@example.test",
+                "access": "super-secret-access-token",
+            }
+        )
+        web._set_archived(
+            "openai",
+            "account-1",
+            True,
+            {"title": "OpenAI", "email": "person@example.test"},
+        )
+
+        result = web._forget_account("openai", "account-1")
+
+        self.assertEqual({"ok": True, "removed_store": True}, result)
+        self.assertEqual([], self.payload()["history"])
+        self.assertEqual([], store.list_stored())
+        raw = json.dumps(store.load_store(), ensure_ascii=False)
+        self.assertNotIn("super-secret-access-token", raw)
+
+    def test_forget_requires_account_identity(self):
+        with self.assertRaisesRegex(ValueError, "缺少要删除的账号标识"):
+            web._forget_account("openai", "")
+
+    def test_forget_clears_history_when_account_is_not_in_store(self):
+        web._set_archived(
+            "openai",
+            "account-1",
+            True,
+            {"title": "OpenAI", "email": "person@example.test"},
+        )
+
+        result = web._forget_account("openai", "account-1")
+
+        self.assertEqual({"ok": True, "removed_store": False}, result)
+        self.assertEqual([], self.payload()["history"])
 
 
 if __name__ == "__main__":

@@ -206,6 +206,19 @@ def list_provisions() -> list[dict]:
     ]
 
 
+def remove_account(provider: str, identity: str) -> bool:
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM accounts WHERE provider = ? AND identity = ?",
+            (provider, identity),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def list_accounts() -> list[dict]:
     conn = _connect()
     try:

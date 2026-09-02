@@ -89,6 +89,31 @@ def save_config(data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def account_key(provider: str, identity: str) -> str:
+    return f"{str(provider or '').strip()}:{str(identity or '').strip()}"
+
+
+def archived_keys(data: dict | None = None) -> set[str]:
+    """Account keys hidden from the homepage and floating window."""
+    cfg = data if isinstance(data, dict) else load_config()
+    keys: set[str] = set()
+    for raw in cfg.get("history") or []:
+        if not isinstance(raw, dict):
+            continue
+        provider = str(raw.get("provider") or "").strip()
+        identity = str(raw.get("identity") or "").strip()
+        key = str(raw.get("key") or "").strip() or account_key(provider, identity)
+        if not provider and ":" in key:
+            provider, identity = key.split(":", 1)
+        if provider and identity:
+            keys.add(key)
+    for raw_key in cfg.get("hidden") or []:
+        key = str(raw_key or "").strip()
+        if key and ":" in key:
+            keys.add(key)
+    return keys
+
+
 def apply_config_env() -> None:
     config = load_config()
     for name, value in config.get("env", {}).items():

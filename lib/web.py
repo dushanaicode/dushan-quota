@@ -178,6 +178,14 @@ class Handler(BaseHTTPRequestHandler):
                     _clear_archived()
                 self._json({"ok": True})
                 return
+            if path == "/api/forget":
+                self._json(
+                    _forget_account(
+                        payload.get("provider") or "",
+                        payload.get("identity") or "",
+                    )
+                )
+                return
             if path == "/api/reset":
                 provider = payload.get("provider") or ""
                 identity = payload.get("identity") or ""
@@ -364,6 +372,23 @@ def _clear_archived() -> None:
     cfg["hidden"] = []
     cfg["history"] = []
     config.save_config(cfg)
+
+
+def _forget_account(provider: str, identity: str) -> dict:
+    provider = _history_text(provider, 80)
+    identity = _history_text(identity)
+    if not provider or not identity:
+        raise ValueError("缺少要删除的账号标识")
+    removed_store = store.remove_by_identity(provider, identity)
+    try:
+        from . import agentdb
+
+        agentdb.remove_account(provider, identity)
+    except Exception:
+        pass
+    _set_archived(provider, identity, False)
+    snapshot.invalidate()
+    return {"ok": True, "removed_store": removed_store}
 
 
 def _set_hidden(provider: str, identity: str, hidden: bool) -> None:

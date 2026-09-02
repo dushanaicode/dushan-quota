@@ -61,8 +61,11 @@ def _primary_scale() -> float:
 def _fetch_payload(force: bool = False) -> dict:
     now = datetime.now().astimezone()
     shared = get_snapshot(force=force)
+    archived = config.archived_keys()
     results = []
     for item in shared.results:
+        if config.account_key(item.account.provider, item.account.identity) in archived:
+            continue
         windows = [
             {
                 "name": window.name,

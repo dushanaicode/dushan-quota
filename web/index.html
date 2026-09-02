@@ -89,6 +89,10 @@
   .btn:disabled { opacity:.45; cursor:default; }
   .btn.primary { background:var(--text); color:var(--bg); border-color:transparent; font-weight:600; }
   .btn.primary:hover { opacity:.9; }
+  .btn.danger { color:var(--bad); border-color:rgba(205,97,89,.45); }
+  .btn.danger:hover { background:rgba(205,97,89,.12); }
+  .btn.danger.primary { background:var(--bad); color:#fff; border-color:transparent; }
+  .btn.danger.primary:hover { opacity:.9; background:var(--bad); }
   .header-count { min-width:17px; height:17px; display:none; align-items:center; justify-content:center;
     margin-left:1px; border-radius:99px; padding:0 5px; background:var(--accent-soft);
     color:var(--accent); font-size:9.5px; font-variant-numeric:tabular-nums; }
@@ -252,7 +256,7 @@
   .history-item .row1 .pill { flex:none; }
   .history-item .who { margin-top:3px; color:var(--muted); font-size:10.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .history-item .when { margin-top:2px; color:var(--faint); font-size:9.5px; }
-  .history-item .actions-row { display:flex; justify-content:flex-end; margin-top:9px; }
+  .history-item .actions-row { display:flex; justify-content:flex-end; gap:8px; margin-top:9px; }
   .history-item .actions-row .btn { padding:4px 10px; font-size:10.5px; }
   .history-empty { padding:22px 2px; color:var(--muted); font-size:12px; line-height:1.8; }
   .history-empty b { display:block; margin-bottom:4px; color:var(--text); font-size:13px; }
@@ -384,7 +388,7 @@
   <div class="fp-head">
     <div class="fp-title">
       <b>历史</b>
-      <span>关闭的卡片保存在这里，可随时恢复</span>
+      <span>关闭的卡片保存在这里，可随时恢复或永久删除</span>
     </div>
     <button class="fp-x" onclick="toggleHistory(false)" aria-label="关闭历史">✕</button>
   </div>
@@ -403,6 +407,18 @@
     <div class="row end">
       <button class="btn" onclick="closeCardConfirm()">取消</button>
       <button class="btn primary" id="closeCardYes" onclick="confirmCloseCard()">确认关闭</button>
+    </div>
+  </div>
+</div>
+
+<div id="forgetCardModal" class="modal" onclick="if(event.target===this)closeForgetConfirm()">
+  <div class="panel confirm-panel">
+    <h2>永久删除这个账号？</h2>
+    <p class="confirm-account" id="forgetCardAccount"></p>
+    <p class="confirm-note">将从历史中移除，并删除本工具保存的该账号凭证。删除后无法从历史恢复。本机其他软件（如 Codex）里的登录不会被改动；若账号仍存在于那些登录里，下次刷新可能会重新出现。</p>
+    <div class="row end">
+      <button class="btn" onclick="closeForgetConfirm()">取消</button>
+      <button class="btn danger primary" id="forgetCardYes" onclick="confirmForgetCard()">确认删除</button>
     </div>
   </div>
 </div>
@@ -820,7 +836,7 @@ function renderHistory(){
   summary.textContent = `${historyItems.length} 条历史记录`;
   restoreAll.disabled = historyItems.length === 0;
   if (!historyItems.length) {
-    box.innerHTML = '<div class="history-empty"><b>暂无历史记录</b>关闭过的卡片会保存在这里。关闭不会删除登录、凭证或账号，之后可以随时恢复。</div>';
+    box.innerHTML = '<div class="history-empty"><b>暂无历史记录</b>关闭过的卡片会保存在这里。关闭不会删除登录、凭证或账号；若不再需要，可在这里永久删除。</div>';
     return;
   }
   box.innerHTML = '';
@@ -835,10 +851,43 @@ function renderHistory(){
       <div class="who">${esc(who)}${item.source ? ` · ${esc(item.source)}` : ''}</div>
       ${subscriptionLine(item)}
       <div class="when">${esc(archivedTime(item.archived_at))}</div>
-      <div class="actions-row"><button class="btn">恢复到首页</button></div>`;
-    div.querySelector('.actions-row .btn').onclick = e => restoreHistoryItem(item, e.currentTarget);
+      <div class="actions-row"><button class="btn danger">永久删除</button><button class="btn">恢复到首页</button></div>`;
+    const [forgetBtn, restoreBtn] = div.querySelectorAll('.actions-row .btn');
+    forgetBtn.onclick = () => openForgetConfirm(item);
+    restoreBtn.onclick = e => restoreHistoryItem(item, e.currentTarget);
     box.appendChild(div);
   });
+}
+let forgetCardCtx = null;
+function openForgetConfirm(item){
+  forgetCardCtx = item;
+  const account = [item.title, item.email || item.name, item.plan].filter(Boolean).join(' · ');
+  document.getElementById('forgetCardAccount').textContent = account;
+  const btn = document.getElementById('forgetCardYes');
+  btn.disabled = false;
+  btn.textContent = '确认删除';
+  document.getElementById('forgetCardModal').classList.add('show');
+}
+function closeForgetConfirm(){
+  forgetCardCtx = null;
+  document.getElementById('forgetCardModal').classList.remove('show');
+}
+async function confirmForgetCard(){
+  if (!forgetCardCtx) return;
+  const item = forgetCardCtx;
+  const btn = document.getElementById('forgetCardYes');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>删除中';
+  try {
+    await api('/api/forget', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity})});
+    closeForgetConfirm();
+    toast('已永久删除');
+    await refreshQuota(false);
+  } catch(e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = '确认删除';
+  }
 }
 async function restoreHistoryItem(item, btn){
   btn.disabled = true;
@@ -1018,7 +1067,7 @@ document.getElementById('btnFloat').onclick = async () => {
   await api('/api/float', {method:'POST', body:'{}'});
   toast('悬浮窗已启动');
 };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); closeForgetConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); } });
 (async () => {
   try {
     const cfg = await api('/api/config');

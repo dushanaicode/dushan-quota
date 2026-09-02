@@ -35,6 +35,13 @@ class WebOverviewTests(unittest.TestCase):
         self.assertNotIn("隐藏卡片", self.html)
         self.assertNotIn("method:'DELETE'", self.html)
 
+    def test_history_can_permanently_delete_an_account(self):
+        self.assertIn("永久删除", self.html)
+        self.assertIn('id="forgetCardModal"', self.html)
+        self.assertIn("永久删除这个账号？", self.html)
+        self.assertIn("/api/forget", self.html)
+        self.assertIn("确认删除", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

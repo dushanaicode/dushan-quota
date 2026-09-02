@@ -1,14 +1,19 @@
+import os
+import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
 
-from lib import float_win
+from lib import config, float_win
 from lib.models import Account, QuotaResult, Window
 from lib.snapshot import Snapshot
 
 
 class FloatRefreshTests(unittest.TestCase):
     def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.environment = patch.dict(os.environ, {"QUOTA_CLI_HOME": self.temporary.name})
+        self.environment.start()
         account = Account(
             provider="openai",
             label="OpenAI",
@@ -24,6 +29,21 @@ class FloatRefreshTests(unittest.TestCase):
             sub_end="2030-02-03T04:05:06+00:00",
             sub_status="known",
         )
+        self.other = QuotaResult(
+            account=Account(
+                provider="kimi",
+                label="Kimi Code",
+                source="test",
+                identity="kimi-1",
+            ),
+            ok=True,
+            title="Kimi Code",
+            windows=[Window(name="Week quota", remaining_percent=81)],
+        )
+
+    def tearDown(self):
+        self.environment.stop()
+        self.temporary.cleanup()
 
     @patch.object(float_win, "get_snapshot")
     def test_payload_reports_shared_snapshot_and_force(self, get_snapshot):
@@ -57,6 +77,79 @@ class FloatRefreshTests(unittest.TestCase):
 
         self.assertEqual("stale", payload["snapshot"]["state"])
         self.assertTrue(payload["snapshot"]["stale"])
+
+    @patch.object(float_win, "get_snapshot")
+    def test_payload_omits_accounts_archived_on_the_web(self, get_snapshot):
+        get_snapshot.return_value = Snapshot(
+            results=[self.result, self.other],
+            fetched_at=time.time(),
+            from_cache=True,
+            generation="generation-hidden",
+        )
+        settings = config.load_config()
+        settings["history"] = [
+            {
+                "key": "openai:account-1",
+                "provider": "openai",
+                "identity": "account-1",
+                "title": "OpenAI",
+            }
+        ]
+        config.save_config(settings)
+
+        payload = float_win._fetch_payload()
+
+        self.assertEqual(["Kimi Code"], [item["title"] for item in payload["results"]])
+
+    @patch.object(float_win, "get_snapshot")
+    def test_payload_keeps_other_account_on_same_provider(self, get_snapshot):
+        sibling = QuotaResult(
+            account=Account(
+                provider="openai",
+                label="OpenAI",
+                source="test",
+                identity="account-2",
+            ),
+            ok=True,
+            title="OpenAI",
+            email="other@example.test",
+            windows=[Window(name="Week quota", remaining_percent=40)],
+        )
+        get_snapshot.return_value = Snapshot(
+            results=[self.result, sibling],
+            fetched_at=time.time(),
+            from_cache=True,
+            generation="generation-partial",
+        )
+        settings = config.load_config()
+        settings["history"] = [
+            {
+                "key": "openai:account-1",
+                "provider": "openai",
+                "identity": "account-1",
+            }
+        ]
+        config.save_config(settings)
+
+        payload = float_win._fetch_payload()
+
+        self.assertEqual(["other@example.test"], [item.get("email") for item in payload["results"]])
+
+    @patch.object(float_win, "get_snapshot")
+    def test_payload_omits_legacy_hidden_keys(self, get_snapshot):
+        get_snapshot.return_value = Snapshot(
+            results=[self.result, self.other],
+            fetched_at=time.time(),
+            from_cache=True,
+            generation="generation-hidden-legacy",
+        )
+        settings = config.load_config()
+        settings["hidden"] = ["openai:account-1"]
+        config.save_config(settings)
+
+        payload = float_win._fetch_payload()
+
+        self.assertEqual(["Kimi Code"], [item["title"] for item in payload["results"]])
 
     @patch.object(float_win, "_fetch_payload", side_effect=RuntimeError("secret-token"))
     def test_refresh_error_is_safe_and_explicit(self, fetch_payload):

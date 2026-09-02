@@ -227,6 +227,7 @@ def _write_grok_cli(account, access: str, refresh: str, expires_in) -> None:
         if "auth.x.ai" not in str(key):
             continue
         entry["key"] = access
+        entry["create_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         entry["refresh_token"] = refresh
         if isinstance(expires_in, (int, float)):
             expires_at = datetime.fromtimestamp(time.time() + int(expires_in), tz=timezone.utc)

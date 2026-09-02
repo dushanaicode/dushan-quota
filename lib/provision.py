@@ -448,6 +448,7 @@ def _write_grok_cli(account: Account, confirmed: bool) -> dict:
     access = account.secret.get("access") or ""
     if not access:
         return {"ok": False, "error": "该账号没有访问令牌可写"}
+    claims = _jwt_payload(access)
     entry_key = f"{XAI_ISSUER}::{XAI_CLIENT_ID}"
     existing = data.get(entry_key)
     if isinstance(existing, dict) and existing.get("key") and not confirmed:
@@ -457,17 +458,18 @@ def _write_grok_cli(account: Account, confirmed: bool) -> dict:
             "needs_confirm": True,
             "conflict": f"Grok CLI 已有 {entry_key} 条目（{email}），覆盖？",
         }
-    expires = account.secret.get("expires")
-    if isinstance(expires, (int, float)) and expires > 0:
-        ts = expires / 1000 if expires > 1e12 else float(expires)
-        expires_at = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    else:
-        expires_at = datetime.fromtimestamp(time.time() + 21600, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    expires = claims.get("exp") or tokenstore._expiry_ts(account)
+    expires = float(expires) if isinstance(expires, (int, float)) and expires > 0 else time.time() + 21600
+    issued = claims.get("iat")
+    issued = float(issued) if isinstance(issued, (int, float)) and issued > 0 else time.time()
+    expires_at = datetime.fromtimestamp(expires, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    create_time = datetime.fromtimestamp(issued, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     entry = dict(existing) if isinstance(existing, dict) else {}
     entry.update(
         {
             "key": access,
             "auth_mode": "oidc",
+            "create_time": create_time,
             "refresh_token": account.secret.get("refresh") or entry.get("refresh_token") or "",
             "expires_at": expires_at,
             "oidc_issuer": XAI_ISSUER,
