@@ -1,39 +1,39 @@
 import unittest
 from unittest.mock import patch
 
-from lib import shell, web
+from lib import web
 
 
 class WebLaunchTests(unittest.TestCase):
     @patch.object(web.webbrowser, "open")
     @patch.object(web, "_wait_for_web", return_value=True)
-    @patch.object(web, "_spawn_web_process")
+    @patch("lib.float_win.launch_float")
     @patch.object(web, "_web_ready", return_value=False)
-    def test_launches_server_out_of_process_and_returns(self, ready, spawn, wait, open_browser):
+    def test_launches_float_window_when_no_server(self, ready, launch_float, wait, open_browser):
         result = web.launch_web(port=19001)
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["started"])
-        spawn.assert_called_once_with("127.0.0.1", 19001)
-        wait.assert_called_once_with("127.0.0.1", 19001)
+        launch_float.assert_called_once_with()
+        wait.assert_called_once_with("127.0.0.1", 19001, timeout=10.0)
         open_browser.assert_called_once_with("http://127.0.0.1:19001/")
 
     @patch.object(web.webbrowser, "open")
-    @patch.object(web, "_spawn_web_process")
+    @patch("lib.float_win.launch_float")
     @patch.object(web, "_web_ready", return_value=True)
-    def test_reuses_running_server(self, ready, spawn, open_browser):
+    def test_reuses_running_server(self, ready, launch_float, open_browser):
         result = web.launch_web()
 
         self.assertTrue(result["ok"])
         self.assertFalse(result["started"])
-        spawn.assert_not_called()
+        launch_float.assert_not_called()
         open_browser.assert_called_once()
 
     @patch.object(web.webbrowser, "open")
     @patch.object(web, "_wait_for_web", return_value=False)
-    @patch.object(web, "_spawn_web_process")
+    @patch("lib.float_win.launch_float")
     @patch.object(web, "_web_ready", return_value=False)
-    def test_start_timeout_does_not_open_browser(self, ready, spawn, wait, open_browser):
+    def test_start_timeout_does_not_open_browser(self, ready, launch_float, wait, open_browser):
         result = web.launch_web()
 
         self.assertFalse(result["ok"])
@@ -42,27 +42,15 @@ class WebLaunchTests(unittest.TestCase):
 
     @patch.object(web.webbrowser, "open")
     @patch.object(web, "_wait_for_web")
-    @patch.object(web, "_spawn_web_process", side_effect=OSError("cannot spawn"))
+    @patch("lib.float_win.launch_float", side_effect=OSError("cannot spawn"))
     @patch.object(web, "_web_ready", return_value=False)
-    def test_spawn_failure_returns_without_waiting(self, ready, spawn, wait, open_browser):
+    def test_float_launch_failure_returns_without_waiting(self, ready, launch_float, wait, open_browser):
         result = web.launch_web()
 
         self.assertFalse(result["ok"])
-        self.assertIn("启动失败", result["error"])
+        self.assertIn("悬浮窗启动失败", result["error"])
         wait.assert_not_called()
         open_browser.assert_not_called()
-
-    @patch("builtins.print")
-    @patch("builtins.input", side_effect=["1", "0"])
-    @patch.object(
-        web,
-        "launch_web",
-        return_value={"ok": True, "started": True, "url": "http://127.0.0.1:18765/"},
-    )
-    def test_interactive_menu_returns_after_launch(self, launch, user_input, output):
-        shell.run_shell()
-
-        launch.assert_called_once_with()
 
 
 if __name__ == "__main__":

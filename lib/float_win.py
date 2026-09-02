@@ -5,13 +5,14 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
 import webview
 
-from . import config
+from . import config, logbuf
 from .render import _reset_text
 from .snapshot import get_snapshot
 from .store import store_dir
@@ -440,7 +441,14 @@ class Api:
 
         return self._nc_action(_HT_BOTTOMRIGHT, x, y, after=_persist)
 
+    def open_web(self):
+        import webbrowser
+
+        webbrowser.open(f"http://{_WEB_HOST}:{_WEB_PORT}/")
+        return {"ok": True}
+
     def quit(self):
+        logbuf.info("悬浮窗退出")
         if self._window:
             self._window.destroy()
 
@@ -506,6 +514,7 @@ class _Tray:
         try:
             menu = pystray.Menu(
                 pystray.MenuItem("显示 / 隐藏", self._toggle, default=True),
+                pystray.MenuItem("Web 配置页", self._open_web_page),
                 pystray.MenuItem("刷新", self._refresh),
                 pystray.MenuItem("退出", self._quit),
             )
@@ -531,6 +540,9 @@ class _Tray:
             window.native.Visible = self._visible
 
         _invoke_on_ui(window, _apply)
+
+    def _open_web_page(self, icon=None, item=None) -> None:
+        self._api.open_web()
 
     def _refresh(self, icon=None, item=None) -> None:
         window = self._api._window
@@ -561,6 +573,32 @@ def _close_existing_float() -> None:
             if not user32.IsWindow(existing):
                 break
             time.sleep(0.05)
+
+
+_WEB_HOST = "127.0.0.1"
+_WEB_PORT = 18765
+
+
+def _embedded_web_loop() -> None:
+    """Web 服务内嵌在悬浮窗进程里：悬浮窗退出，Web 随之停止。
+
+    已有服务在跑（重复实例竞态）时跳过；若之后服务消失，下一轮自动接管。
+    """
+    from . import web
+
+    while True:
+        try:
+            if not web._web_ready(_WEB_HOST, _WEB_PORT):
+                server = web.make_server(_WEB_HOST, _WEB_PORT)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                logbuf.info("内嵌 Web 服务已启动", url=f"http://{_WEB_HOST}:{_WEB_PORT}/")
+        except Exception as exc:
+            logbuf.warn("内嵌 Web 服务启动失败", error=str(exc))
+        time.sleep(20)
+
+
+def _start_embedded_web() -> None:
+    threading.Thread(target=_embedded_web_loop, daemon=True).start()
 
 
 def launch_float() -> bool:
@@ -626,6 +664,8 @@ def serve_float():
 
     tray = _Tray(api)
     tray.start()
+    _start_embedded_web()
+    logbuf.info("悬浮窗已启动")
     try:
         webview.start(_ready, gui="edgechromium" if _is_windows() else None, debug=False)
     finally:

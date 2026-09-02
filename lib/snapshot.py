@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from . import logbuf
 from .discover import collect_accounts
 from .fetch import fetch_all
 from .models import Account, QuotaResult, Window
@@ -98,8 +99,17 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
         fetched_at = time.time()
         generation = uuid.uuid4().hex
         _write_cache(results, fetched_at, generation)
+        ok_count = sum(1 for item in results if item.ok)
+        logbuf.info(
+            "额度刷新完成",
+            accounts=len(results),
+            ok=ok_count,
+            failed=len(results) - ok_count,
+            force=bool(force),
+        )
         return Snapshot(results=results, fetched_at=fetched_at, from_cache=False, generation=generation)
-    except Exception:
+    except Exception as exc:
+        logbuf.warn("额度联网刷新失败，改用旧快照", error=str(exc))
         fallback = _read_cache() or cached
         if fallback:
             fallback.from_cache = True

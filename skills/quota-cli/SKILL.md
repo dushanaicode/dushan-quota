@@ -7,15 +7,18 @@ description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cur
 
 路径：`C:\Users\Administrator\quota-cli\quota.py`
 
-人用：终端执行 `quota` 进入启动菜单（仅两个入口：打开 Web UI、悬浮窗）。加号/OAuth 用 `quota ui` 打开本机网页。
+人用：终端执行 `quota` 直接启动悬浮窗（内嵌 Web 服务，关闭悬浮窗即全部停止）。点悬浮窗标题栏 🌐 打开 Web 配置页，加号/OAuth 都在网页里完成。
 
 ```
-quota
-quota ui
-quota float      # 桌面悬浮窗（托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度/自定义背景图）
+quota            # 启动悬浮窗（脱离终端，关终端不影响）
+quota ui         # 打开 Web 配置页（服务未运行时会先拉起悬浮窗）
+quota float      # 同 quota
+quota ui-run     # headless 服务器专用：不依赖显示器，前台单独跑 Web 服务
 ```
 
-终端没有查询命令；Agent 一律走本机 Web API（先 `quota ui` 启动），不要进交互菜单。
+悬浮窗：托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度/自定义背景图，设置面板可切换 5 款配色主题。
+
+终端没有查询命令；Agent 一律走本机 Web API（先 `quota ui` 确保服务已启动），不要进交互流程。
 
 ## 查询
 
@@ -39,7 +42,7 @@ python C:\Users\Administrator\quota-cli\quota.py remove <id>
 
 ## Web UI（http://127.0.0.1:18765）
 
-界面能力：响应式卡片、左侧平台筛选、右侧「关注」面板（用量最低榜/即将重置榜，100% 不进榜）、四款主题（暗黑鎏金/蓝天白云/粉红少女/绿意盎然）、卡片 ✕（本地账号删除、其他隐藏可恢复）、订阅起止时间展示（xAI、Cursor Agent 已接入，记录进 agent.db）。
+界面能力：响应式卡片、左侧平台筛选、右侧「关注」面板（用量最低榜/即将重置榜，100% 不进榜）、四款主题（暗黑鎏金/蓝天白云/粉红少女/绿意盎然）、卡片 ✕（本地账号删除、其他隐藏可恢复）、订阅起止时间展示（xAI、Cursor Agent 已接入，记录进 agent.db）、运行日志面板。
 
 Agent 可用的 HTTP API（先 `quota ui` 启动）：
 
@@ -51,6 +54,7 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 | POST | `/api/provision` | 写入 harness，body `{"provider","identity","harness","confirmed"}`；返回 `needs_confirm` 时用 `confirmed:true` 重发 |
 | POST | `/api/hide` / `/api/unhide` | 隐藏/恢复卡片，body `{"provider","identity"}`；unhide 空 body 全恢复 |
 | GET/POST | `/api/config` | 读/写设置（`watch_seconds` 自动刷新间隔秒数，0=仅手动） |
+| GET | `/api/logs` | 运行日志（内存环形缓冲 500 条，`?limit=` `?level=` 过滤；同时落盘 `quota.log` JSONL） |
 | POST | `/api/float` | 启动桌面悬浮窗 |
 | GET | `/api/rules` | 平台与添加方式 |
 | POST | `/api/accounts/key` | 添加 API Key，body `{"provider","key"}` |

@@ -1,7 +1,4 @@
 import json
-import os
-import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -11,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
+from . import config, logbuf, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
 from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json
 from .discover import collect_accounts
 from .models import AUTH_RULES
@@ -28,6 +25,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
             self._file(WEB_DIR / "index.html", "text/html; charset=utf-8")
+            return
+        if parsed.path in {"/favicon.ico", "/favicon.png"}:
+            self._file(WEB_DIR / "favicon.png", "image/png")
             return
         if parsed.path == "/api/rules":
             self._json({"rules": AUTH_RULES})
@@ -46,6 +46,16 @@ class Handler(BaseHTTPRequestHandler):
             cfg = config.load_config()
             seconds = cfg.get("watch_seconds")
             self._json({"watch_seconds": int(seconds) if isinstance(seconds, int) else 60})
+            return
+        if parsed.path == "/api/logs":
+            query = parse_qs(parsed.query)
+            limit = query.get("limit", ["200"])[0]
+            level = query.get("level", [""])[0] or None
+            try:
+                limit = int(limit)
+            except ValueError:
+                limit = 200
+            self._json({"logs": logbuf.entries(limit=limit, level=level)})
             return
         if parsed.path == "/api/provision/targets":
             provider = parse_qs(parsed.query).get("provider", [""])[0]
@@ -93,6 +103,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         payload = self._body()
         path = urlparse(self.path).path
+        if path.startswith("/api/"):
+            logbuf.info(
+                "Web 操作",
+                path=path,
+                provider=payload.get("provider") or "",
+                identity=payload.get("identity") or "",
+            )
         try:
             if path == "/api/accounts/key":
                 add_api_key(payload.get("provider") or "", payload.get("key") or "")
@@ -207,6 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(result)
                 return
         except Exception as error:
+            logbuf.error("Web 操作失败", path=path, error=str(error))
             self._json({"error": str(error)}, 400)
             return
         self._json({"error": "not found"}, 404)
@@ -534,9 +552,14 @@ def _save_oauth(provider: str, label: str, result: dict):
     store.upsert_account(record)
 
 
-def serve(host="127.0.0.1", port=18765, open_browser=True):
+def make_server(host="127.0.0.1", port=18765) -> ThreadingHTTPServer:
+    """Build the HTTP server without entering the serve loop (used in-process by the float window)."""
     config.apply_config_env()
-    server = ThreadingHTTPServer((host, port), Handler)
+    return ThreadingHTTPServer((host, port), Handler)
+
+
+def serve(host="127.0.0.1", port=18765, open_browser=True):
+    server = make_server(host, port)
     url = f"http://{host}:{port}/"
     print(f"Quota Web UI: {url}")
     if open_browser:
@@ -548,41 +571,23 @@ def serve(host="127.0.0.1", port=18765, open_browser=True):
 
 
 def launch_web(host="127.0.0.1", port=18765, open_browser=True) -> dict:
-    """Start the local Web UI out of process so callers remain interactive."""
+    """Open the Web UI. The HTTP server lives inside the floating-window process:
+    if no server responds, launch the float window (which embeds it) and wait."""
     url = f"http://{host}:{port}/"
     started = False
     if not _web_ready(host, port):
+        from .float_win import launch_float
+
         try:
-            _spawn_web_process(host, port)
+            launch_float()
         except OSError:
-            return {"ok": False, "started": False, "url": url, "error": "Web UI 后台进程启动失败"}
+            return {"ok": False, "started": False, "url": url, "error": "悬浮窗启动失败"}
         started = True
-        if not _wait_for_web(host, port):
+        if not _wait_for_web(host, port, timeout=10.0):
             return {"ok": False, "started": started, "url": url, "error": "Web UI 启动超时"}
     if open_browser:
         webbrowser.open(url)
     return {"ok": True, "started": started, "url": url}
-
-
-def _spawn_web_process(host: str, port: int) -> subprocess.Popen:
-    script = Path(__file__).resolve().parent.parent / "quota.py"
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if os.name == "nt":
-        pythonw = Path(sys.executable).with_name("pythonw.exe")
-        executable = str(pythonw) if pythonw.is_file() else sys.executable
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
-    else:
-        executable = sys.executable
-        kwargs["start_new_session"] = True
-    return subprocess.Popen(
-        [executable, str(script), "ui-run", "--host", host, "--port", str(port)],
-        **kwargs,
-    )
 
 
 def _wait_for_web(host: str, port: int, timeout: float = 3.0) -> bool:

@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Quota</title>
+<link rel="icon" type="image/png" href="/favicon.png" />
 <style>
   :root, body[data-theme="gold"] {
     --bg:#0d0e11; --surface:#14151a; --surface-2:#1a1c22;
@@ -266,10 +267,11 @@
     background:var(--track); color:var(--muted); font-size:11.5px; line-height:1.7; }
 
   /* ---------- add panel（cockpit 式：左提供商 / 右配置） ---------- */
-  .add-panel { width:min(880px,100%); }
-  .add-body { display:flex; gap:18px; }
-  .add-provs { flex:none; width:190px; border-right:1px solid var(--line-soft); padding-right:14px;
-    max-height:62vh; overflow-y:auto; }
+  .panel.add-panel { width:min(1240px,96vw); height:min(620px,84vh); display:flex; flex-direction:column; }
+  .panel.add-panel h2 { flex:none; }
+  .add-body { display:flex; gap:18px; flex:1; min-height:0; }
+  .add-provs { flex:none; width:210px; border-right:1px solid var(--line-soft); padding-right:14px;
+    overflow-y:auto; }
   .add-provs::-webkit-scrollbar, #fpList::-webkit-scrollbar, .add-conf::-webkit-scrollbar { width:4px; }
   .add-provs::-webkit-scrollbar-thumb, #fpList::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
   .prov-tile {
@@ -286,7 +288,7 @@
     font-size:11px; font-weight:600; color:var(--accent); letter-spacing:.02em;
   }
   .prov-tile .nm { font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .add-conf { flex:1; min-width:0; max-height:62vh; overflow-y:auto; padding-right:4px; }
+  .add-conf { flex:1; min-width:0; overflow-y:auto; padding-right:4px; }
   .add-conf h3 { font-size:14px; font-weight:600; margin-bottom:2px; }
   .add-sub { font-size:11px; color:var(--faint); margin-bottom:12px; }
   #modeList { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:4px; }
@@ -299,10 +301,12 @@
   .mode-chip b { display:block; font-size:12px; font-weight:600; }
   .mode-chip span { font-size:10.5px; color:var(--muted); }
   @media (max-width:720px) {
+    .panel.add-panel { width:min(1240px,96vw); height:88vh; }
     .add-body { flex-direction:column; }
-    .add-provs { width:100%; border-right:0; border-bottom:1px solid var(--line-soft);
-      padding:0 0 10px; display:flex; gap:6px; overflow-x:auto; max-height:none; }
+    .add-provs { width:100%; flex:none; border-right:0; border-bottom:1px solid var(--line-soft);
+      padding:0 0 10px; display:flex; gap:6px; overflow-x:auto; overflow-y:hidden; }
     .prov-tile { flex:none; margin-bottom:0; }
+    .add-conf { flex:1; min-height:0; }
   }
 
   /* ---------- modal ---------- */
@@ -332,10 +336,18 @@
   .oauth-box { display:flex; gap:8px; margin-top:10px; }
   .oauth-box input { flex:1; font-size:11.5px; color:var(--muted); }
   .waiting { display:flex; align-items:center; gap:9px; margin-top:12px; color:var(--muted); font-size:12px; }
-  .waiting i { width:11px; height:11px; border:1.5px solid var(--faint); border-top-color:var(--accent);
-    border-radius:50%; animation:rot .8s linear infinite; }
+  .waiting i { width:11px; height:11px; border:1.5px solid var(--faint); border-top-color:var(--accent);    border-radius:50%; animation:rot .8s linear infinite; }
   .targets { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
   .targets .btn { text-align:left; padding:10px 13px; }
+  .log-list { max-height:52vh; overflow-y:auto; font-family:Consolas,monospace; font-size:11.5px; }
+  .log-line { display:flex; gap:8px; padding:3.5px 0; border-top:1px solid var(--line-soft); line-height:1.5; }
+  .log-line .lv { flex:none; width:42px; font-weight:700; }
+  .log-line .lv.INFO { color:var(--accent); }
+  .log-line .lv.WARN { color:var(--warn); }
+  .log-line .lv.ERROR { color:var(--bad); }
+  .log-line .lv.DEBUG { color:var(--faint); }
+  .log-line .lt { flex:none; color:var(--faint); }
+  .log-line .lm { color:var(--text); word-break:break-all; }
   ::selection { background:var(--accent-soft); }
 </style>
 </head>
@@ -353,6 +365,7 @@
     <button class="btn" id="btnHistory" onclick="toggleHistory(true)">历史<span class="header-count" id="historyBadge">0</span></button>
     <button class="btn" id="btnFocus" onclick="toggleFocus(true)">总览</button>
     <button class="btn" id="btnRefresh" onclick="refreshQuota(true)">刷新</button>
+    <button class="btn" onclick="openLogs()">日志</button>
     <button class="btn" onclick="openSet()">设置</button>
     <button class="btn primary" onclick="openAdd()">添加账号</button>
   </div>
@@ -465,6 +478,25 @@
         </div>
         <p id="addMsg" class="msg"></p>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="logModal" class="modal" onclick="if(event.target===this)closeLogs()">
+  <div class="panel" style="width:min(720px,100%)">
+    <h2>运行日志</h2>
+    <div class="row" style="margin-top:0; margin-bottom:8px">
+      <select id="logLevel" style="flex:none; width:auto">
+        <option value="">全部</option>
+        <option value="INFO">INFO</option>
+        <option value="WARN">WARN</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+      <button class="btn" onclick="loadLogs()">刷新</button>
+    </div>
+    <div class="log-list" id="logList"><p class="hint">加载中…</p></div>
+    <div class="row end">
+      <button class="btn primary" onclick="closeLogs()">关闭</button>
     </div>
   </div>
 </div>
@@ -1057,6 +1089,28 @@ async function openSet(){
   document.getElementById('setWatch').value = String(cfg.watch_seconds ?? 60);
   document.getElementById('setModal').classList.add('show');
 }
+let logTimer = null;
+async function loadLogs(){
+  try{
+    const level = document.getElementById('logLevel').value;
+    const data = await api('/api/logs?limit=300' + (level ? '&level=' + level : ''));
+    const items = (data.logs || []).slice().reverse();
+    document.getElementById('logList').innerHTML = items.map(e => {
+      const ctx = e.ctx ? ' ' + Object.entries(e.ctx).map(([k,v]) => `${k}=${v}`).join(' ') : '';
+      return `<div class="log-line"><span class="lv ${esc(e.level)}">${esc(e.level)}</span><span class="lt">${new Date(e.ts*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span><span class="lm">${esc(e.msg)}${esc(ctx)}</span></div>`;
+    }).join('') || '<p class="hint">暂无日志</p>';
+  }catch(e){}
+}
+function openLogs(){
+  document.getElementById('logModal').classList.add('show');
+  loadLogs();
+  clearInterval(logTimer); logTimer = setInterval(loadLogs, 5000);
+}
+function closeLogs(){
+  document.getElementById('logModal').classList.remove('show');
+  clearInterval(logTimer); logTimer = null;
+}
+document.getElementById('logLevel').onchange = loadLogs;
 function closeSet(){ document.getElementById('setModal').classList.remove('show'); }
 document.getElementById('setWatch').onchange = async e => {
   refreshMs = (+e.target.value) * 1000;
@@ -1067,7 +1121,7 @@ document.getElementById('btnFloat').onclick = async () => {
   await api('/api/float', {method:'POST', body:'{}'});
   toast('悬浮窗已启动');
 };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); closeForgetConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); closeForgetConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); closeLogs(); } });
 (async () => {
   try {
     const cfg = await api('/api/config');

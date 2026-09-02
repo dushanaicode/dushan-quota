@@ -9,7 +9,6 @@ if str(ROOT) not in sys.path:
 from lib import config
 from lib.add import add_api_key, add_from_env, add_interactive, add_json, add_local, print_accounts, remove
 from lib.models import AUTH_RULES
-from lib.shell import run_shell
 from lib.store import accounts_path
 
 
@@ -88,7 +87,10 @@ def main():
         from lib.float_win import serve_float
         serve_float()
         return
-    run_shell()
+    from lib.float_win import launch_float
+
+    launch_float()
+    print("悬浮窗已启动；点窗口标题栏的 🌐 可打开 Web 配置页。关闭悬浮窗即停止全部服务。")
 
 
 def _handle_add(args):

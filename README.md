@@ -40,9 +40,10 @@ Quota CLI 是一个本地优先的 AI 账号额度聚合工具。它会发现本
 
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
-| 启动菜单 | `quota` | 选择界面 | 只提供 Web UI 与悬浮窗两个入口，终端本身不再展示额度 | Windows / macOS / Linux |
-| Web | `quota ui` | 账号与额度的完整管理 | Provider 筛选、四款主题、添加账号、OAuth、历史恢复、写入 Harness、OpenAI 重置额度 | 默认仅 `127.0.0.1:18765` |
-| 悬浮窗 | `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、自定义背景图（cover 自适应任意窗口尺寸）、托盘、手动刷新、展示项选择 | 完整体验以 Windows 为准 |
+| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、自定义背景图（cover 自适应任意窗口尺寸）、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | 完整体验以 Windows 为准 |
+| Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号与额度的完整管理 | Provider 筛选、四款主题、添加账号、OAuth、历史恢复、写入 Harness、OpenAI 重置额度、运行日志查看 | 默认仅 `127.0.0.1:18765` |
+
+Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
 
 两个界面连接的是同一份本地额度快照：一个界面完成刷新后，另一个界面会复用结果，避免同一周期重复请求 Provider。
 
@@ -160,8 +161,8 @@ python quota.py ui
 
 | 命令 | 用途 |
 | --- | --- |
-| `quota` | 打开启动菜单（仅 Web UI 与悬浮窗两个入口） |
-| `quota ui` | 后台启动并打开本机 Web UI |
+| `quota` | 启动悬浮窗（内嵌 Web 服务，关闭即全停） |
+| `quota ui` | 打开本机 Web UI（服务未运行时会先拉起悬浮窗） |
 | `quota float` | 启动桌面悬浮窗 |
 | `quota add` | 交互式添加账号 |
 | `quota add <provider> --key <API_KEY>` | 添加 API Key |
@@ -194,6 +195,7 @@ python quota.py ui
 | `accounts.json` | 手动添加或 OAuth 保存的账号 | 是 |
 | `agent.db` | 聚合账号、access/refresh token、API Key、套餐、订阅和写入历史 | 是 |
 | `quota-snapshot.json` | Web 与悬浮窗共用的展示快照 | 否 |
+| `quota.log` | 运行日志（JSONL，Web UI「日志」面板可查看） | 否 |
 | `quota-snapshot.lock` | 跨进程刷新锁 | 否 |
 
 - 项目没有遥测，也没有自建凭证中转服务；查询额度时会从本机直接请求对应 Provider API。
@@ -214,7 +216,7 @@ Quota CLI 当前采用“克隆源码到长期保留目录后安装”的本机�
 - Homebrew、Winget 等安装包
 - Nginx、公网鉴权或 TLS 配置
 
-因此，不要把 Web UI 直接部署成公开服务。服务器场景建议用 SSH 端口转发访问本机 Web UI（`ssh -L 18765:127.0.0.1:18765`），凭证与数据仍放在运行用户自己的数据目录中。
+因此，不要把 Web UI 直接部署成公开服务。服务器场景用 `quota ui-run` 在本机起服务，再用 SSH 端口转发访问（`ssh -L 18765:127.0.0.1:18765`），凭证与数据仍放在运行用户自己的数据目录中。
 
 升级代码：
 
@@ -250,13 +252,13 @@ Web 前端位于 `web/index.html`，悬浮窗页面位于 `web/float.html`，均
 
 仓库附带 [`skills/quota-cli/SKILL.md`](skills/quota-cli/SKILL.md)。安装脚本会把它复制到 OpenCode 的 `~/.config/opencode/skills/quota-cli/`；其他 Agent 可以按各自的 Skill 目录规则导入。
 
-Agent 查询额度时建议走本机 Web API（先 `quota ui` 启动）：
+Agent 查询额度时建议走本机 Web API（先 `quota ui` 确保服务已启动；服务由悬浮窗进程内嵌提供）：
 
 ```bash
 curl http://127.0.0.1:18765/api/quota
 ```
 
-只有用户明确要求立即联网时，才使用 `http://127.0.0.1:18765/api/quota?force=1`；不要在日志或回复中输出完整凭证。
+只有用户明确要求立即联网时，才使用 `http://127.0.0.1:18765/api/quota?force=1`；不要在日志或回复中输出完整凭证。运行日志可通过 `curl http://127.0.0.1:18765/api/logs` 读取。
 
 ## License
 
