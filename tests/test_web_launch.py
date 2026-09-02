@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from lib import shell, web
 
@@ -53,19 +53,16 @@ class WebLaunchTests(unittest.TestCase):
         open_browser.assert_not_called()
 
     @patch("builtins.print")
-    @patch("builtins.input", side_effect=["6", "0"])
+    @patch("builtins.input", side_effect=["1", "0"])
     @patch.object(
         web,
         "launch_web",
         return_value={"ok": True, "started": True, "url": "http://127.0.0.1:18765/"},
     )
     def test_interactive_menu_returns_after_launch(self, launch, user_input, output):
-        show = Mock()
-
-        shell.run_shell(show)
+        shell.run_shell()
 
         launch.assert_called_once_with()
-        show.assert_not_called()
 
 
 if __name__ == "__main__":

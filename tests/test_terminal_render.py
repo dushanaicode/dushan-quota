@@ -1,12 +1,8 @@
 import os
 import unittest
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+import unicodedata
+from unittest.mock import patch
 
-import quota
-from lib.models import Account, QuotaResult, Window
-from lib.render import display_width, render, render_loading, strip_ansi
-from lib.snapshot import Snapshot
 from lib.terminal import (
     ALT_SCREEN_OFF,
     ALT_SCREEN_ON,
@@ -41,34 +37,6 @@ class FakeStream:
     @property
     def value(self):
         return "".join(self.parts)
-
-
-def sample_result() -> QuotaResult:
-    account = Account(
-        provider="openai",
-        label="OpenAI",
-        source="codex-local",
-        identity="account-1",
-        auth_mode="oauth",
-        email="user@example.com",
-    )
-    return QuotaResult(
-        account=account,
-        ok=True,
-        title="OpenAI",
-        email="user@example.com",
-        name="示例账号",
-        user_id="account-1",
-        plan="OpenAI Pro",
-        auth_mode="oauth",
-        sub_start="2030-01-02T03:04:05+00:00",
-        sub_end="2030-02-03T04:05:06+00:00",
-        windows=[
-            Window(name="Week quota", remaining_percent=63, reset_iso="2030-02-01T00:00:00+00:00"),
-            Window(name="5h quota", remaining_percent=21, used=79.0, total=100.0),
-            Window(name="重置次数", text="剩余 1 次"),
-        ],
-    )
 
 
 class TerminalScreenTests(unittest.TestCase):
@@ -149,169 +117,9 @@ class TerminalScreenTests(unittest.TestCase):
         self.assertEqual(5, len(fitted))
         self.assertEqual("line 0", fitted[0])
         self.assertIn("折叠", fitted[-2])
-        self.assertLessEqual(display_width(fitted[-2]), 24)
+        cells = sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in fitted[-2])
+        self.assertLessEqual(cells, 24)
         self.assertEqual("line 9", fitted[-1])
-
-
-class TerminalRenderTests(unittest.TestCase):
-    def test_loading_frame_never_exceeds_narrow_width(self):
-        for width in (20, 32, 40):
-            with self.subTest(width=width):
-                output = render_loading(width=width, color=False)
-                for line in output.splitlines():
-                    self.assertLessEqual(display_width(line), width, line)
-
-    def test_dashboard_is_plain_responsive_and_complete(self):
-        output = render(
-            [sample_result()],
-            now=datetime(2029, 1, 1, tzinfo=timezone.utc),
-            width=72,
-            color=False,
-        )
-
-        self.assertNotIn("\033", output)
-        self.assertIn("QUOTA", output)
-        self.assertIn("OpenAI", output)
-        self.assertIn("Week quota", output)
-        self.assertIn("63%", output)
-        self.assertIn("2030-01-02", output)
-        self.assertIn("ID account-1", output)
-        self.assertIn("79/100", output)
-        for line in output.splitlines():
-            self.assertLessEqual(display_width(line), 72, line)
-
-    def test_compact_dashboard_surfaces_lowest_window(self):
-        output = render(
-            [sample_result()],
-            now=datetime(2029, 1, 1, tzinfo=timezone.utc),
-            width=60,
-            color=False,
-            compact=True,
-        )
-
-        self.assertIn("5h quota", output)
-        self.assertIn("21%", output)
-        self.assertIn("+2", output)
-        self.assertNotIn("Week quota", output)
-
-    def test_compact_dashboard_keeps_nine_accounts_inside_24_rows(self):
-        results = []
-        for index in range(9):
-            results.append(
-                QuotaResult(
-                    account=Account(
-                        provider=f"provider-{index}",
-                        label=f"Provider {index}",
-                        source="test",
-                        identity=f"account-{index}",
-                    ),
-                    ok=True,
-                    title=f"Provider {index}",
-                    windows=[Window(name="Week quota", remaining_percent=90 - index)],
-                )
-            )
-
-        output = render(results, width=79, color=False, compact=True, footer="Ctrl+C 返回")
-
-        self.assertLessEqual(len(output.splitlines()), 23)
-        for index in range(9):
-            self.assertIn(f"Provider {index}", output)
-
-    def test_color_output_can_be_stripped_without_losing_content(self):
-        colored = render([sample_result()], width=80, color=True)
-
-        self.assertIn("\033", colored)
-        self.assertIn("OpenAI", strip_ansi(colored))
-
-    def test_unavailable_balance_counts_as_attention_not_healthy(self):
-        result = QuotaResult(
-            account=Account(provider="deepseek", label="DeepSeek", source="quota-cli", identity="key-1"),
-            ok=True,
-            title="DeepSeek",
-            plan="不可用（余额不足或欠费）",
-            windows=[Window(name="Balance", text="¥-0.92")],
-        )
-
-        output = render([result], width=80, color=False, compact=True)
-
-        self.assertIn("0 正常", output)
-        self.assertIn("1 注意", output)
-        self.assertIn("! DeepSeek", output)
-
-    def test_stale_snapshot_uses_real_fetch_time_and_label(self):
-        output = render(
-            [sample_result()],
-            now=datetime(2029, 1, 1, tzinfo=timezone.utc),
-            updated_at=datetime(2028, 5, 6, 7, 8, 9, tzinfo=timezone.utc),
-            snapshot_state="stale",
-            width=90,
-            color=False,
-        )
-
-        self.assertIn("更新 2028-05-06", output)
-        self.assertIn("旧快照", output)
-
-    @patch.object(quota.time, "sleep")
-    @patch.object(quota, "get_snapshot")
-    def test_redirected_watch_emits_one_plain_snapshot(self, get_snapshot, sleep):
-        get_snapshot.return_value = Snapshot(results=[sample_result()], fetched_at=1.0, from_cache=False)
-        stream = FakeStream(False)
-
-        with patch.object(quota.sys, "stdout", stream):
-            quota.watch(15)
-
-        get_snapshot.assert_called_once_with(force=False)
-        sleep.assert_not_called()
-        self.assertNotIn("\033", stream.value)
-        self.assertIn("OpenAI", stream.value)
-
-    @patch.object(quota.time, "sleep")
-    @patch.object(quota, "get_snapshot")
-    def test_live_watch_restores_terminal_after_interrupt(self, get_snapshot, sleep):
-        shared = Snapshot(results=[sample_result()], fetched_at=1.0, from_cache=False)
-        get_snapshot.side_effect = [shared, KeyboardInterrupt()]
-        stream = FakeStream(True)
-
-        with patch.object(quota.sys, "stdout", stream), patch(
-            "quota.TerminalScreen",
-            lambda output, live: TerminalScreen(output, live=live, ansi=True, columns=80, lines=30),
-        ):
-            quota.watch(1)
-
-        self.assertIn(ALT_SCREEN_ON, stream.value)
-        self.assertIn(ALT_SCREEN_OFF, stream.value)
-        self.assertIn(CURSOR_SHOW, stream.value)
-        sleep.assert_called_once_with(1)
-
-    @patch.object(quota.time, "sleep")
-    @patch.object(quota, "get_snapshot")
-    def test_watch_exits_when_native_refresh_can_no_longer_clear(self, get_snapshot, sleep):
-        get_snapshot.return_value = Snapshot(results=[sample_result()], fetched_at=1.0, from_cache=False)
-        stream = FakeStream(True)
-
-        class FailingScreen:
-            live = True
-            color = False
-            width = 80
-            height = 30
-
-            def __init__(self, output, live):
-                self.output = output
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, traceback):
-                return False
-
-            def draw(self, frame):
-                return False
-
-        with patch.object(quota.sys, "stdout", stream), patch("quota.TerminalScreen", FailingScreen):
-            quota.watch(1)
-
-        get_snapshot.assert_not_called()
-        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

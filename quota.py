@@ -1,6 +1,5 @@
 import argparse
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -9,23 +8,15 @@ if str(ROOT) not in sys.path:
 
 from lib import config
 from lib.add import add_api_key, add_from_env, add_interactive, add_json, add_local, print_accounts, remove
-from lib.models import AUTH_RULES, Account, QuotaResult
-from lib.render import render, render_loading
+from lib.models import AUTH_RULES
 from lib.shell import run_shell
-from lib.snapshot import get_snapshot
 from lib.store import accounts_path
-from lib.terminal import TerminalScreen
 
 
 def main():
     config.apply_config_env()
-    parser = argparse.ArgumentParser(description="轻量终端额度看板")
+    parser = argparse.ArgumentParser(description="AI 额度看板（Web UI / 悬浮窗）")
     sub = parser.add_subparsers(dest="command")
-
-    show = sub.add_parser("show", help="查询额度")
-    show.add_argument("--watch", type=int, default=0, metavar="SEC")
-    show.add_argument("--once", action="store_true")
-    show.add_argument("--force", action="store_true", help="忽略共享快照并立即联网刷新")
 
     add = sub.add_parser("add", help="添加账号")
     add.add_argument("provider", nargs="?", choices=list(AUTH_RULES.keys()))
@@ -52,9 +43,6 @@ def main():
     remove_cmd = sub.add_parser("remove", help="删除本地账号")
     remove_cmd.add_argument("account_id")
 
-    parser.add_argument("--watch", type=int, default=0, metavar="SEC")
-    parser.add_argument("--once", action="store_true")
-    parser.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if args.command == "add":
@@ -100,62 +88,7 @@ def main():
         from lib.float_win import serve_float
         serve_float()
         return
-    if args.command == "show" or args.once or args.watch:
-        interval = args.watch
-        if args.once:
-            interval = 0
-        elif interval <= 0:
-            interval = config.load_config()["watch_seconds"]
-        watch(interval, force=bool(getattr(args, "force", False)))
-        return
-    run_shell(watch)
-
-
-def watch(interval: int, force: bool = False):
-    try:
-        with TerminalScreen(sys.stdout, live=interval > 0) as screen:
-            # A redirected stream cannot be updated in place. Emit one clean snapshot
-            # instead of appending forever to a file or IDE output panel.
-            if interval > 0 and not screen.live:
-                interval = 0
-            if screen.live and not screen.draw(render_loading(width=screen.width, color=screen.color)):
-                return
-            force_next = force
-            while True:
-                shared = get_snapshot(force=force_next)
-                force_next = False
-                results = shared.results
-                present = {item.account.provider for item in results}
-                for provider, rule in AUTH_RULES.items():
-                    if provider not in present:
-                        results.append(
-                            QuotaResult(
-                                account=Account(provider=provider, label=rule["title"], source="-", identity="-"),
-                                ok=False,
-                                title=rule["title"],
-                                error="未找到认证，可在菜单里添加",
-                            )
-                        )
-                footer = f"↻ 每 {interval}s 自动刷新  ·  Ctrl+C 返回" if interval > 0 else ""
-                snapshot_state = "stale" if shared.stale else "cache" if shared.from_cache else "fresh"
-                frame = render(
-                    results,
-                    width=screen.width,
-                    color=screen.color,
-                    compact=bool(interval > 0 and screen.height < 38),
-                    footer=footer,
-                    updated_at=shared.fetched_at,
-                    snapshot_state=snapshot_state,
-                )
-                if not screen.draw(frame):
-                    return
-                if interval <= 0:
-                    return
-                time.sleep(interval)
-    except KeyboardInterrupt:
-        return
-    except BrokenPipeError:
-        return
+    run_shell()
 
 
 def _handle_add(args):

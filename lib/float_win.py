@@ -1,5 +1,7 @@
+import base64
 import ctypes
 import json
+import shutil
 import subprocess
 import sys
 import threading
@@ -12,6 +14,7 @@ import webview
 from . import config
 from .render import _reset_text
 from .snapshot import get_snapshot
+from .store import store_dir
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _GWL_EXSTYLE = -20
@@ -245,6 +248,44 @@ def _set_topmost(window, on_top: bool) -> None:
         pass
 
 
+_BG_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+_BG_LIMIT = 30 * 1024 * 1024
+
+
+def _bg_find() -> Path | None:
+    for suffix in _BG_MIME:
+        candidate = store_dir() / f"float-bg{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _bg_data_url() -> str:
+    path = _bg_find()
+    if not path:
+        return ""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return ""
+    return f"data:{_BG_MIME[path.suffix.lower()]};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def _bg_clear() -> None:
+    for suffix in _BG_MIME:
+        try:
+            (store_dir() / f"float-bg{suffix}").unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 class Api:
     def __init__(self):
         self._window: webview.Window | None = None
@@ -285,6 +326,57 @@ class Api:
     def set_alpha(self, percent):
         if self._window:
             _set_alpha(self._window, int(percent))
+        return {"ok": True}
+
+    def background(self):
+        return {"data_url": _bg_data_url() or None}
+
+    def pick_background(self):
+        if not self._window:
+            return {"ok": False, "error": "窗口未就绪"}
+        holder: dict = {}
+        done = threading.Event()
+
+        def _open():
+            try:
+                holder["paths"] = self._window.create_file_dialog(
+                    webview.OPEN_DIALOG,
+                    allow_multiple=False,
+                    file_types=("图片文件 (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.bmp)",),
+                )
+            except Exception as exc:
+                holder["error"] = str(exc)
+            finally:
+                done.set()
+
+        try:
+            from System import Action
+
+            self._window.native.BeginInvoke(Action(_open))
+        except Exception:
+            _open()
+        if not done.wait(600):
+            return {"ok": False, "error": "文件选择超时"}
+        if holder.get("error"):
+            return {"ok": False, "error": f"打开文件选择框失败: {holder['error']}"}
+        paths = holder.get("paths") or ()
+        if not paths:
+            return {"ok": False, "cancelled": True}
+        source = Path(paths[0])
+        suffix = source.suffix.lower()
+        if suffix not in _BG_MIME:
+            return {"ok": False, "error": "不支持的图片格式"}
+        try:
+            if source.stat().st_size > _BG_LIMIT:
+                return {"ok": False, "error": "图片超过 30MB"}
+            _bg_clear()
+            shutil.copyfile(source, store_dir() / f"float-bg{suffix}")
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "data_url": _bg_data_url()}
+
+    def clear_background(self):
+        _bg_clear()
         return {"ok": True}
 
     def _nc_action(self, hit: int, x, y, after=None) -> dict:

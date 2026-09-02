@@ -7,22 +7,21 @@ description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cur
 
 路径：`C:\Users\Administrator\quota-cli\quota.py`
 
-人用：终端执行 `quota` 进入菜单。加号/OAuth 用 `quota ui` 打开本机网页。
+人用：终端执行 `quota` 进入启动菜单（仅两个入口：打开 Web UI、悬浮窗）。加号/OAuth 用 `quota ui` 打开本机网页。
 
 ```
 quota
 quota ui
-quota show --once
-quota show --once --force  # 仅在用户明确要求立即联网时使用
-quota float      # 桌面悬浮窗（托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度）
+quota float      # 桌面悬浮窗（托盘图标，任务栏无显示，可拖动/缩放/置顶/调透明度/自定义背景图）
 ```
 
-Agent 用一次性命令，不要进交互菜单。
+终端没有查询命令；Agent 一律走本机 Web API（先 `quota ui` 启动），不要进交互菜单。
 
 ## 查询
 
 ```
-python C:\Users\Administrator\quota-cli\quota.py show --once
+curl http://127.0.0.1:18765/api/quota
+curl "http://127.0.0.1:18765/api/quota?force=1"  # 仅在用户明确要求立即联网时使用
 ```
 
 ## 账号
@@ -74,7 +73,7 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 
 OpenAI 重置次数要区分两个字段：`available_count` 是总剩余，`applicable_available_count` 是当前可使用数。只有二者都大于 0、HTTP API 收到 `confirmed:true` 后，后端才允许调用消费端点；状态缺失或当前可用为 0 时一律 fail closed，不调用消费接口。
 
-CLI、Web UI、悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。跨进程锁把同一周期的并发请求合并为一次联网刷新，手动刷新或 `--force` 才绕过正常缓存周期；快照不写入任何认证密钥。
+Web UI 与悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。跨进程锁把同一周期的并发请求合并为一次联网刷新，界面手动刷新或 API 的 `?force=1` 才绕过正常缓存周期；快照不写入任何认证密钥。
 
 ## Cursor 两套票（不能混用）
 
@@ -90,7 +89,7 @@ CLI、Web UI、悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。
 
 ## 写入 harness
 
-菜单 8、Web UI 账号卡「写入到…」、或 `/api/provision`：从 agent.db 选账号 → 选目标 → 冲突时询问 → 写入。写入前自动刷新令牌、自动备份目标文件、记录 provisions 历史表。
+Web UI 账号卡「写入到…」或 `/api/provision`：从 agent.db 选账号 → 选目标 → 冲突时询问 → 写入。写入前自动刷新令牌、自动备份目标文件、记录 provisions 历史表。
 
 | harness | 位置 | 支持 provider |
 | --- | --- | --- |
@@ -124,6 +123,6 @@ python C:\Users\Administrator\quota-cli\quota.py env CURSOR_API_KEY <value> --us
 ## 规则
 
 - 不要把密钥写进回复
-- 查额度用 `show --once`
+- 查额度用 `/api/quota`（先 `quota ui` 启动）
 - 不要替用户调用 `/api/reset`；只有用户明确要求消费并再次确认时才可提交 `confirmed:true`
 - 缺认证先 `add` 或 `env`，不要改 Cockpit/OpenCode 源码

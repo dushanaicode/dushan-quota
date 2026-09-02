@@ -9,7 +9,6 @@ from unittest.mock import patch
 from lib import discover, float_win, web
 from lib.models import Account, QuotaResult, Window
 from lib.providers import openai
-from lib.render import _profile_lines
 from lib.snapshot import Snapshot
 
 
@@ -330,52 +329,6 @@ class OpenAISubscriptionTests(unittest.TestCase):
 
         for field in ("sub_start", "sub_end", "sub_status"):
             self.assertEqual(web_item[field], float_item[field])
-
-    def test_cli_profile_shows_subscription_dates(self):
-        result = QuotaResult(
-            account=self.account,
-            ok=True,
-            title="OpenAI",
-            plan="OpenAI (Pro)",
-            sub_start="2030-01-02T03:04:05+00:00",
-            sub_end="2030-02-03T04:05:06+00:00",
-            sub_status="known",
-        )
-
-        output = "\n".join(_profile_lines(result))
-
-        self.assertIn("2030-01-02", output)
-        self.assertIn("2030-02-03", output)
-
-    def test_cli_profile_never_renders_unavailable_subscription_as_zero(self):
-        result = QuotaResult(
-            account=self.account,
-            ok=True,
-            title="OpenAI",
-            plan="OpenAI (Pro)",
-            sub_status="unavailable",
-        )
-
-        output = "\n".join(_profile_lines(result))
-
-        self.assertIn("信息暂未取得", output)
-        self.assertNotIn(" 0", output)
-
-    def test_cli_profile_shows_expired_history_without_unknown_start(self):
-        result = QuotaResult(
-            account=self.account,
-            ok=True,
-            title="OpenAI",
-            plan="OpenAI (Free)",
-            sub_end="2020-03-04T05:06:07+00:00",
-            sub_status="expired",
-        )
-
-        output = "\n".join(_profile_lines(result))
-
-        self.assertIn("历史订阅已到期", output)
-        self.assertIn("2020-03-04", output)
-        self.assertNotIn("暂不可获取", output)
 
 
 if __name__ == "__main__":

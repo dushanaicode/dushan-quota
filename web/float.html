@@ -11,8 +11,13 @@
     height:100vh;
     display:flex; flex-direction:column;
     overflow:hidden;
-    position:relative;
+    position:relative; z-index:1;
   }
+  #bg, #scrim { position:fixed; inset:0; z-index:0; pointer-events:none; display:none; }
+  #bg { background-size:cover; background-position:center; }
+  body.bg #bg { display:block; }
+  body.bg #scrim { display:block; }
+  body.bg #panel { background:transparent; }
   .rs {
     position:absolute; right:0; bottom:0; width:18px; height:18px;
     cursor:nwse-resize; z-index:5;
@@ -34,9 +39,10 @@
   .hdr b { font-size:12.5px; font-weight:600; letter-spacing:.5px; }
   .status { min-width:0; max-width:92px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#77839a; font-size:9px; }
   .hdr .sp { flex:1; }
-  .ico { display:inline-flex; align-items:center; justify-content:center; cursor:pointer; opacity:.45; font-size:11px; line-height:1; padding:2px 3px; border-radius:5px; }
+  .ico { display:inline-flex; align-items:center; justify-content:center; cursor:pointer; opacity:.45; font-size:11px; line-height:1; padding:2px 3px; border-radius:5px; transition:opacity .15s, transform .1s; }
+  .ico:active { transform:scale(.85); }
   .ico:hover { opacity:1; background:rgba(255,255,255,.10); }
-  .ico.on { opacity:1; background:rgba(110,168,254,.25); }
+  .ico.on { opacity:1; }
   .ico.loading { opacity:1; pointer-events:none; animation:spin .7s linear infinite; }
   #panel.refreshed { animation:flash .55s ease-out; }
   @keyframes spin { to { transform:rotate(360deg); } }
@@ -70,14 +76,22 @@
     background:rgba(255,255,255,.05); border-radius:10px;
   }
   #cfg .sec { font-size:10px; color:#7d89a0; margin:4px 0 2px; }
-  #cfg label { display:flex; justify-content:space-between; align-items:center; font-size:10.5px; color:#a7b2c6; padding:2.5px 0; cursor:pointer; }
-  #cfg label:hover { color:#e2e9f4; }
-  #cfg input[type=checkbox] { accent-color:#6ea8fe; width:13px; height:13px; }
+  #pick { display:flex; flex-wrap:wrap; gap:5px; padding:3px 0 1px; }
+  .chip { font-size:10px; padding:2.5px 9px; border-radius:99px; background:rgba(255,255,255,.06); color:#77839a; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
+  .chip:hover { color:#c8d2e2; background:rgba(255,255,255,.12); }
+  .chip.on { color:#e6ecf5; background:rgba(255,255,255,.18); }
+  .chip:active { transform:scale(.94); }
   #cfg input[type=range] { width:100%; accent-color:#6ea8fe; height:14px; }
   .albl { display:flex; justify-content:space-between; font-size:10.5px; color:#a7b2c6; margin-bottom:1px; }
+  .bgrow { display:flex; gap:8px; padding:3px 0 2px; }
+  .bgbtn { flex:1; text-align:center; font-size:10.5px; color:#a7b2c6; background:rgba(255,255,255,.07); border-radius:7px; padding:4px 0; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
+  .bgbtn:hover { color:#e2e9f4; background:rgba(255,255,255,.14); }
+  .bgbtn:active { transform:scale(.96); }
 </style>
 </head>
 <body>
+<div id="bg"></div>
+<div id="scrim"></div>
 <div id="panel">
   <div class="hdr" id="hdr">
     <span class="dot" id="stateDot"></span><b>Quota</b><span class="status" id="status" title="">准备中</span><span class="sp"></span>
@@ -88,15 +102,25 @@
   </div>
   <div id="body"><div id="list"><div class="txt" style="padding:6px 0">加载中…</div></div></div>
   <div id="cfg">
+    <div class="sec">窗口</div>
     <div class="albl"><span>不透明度</span><span id="aVal">82%</span></div>
     <input type="range" id="alphaR" min="20" max="100">
+    <div class="sec">背景图片</div>
+    <div class="bgrow">
+      <span class="bgbtn" id="bgPick">选择图片…</span>
+      <span class="bgbtn" id="bgClear" style="display:none">清除背景</span>
+    </div>
+    <div id="bgDimWrap" style="display:none">
+    <div class="albl"><span>背景压暗</span><span id="bgDimVal">55%</span></div>
+    <input type="range" id="bgDimR" min="0" max="90">
+    </div>
     <div class="sec">显示内容</div>
     <div id="pick"></div>
   </div>
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55 };
 let cache = [];
 let api = null;
 let refreshing = false;
@@ -146,13 +170,13 @@ function render(items){
 
 function buildPick(){
   const names = [...new Set(cache.map(i=>i.title))];
-  $('pick').innerHTML =
-    names.map(n=>`<label><span>${esc(n)}</span><input type="checkbox" data-n="${esc(n)}" ${S.show[n]!==false?'checked':''}></label>`).join('')
-    + `<label><span>邮箱</span><input type="checkbox" data-n="#email" ${S.show['#email']!==false?'checked':''}></label>`
-    + `<label><span>套餐</span><input type="checkbox" data-n="#plan" ${S.show['#plan']!==false?'checked':''}></label>`;
-  $('pick').querySelectorAll('input').forEach(el=>{
-    el.onchange = ()=>{
-      S.show[el.dataset.n] = el.checked;
+  const chips = names.map(n=>[n,n]).concat([['#email','邮箱'],['#plan','套餐']]);
+  $('pick').innerHTML = chips.map(([k,label])=>`<span class="chip" data-n="${esc(k)}">${esc(label)}</span>`).join('');
+  $('pick').querySelectorAll('.chip').forEach(el=>{
+    el.classList.toggle('on', S.show[el.dataset.n]!==false);
+    el.onclick = ()=>{
+      S.show[el.dataset.n] = S.show[el.dataset.n]===false;
+      el.classList.toggle('on', S.show[el.dataset.n]!==false);
       save(); render(cache);
     };
   });
@@ -206,6 +230,14 @@ function applyAlpha(){
   $('alphaR').value = S.alpha;
   try{ api.set_alpha(S.alpha); }catch(e){}
 }
+function applyScrim(){ $('scrim').style.background = `rgba(16,19,26,${(S.bg_dim||0)/100})`; }
+function applyBackground(dataUrl){
+  const has = !!dataUrl;
+  document.body.classList.toggle('bg', has);
+  $('bgClear').style.display = has ? '' : 'none';
+  $('bgDimWrap').style.display = has ? '' : 'none';
+  if(has){ $('bg').style.backgroundImage = `url("${dataUrl}")`; applyScrim(); }
+}
 function paintPin(){ $('tPin').classList.toggle('on', !!S.on_top); }
 
 let inited = false;
@@ -228,6 +260,23 @@ async function init(){
   };
   $('alphaR').oninput = e=>{ S.alpha = +e.target.value; applyAlpha(); };
   $('alphaR').onchange = ()=>save();
+
+  $('bgDimVal').textContent = S.bg_dim + '%';
+  $('bgDimR').value = S.bg_dim;
+  $('bgDimR').oninput = e=>{ S.bg_dim = +e.target.value; $('bgDimVal').textContent = S.bg_dim + '%'; applyScrim(); };
+  $('bgDimR').onchange = ()=>save();
+  $('bgPick').onclick = async ()=>{
+    try{
+      const r = await api.pick_background();
+      if(r && r.ok) applyBackground(r.data_url);
+      else if(r && r.error) setRefreshState(r.error, 'error', r.error);
+    }catch(e){}
+  };
+  $('bgClear').onclick = async ()=>{
+    try{ await api.clear_background(); }catch(e){}
+    applyBackground(null);
+  };
+  try{ const b = await api.background(); if(b && b.data_url) applyBackground(b.data_url); }catch(e){}
 
   // 按下标题栏 → 系统原生接管拖动（可跨屏）；必须把按下时的坐标传过去，
   // 桥有延迟，Python 侧再用当前光标会算错抓取点
