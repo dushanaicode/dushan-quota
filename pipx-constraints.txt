@@ -1,0 +1,2 @@
+# Keep pipx's shared installer on the Windows-tested TLS stack.
+pip==25.2

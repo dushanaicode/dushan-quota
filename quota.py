@@ -1,5 +1,8 @@
 import argparse
+import os
+import shutil
 import sys
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -13,8 +16,21 @@ from lib.store import accounts_path
 
 
 GITHUB_URL = "https://github.com/dushanaicode/dushan-quota"
-INSTALL_COMMAND = "pipx install dushan-quota"
-UPGRADE_COMMAND = "pipx upgrade dushan-quota"
+PYPI_URL = "https://pypi.org/project/dushan-quota/"
+WEB_URL = "http://127.0.0.1:18765/"
+PIPX_VERSION = "1.8.0"
+PIP_VERSION = "25.2"
+PIPX_CONSTRAINT_URL = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
+UPGRADE_COMMAND = f'pipx upgrade --pip-args="--constraint {PIPX_CONSTRAINT_URL}" dushan-quota'
+
+_RESET = "\033[0m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_VIOLET = "\033[38;5;141m"
+_CYAN = "\033[38;5;81m"
+_GREEN = "\033[38;5;78m"
+_YELLOW = "\033[38;5;221m"
+_GRAY = "\033[38;5;245m"
 
 
 def main():
@@ -108,13 +124,96 @@ def _current_version() -> str:
     return current_version()
 
 
-def _print_banner(version: str, output=print) -> None:
-    output("+-- Dushan Quota -----------------------------------------")
-    output(f"| 版本    v{version}")
-    output(f"| GitHub  {GITHUB_URL}")
-    output(f"| 安装    {INSTALL_COMMAND}")
-    output(f"| 升级    {UPGRADE_COMMAND}")
-    output("+---------------------------------------------------------")
+def _print_banner(version: str, output=print, *, color: bool | None = None, width: int | None = None) -> None:
+    color = _color_enabled() if color is None else color
+    columns = shutil.get_terminal_size((76, 24)).columns
+    width = max(48, min(76, width or columns - 2))
+    body_width = width - 6
+    brand = "◆  DUSHAN QUOTA"
+    release = f"v{version}  STABLE"
+    gap = " " * max(1, body_width - _cell_width(brand) - _cell_width(release))
+    border = lambda text: _paint(text, _GRAY, color)
+
+    output(border("╭" + "─" * (width - 2) + "╮"))
+    output(
+        border("│")
+        + "  "
+        + _paint(brand, _BOLD + _VIOLET, color)
+        + gap
+        + _paint(release, _BOLD + _CYAN, color)
+        + "  "
+        + border("│")
+    )
+    output(_panel_text("本地 AI 额度看板  ·  Web + 桌面悬浮窗", width, color, _DIM))
+    output(border("├" + "─" * (width - 2) + "┤"))
+    output(_panel_row("GitHub", GITHUB_URL.removeprefix("https://"), width, color))
+    output(_panel_row("PyPI", PYPI_URL.removeprefix("https://"), width, color))
+    output(_panel_row("Web UI", WEB_URL, width, color))
+    output(_panel_row("工具链", f"pipx {PIPX_VERSION} · pip {PIP_VERSION}", width, color))
+    output(_panel_row("更新", "启动时检查 · 由你决定是否升级", width, color))
+    output(border("╰" + "─" * (width - 2) + "╯"))
+
+
+def _panel_text(text: str, width: int, color: bool, style: str = "") -> str:
+    body = _fit_cells(text, width - 6)
+    padding = " " * max(0, width - 6 - _cell_width(body))
+    return _paint("│", _GRAY, color) + "  " + _paint(body, style, color) + padding + "  " + _paint("│", _GRAY, color)
+
+
+def _panel_row(label: str, value: str, width: int, color: bool) -> str:
+    label_width = 8
+    padded_label = label + " " * max(0, label_width - _cell_width(label))
+    value = _fit_cells(value, width - 6 - label_width - 1)
+    body = padded_label + " " + value
+    padding = " " * max(0, width - 6 - _cell_width(body))
+    return (
+        _paint("│", _GRAY, color)
+        + "  "
+        + _paint(padded_label, _CYAN, color)
+        + " "
+        + value
+        + padding
+        + "  "
+        + _paint("│", _GRAY, color)
+    )
+
+
+def _status(kind: str, label: str, message: str, output=print, *, color: bool | None = None) -> None:
+    color = _color_enabled() if color is None else color
+    symbol, tone = {
+        "ok": ("●", _GREEN),
+        "warn": ("▲", _YELLOW),
+        "info": ("◆", _CYAN),
+        "muted": ("•", _GRAY),
+    }[kind]
+    padded_label = label + " " * max(0, 8 - _cell_width(label))
+    output("  " + _paint(symbol, tone, color) + " " + _paint(padded_label, _BOLD, color) + " " + message)
+
+
+def _paint(text: str, style: str, enabled: bool) -> str:
+    return f"{style}{text}{_RESET}" if enabled and style else text
+
+
+def _cell_width(text: str) -> int:
+    return sum(0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1 for char in text)
+
+
+def _fit_cells(text: str, width: int) -> str:
+    if _cell_width(text) <= width:
+        return text
+    kept = []
+    used = 0
+    for char in text:
+        size = 0 if unicodedata.combining(char) else 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+        if used + size + 1 > width:
+            break
+        kept.append(char)
+        used += size
+    return "".join(kept) + "…"
+
+
+def _color_enabled() -> bool:
+    return bool(sys.stdout.isatty() and not os.environ.get("NO_COLOR"))
 
 
 def _startup_update(
@@ -127,57 +226,57 @@ def _startup_update(
 ) -> bool:
     version = version or _current_version()
     _print_banner(version, output)
-    output("正在检查 GitHub Release...")
+    _status("info", "更新", "正在检查 GitHub Release...", output)
     if update_result is None:
         from lib.web import _update_payload
 
         update_result = _update_payload()
     if not update_result.get("ok"):
-        output(f"[!] 更新检查暂时不可用：{update_result.get('error') or '未知错误'}")
+        _status("warn", "更新", f"暂时不可用：{update_result.get('error') or '未知错误'}", output)
         return True
     latest = str(update_result.get("latest_version") or "").strip()
     if not update_result.get("update_available"):
-        output(f"[OK] {update_result.get('message') or f'当前已是最新版本 v{version}'}")
+        _status("ok", "更新", update_result.get("message") or f"当前已是最新版本 v{version}", output)
         return True
 
     cfg = config.load_config()
     if latest and cfg.get("ignored_update_version") == latest:
-        output(f"- 已永久跳过 v{latest}；发现更高版本时仍会提醒。")
+        _status("muted", "更新", f"已永久跳过 v{latest}；发现更高版本时仍会提醒。", output)
         return True
 
-    output(f"[!] 发现新版本 v{latest}（当前 v{version}）")
+    _status("warn", "更新", f"发现新版本 v{latest}（当前 v{version}）", output)
     if interactive is None:
         interactive = bool(sys.stdin.isatty() and sys.stdout.isatty())
     if not interactive:
-        output(f"  升级命令：{UPGRADE_COMMAND}")
+        output(f"\n  升级命令\n  {UPGRADE_COMMAND}\n")
         return True
 
     ask = input_fn or input
     while True:
         choice = ask("[1] 升级  [2] 本次跳过  [3] 永久跳过此版本（默认 2）：").strip().lower()
         if choice in {"1", "u", "upgrade", "升级"}:
-            output("请先关闭正在运行的悬浮窗，然后执行：")
-            output(f"  {UPGRADE_COMMAND}")
+            output("\n请先关闭正在运行的悬浮窗，然后执行：")
+            output(f"  {UPGRADE_COMMAND}\n")
             return False
         if choice in {"", "2", "s", "skip", "跳过"}:
-            output("- 已跳过本次提醒，继续启动。")
+            _status("muted", "更新", "已跳过本次提醒，继续启动。", output)
             return True
         if choice in {"3", "n", "never", "永久"}:
             cfg["ignored_update_version"] = latest
             try:
                 config.save_config(cfg)
             except OSError as error:
-                output(f"[!] 无法保存跳过设置：{error}")
+                _status("warn", "更新", f"无法保存跳过设置：{error}", output)
             else:
-                output(f"- 已永久跳过 v{latest}；未来更高版本仍会提醒。")
+                _status("muted", "更新", f"已永久跳过 v{latest}；未来更高版本仍会提醒。", output)
             return True
         output("请输入 1、2 或 3。")
 
 
 def _print_launch_summary(started: bool, output=print) -> None:
-    output(f"[OK] 悬浮窗：{'已启动' if started else '已在运行'}")
-    output("  Web UI：http://127.0.0.1:18765/")
-    output("  点击悬浮窗标题栏可打开 Web 配置页；关闭悬浮窗后，本地 Web 服务也会一起停止。")
+    _status("ok", "桌面", f"悬浮窗{'已启动' if started else '已在运行'}", output)
+    _status("info", "Web UI", WEB_URL, output)
+    _status("muted", "提示", "点击悬浮窗标题栏打开 Web 配置；关闭窗口后服务也会停止。", output)
 
 
 def _configure_stdio() -> None:
@@ -186,6 +285,16 @@ def _configure_stdio() -> None:
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    if os.name == "nt" and sys.stdout.isatty():
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.GetStdHandle(-11)
+            mode = ctypes.c_uint()
+            if ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                ctypes.windll.kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+        except Exception:
+            pass
 
 
 def _handle_add(args):

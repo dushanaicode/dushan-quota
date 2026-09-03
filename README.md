@@ -22,26 +22,28 @@ Dushan Quota 是个小巧的本地 AI 额度看板。它会找到本机已有的
 
 ## 快速安装
 
-Windows 还没有 [pipx](https://pipx.pypa.io/) 的话，先执行一次：
+Windows 推荐使用经过验证的 pipx 1.8.0，并固定它的共享 pip 版本：
 
 ```powershell
-py -m pip install --user pipx
+py -m pip install --user "pipx==1.8.0"
 py -m pipx ensurepath --prepend
 ```
 
 重新打开终端后，安装并启动：
 
-```bash
-pipx install dushan-quota
+```powershell
+$constraint = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
+pipx install --pip-args="--constraint $constraint" dushan-quota
 quota
 ```
 
 `quota` 会先显示当前版本和 GitHub 地址，再检查最新 Release。发现新版本时，可以查看升级命令、本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。
 
-升级也是一行：
+升级也使用同一份稳定约束：
 
-```bash
-pipx upgrade dushan-quota
+```powershell
+$constraint = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
+pipx upgrade --pip-args="--constraint $constraint" dushan-quota
 ```
 
 <details>
@@ -52,11 +54,12 @@ pipx upgrade dushan-quota
 ```text
 请用 pipx 安装并验证 Dushan Quota：
 
-1. 如果没有 pipx，先按当前系统的官方方式安装并配置 PATH。
-2. 执行 pipx install dushan-quota。
-3. 执行 quota config，确认命令和数据目录正常。
-4. 执行 quota ui，确认页面可以打开。
-5. 不要输出任何 Key、Token 或账号凭证。
+1. 执行 py -m pip install --user "pipx==1.8.0"。
+2. 执行 py -m pipx ensurepath --prepend，并按提示重新打开终端。
+3. 使用 https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt 作为 pip constraint，执行 pipx install 安装 dushan-quota。
+4. 执行 quota config，确认命令和数据目录正常。
+5. 执行 quota ui，确认页面可以打开。
+6. 不要输出任何 Key、Token 或账号凭证。
 
 完成后告诉我 quota 的实际路径和验证结果。
 ```
@@ -189,11 +192,7 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 
 ## 升级与开发
 
-普通用户升级也是一行：
-
-```bash
-pipx upgrade dushan-quota
-```
+普通用户使用“快速安装”里的稳定升级命令即可。
 
 想改源码的话，克隆仓库、装好依赖，再跑测试就行：
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dushan-quota"
-version = "0.1.1"
+version = "0.1.2"
 description = "本地优先的 AI 账号额度看板：Web UI + 桌面悬浮窗，统一查看 Grok/OpenAI/Claude/Zhipu/Kimi/DeepSeek/Antigravity/Cursor 额度并写入各 IDE/CLI"
 readme = "README.md"
 requires-python = ">=3.10"

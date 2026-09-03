@@ -17,12 +17,23 @@ class CliStartupTests(unittest.TestCase):
 
         self.assertTrue(proceed)
         text = "\n".join(lines)
-        self.assertIn("Dushan Quota", text)
-        self.assertIn("版本    v0.1.1", text)
-        self.assertIn(quota.GITHUB_URL, text)
-        self.assertIn(quota.INSTALL_COMMAND, text)
-        self.assertIn(quota.UPGRADE_COMMAND, text)
+        self.assertIn("DUSHAN QUOTA", text)
+        self.assertIn("v0.1.1", text)
+        self.assertIn(quota.GITHUB_URL.removeprefix("https://"), text)
+        self.assertIn(quota.PYPI_URL.removeprefix("https://"), text)
+        self.assertIn(quota.WEB_URL, text)
+        self.assertIn(f"pipx {quota.PIPX_VERSION} · pip {quota.PIP_VERSION}", text)
         self.assertIn("已是最新版本", text)
+
+    def test_banner_supports_color_without_changing_layout_text(self):
+        lines = []
+
+        quota._print_banner("0.1.2", lines.append, color=True, width=68)
+
+        text = "\n".join(lines)
+        self.assertIn("\033[", text)
+        self.assertIn("╭", text)
+        self.assertIn("DUSHAN QUOTA", text)
 
     def test_upgrade_choice_prints_command_and_stops_launch(self):
         lines = []
@@ -78,7 +89,7 @@ class CliStartupTests(unittest.TestCase):
 
         quota._print_launch_summary(True, lines.append)
 
-        self.assertIn("悬浮窗：已启动", lines[0])
+        self.assertIn("悬浮窗已启动", lines[0])
         self.assertIn("http://127.0.0.1:18765/", lines[1])
 
 
