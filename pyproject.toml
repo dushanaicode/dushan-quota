@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ai-quota-cli"
+name = "dushan-quota"
 version = "0.1.0"
 description = "本地优先的 AI 账号额度看板：Web UI + 桌面悬浮窗，统一查看 Grok/OpenAI/Claude/Zhipu/Kimi/DeepSeek/Antigravity/Cursor 额度并写入各 IDE/CLI"
 readme = "README.md"

@@ -108,7 +108,7 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 
 ```bash
 # 发布到 PyPI 后
-pipx install ai-quota-cli
+pipx install dushan-quota
 
 # 或从克隆的仓库目录安装
 pipx install .
@@ -226,7 +226,7 @@ Quota CLI 当前采用“克隆源码到长期保留目录后安装”的本机�
 
 - Dockerfile / Docker Compose
 - 独立 EXE、DMG、AppImage
-- Homebrew、Winget 等安装包（PyPI 包 `ai-quota-cli` 的打包配置已就绪，发布后即可 `pipx install ai-quota-cli`）
+- Homebrew、Winget 等安装包（PyPI 包 `dushan-quota` 的打包配置已就绪，发布后即可 `pipx install dushan-quota`）
 - Nginx、公网鉴权或 TLS 配置
 
 因此，不要把 Web UI 直接部署成公开服务。服务器场景用 `quota ui-run` 在本机起服务，再用 SSH 端口转发访问（`ssh -L 18765:127.0.0.1:18765`），凭证与数据仍放在运行用户自己的数据目录中。
