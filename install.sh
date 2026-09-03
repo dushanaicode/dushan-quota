@@ -45,14 +45,6 @@ case ":$PATH:" in
     ;;
 esac
 
-SKILL_SRC="$ROOT/skills/dushan-quota/SKILL.md"
-SKILL_DST="${HOME}/.config/opencode/skills/dushan-quota"
-if [ -f "$SKILL_SRC" ]; then
-  mkdir -p "$SKILL_DST"
-  cp "$SKILL_SRC" "$SKILL_DST/SKILL.md"
-  echo "Skill copied to $SKILL_DST"
-fi
-
 export PATH="$BINDIR:$PATH"
 echo
 echo "Done. Open a new terminal and run: quota"

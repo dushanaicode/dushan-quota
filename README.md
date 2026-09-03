@@ -18,18 +18,48 @@
   <img src=".image/web-dashboard.png" width="100%" alt="Dushan Quota Web 额度总览">
 </p>
 
-Dushan Quota 是一个本地优先的 AI 账号额度聚合工具。它会发现本机已有登录态和手动添加的 API Key，并行查询各平台的额度、套餐、重置时间与订阅周期，再把结果放进一份共享快照中。
+Dushan Quota 是个小巧的本地 AI 额度看板。它会找到本机已有的登录账号和手动添加的 API Key，把各个平台的额度、套餐和重置时间放到一起看。
 
-你可以把它理解成两部分：
+## 快速安装
+
+已经装好 [pipx](https://pipx.pypa.io/) 的话，一行就够：
+
+```bash
+pipx install dushan-quota
+```
+
+装好后运行 `quota` 打开悬浮窗，或者运行 `quota ui` 直接进 Web 页面。
+
+<details>
+<summary>让本机 Agent 帮你安装</summary>
+
+把下面这段交给本机 Agent：
+
+```text
+请用 pipx 安装并验证 Dushan Quota：
+
+1. 如果没有 pipx，先按当前系统的官方方式安装并配置 PATH。
+2. 执行 pipx install dushan-quota。
+3. 执行 quota config，确认命令和数据目录正常。
+4. 执行 quota ui，确认页面可以打开。
+5. 不要输出任何 Key、Token 或账号凭证。
+
+完成后告诉我 quota 的实际路径和验证结果。
+```
+
+</details>
+
+简单说，它主要干两件事：
 
 - **额度看板**：Web 与悬浮窗双端共用同一份结果，不必来回打开多个客户端；终端只负责启动和管理命令。
 - **凭证分发器**：从本地账号库选择一个账号，写入 OpenCode、OMP、Codex、Claude Code、Cursor 等目标。
 
-> 当前仓库实现了 9 类 Provider 和 10 个写入目标。平台接口可能调整；“代码已支持”不代表所有账号类型都经过真实网络环境验证。
+> 目前接了 9 类 Provider 和 10 个写入目标。平台接口偶尔会变，如果碰到某个账号查不到，欢迎提 Issue。
 
 ## 核心能力
 
-- **双端看板**：Web 适合完整管理，悬浮窗适合桌面常驻（自带默认背景，可换图、可换主题）；终端运行 `quota` 直接启动悬浮窗。
+- **双端看板**：Web 适合完整管理，悬浮窗适合放在桌面上随时看一眼；运行 `quota` 就能打开。
+- **背景随你换**：自带一张默认背景，也可以换成自己喜欢的图片；窗口怎么缩放，图片都会自动铺满。
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
 - **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
 - **更新检查**：Web 顶栏可手动检查 GitHub Release；不会后台联网或自动执行升级命令。
@@ -41,7 +71,7 @@ Dushan Quota 是一个本地优先的 AI 账号额度聚合工具。它会发现
 
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
-| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、背景图（内置默认背景，可换图；cover 自适应任意窗口尺寸）、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
+| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、换成自己喜欢的背景图、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
 | Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号与额度的完整管理 | Provider 筛选、四款主题、添加账号、OAuth、历史恢复、写入 Harness、OpenAI 重置额度、运行日志查看 | 默认仅 `127.0.0.1:18765` |
 
 Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
@@ -95,83 +125,6 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 
 > 多数文件或数据库目标会在覆盖前生成 `.quota-bak`，但 Cursor IDE 当前不会自动备份。写入登录态属于敏感操作，请先确认目标账号和覆盖提示。
 
-## 快速安装
-
-要求：
-
-- Python 3.10+
-- Git
-- Windows 使用悬浮窗时，需要系统可用的 Edge WebView2
-
-### pipx / pip（标准 Python 包）
-
-仓库已是标准 Python 包（`pyproject.toml`），可以不克隆源码直接安装：
-
-```bash
-# 发布到 PyPI 后
-pipx install dushan-quota
-
-# 或从克隆的仓库目录安装
-pipx install .
-```
-
-安装后 `quota` 命令直接进入 PATH，无需 install 脚本。
-
-### Windows
-
-```powershell
-git clone https://github.com/dushanaicode/dushan-quota.git
-cd dushan-quota
-.\install.cmd
-
-# 新开终端后验证
-quota ui
-```
-
-`install.cmd` 会在仓库内创建 `.venv`、安装依赖，并把仓库目录加入当前用户的 `PATH`。
-
-### macOS / Linux
-
-```bash
-git clone https://github.com/dushanaicode/dushan-quota.git
-cd dushan-quota
-sh install.sh
-
-# 新开终端后验证
-quota ui
-```
-
-`install.sh` 会使用当前 `python3` / `python` 安装依赖，在 `~/.local/bin/quota` 创建启动脚本，并尝试把该目录加入 shell profile。启动脚本会指向当前仓库，所以安装后不要随意移动或删除仓库目录。
-
-如果系统 Python 不允许直接安装依赖，可以使用虚拟环境运行：
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-python quota.py ui
-```
-
-<details>
-<summary>让本机 Agent 帮你安装</summary>
-
-把下面内容交给本机 Agent：
-
-```text
-请安装并验证 Dushan Quota：
-
-1. 仓库：https://github.com/dushanaicode/dushan-quota
-2. 确认 Python 3.10+ 可用。
-3. 克隆仓库并进入根目录。
-4. Windows 运行 install.cmd；macOS/Linux 运行 sh install.sh。
-5. 新开终端，执行 quota ui。
-6. 不要修改其他工具源码，不要在回复中输出任何密钥。
-
-完成后只报告 quota 命令的实际路径和验证命令的退出码。
-```
-
-</details>
-
 ## 常用命令
 
 | 命令 | 用途 |
@@ -219,60 +172,24 @@ python quota.py ui
 - 界面只展示脱敏后的 Key；共享快照不会写入 access token、refresh token 或 API Key。
 - OpenAI“重置额度”会消耗一次 reset credit，只有在界面明确确认且服务端状态完整时才会执行。
 
-## 部署、升级与开发
+## 升级与开发
 
-Dushan Quota 当前采用“克隆源码到长期保留目录后安装”的本机部署方式，不是公网服务，也不是容器化应用。
+普通用户升级也是一行：
 
-仓库当前没有提供：
-
-- Dockerfile / Docker Compose
-- 独立 EXE、DMG、AppImage
-- Homebrew、Winget 等安装包（PyPI 包 `dushan-quota` 的打包配置已就绪，发布后即可 `pipx install dushan-quota`）
-- Nginx、公网鉴权或 TLS 配置
-
-因此，不要把 Web UI 直接部署成公开服务。服务器场景用 `quota ui-run` 在本机起服务，再用 SSH 端口转发访问（`ssh -L 18765:127.0.0.1:18765`），凭证与数据仍放在运行用户自己的数据目录中。
-
-升级代码：
-
-```text
-git pull
-
-# Windows
-.\install.cmd
-
-# macOS / Linux
-sh install.sh
+```bash
+pipx upgrade dushan-quota
 ```
 
-本地开发与验证：
+想改源码的话，克隆仓库、装好依赖，再跑测试就行：
 
-```text
-python -m venv .venv
-
-# Windows
-.\.venv\Scripts\python -m pip install -r requirements.txt
-.\.venv\Scripts\python quota.py --help
-.\.venv\Scripts\python -m unittest discover -s tests -v
-
-# macOS / Linux
-./.venv/bin/python -m pip install -r requirements.txt
-./.venv/bin/python quota.py --help
-./.venv/bin/python -m unittest discover -s tests -v
+```bash
+git clone https://github.com/dushanaicode/dushan-quota.git
+cd dushan-quota
+python -m pip install -e .
+python -m unittest discover -s tests -q
 ```
 
 Web 前端位于 `lib/assets/index.html`，悬浮窗页面位于 `lib/assets/float.html`，均为原生 HTML/CSS/JS，不需要前端构建步骤。
-
-## Agent Skill
-
-仓库附带 [`skills/dushan-quota/SKILL.md`](skills/dushan-quota/SKILL.md)。安装脚本会把它复制到 OpenCode 的 `~/.config/opencode/skills/dushan-quota/`；其他 Agent 可以按各自的 Skill 目录规则导入。
-
-Agent 查询额度时建议走本机 Web API（先 `quota ui` 确保服务已启动；服务由悬浮窗进程内嵌提供）：
-
-```bash
-curl http://127.0.0.1:18765/api/quota
-```
-
-只有用户明确要求立即联网时，才使用 `http://127.0.0.1:18765/api/quota?force=1`；不要在日志或回复中输出完整凭证。运行日志可通过 `curl http://127.0.0.1:18765/api/logs` 读取。
 
 ## 免责声明
 
