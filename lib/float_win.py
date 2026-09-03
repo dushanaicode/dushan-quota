@@ -711,32 +711,25 @@ def _float_pid_path() -> Path:
     return store_dir() / "float.pid"
 
 
-def _close_existing_float() -> None:
-    """关掉已有悬浮窗实例。Windows 按窗口标题找；其他平台用 pidfile。"""
+def _activate_existing_float() -> bool:
+    """已有悬浮窗时恢复并置前，避免重复启动把原窗口关掉。"""
     if _is_windows():
         user32 = ctypes.windll.user32
         existing = user32.FindWindowW(None, "Quota")
-        if existing:
-            user32.PostMessageW(existing, 0x0010, 0, 0)  # WM_CLOSE
-            for _ in range(20):
-                if not user32.IsWindow(existing):
-                    break
-                time.sleep(0.05)
-        return
+        if not existing:
+            return False
+        user32.ShowWindow(existing, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(existing)
+        return True
     try:
         pid = int(_float_pid_path().read_text(encoding="ascii").strip())
     except (OSError, ValueError):
-        return
+        return False
     try:
-        os.kill(pid, 15)  # SIGTERM
-        for _ in range(20):
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                break
-            time.sleep(0.05)
+        os.kill(pid, 0)
     except OSError:
-        pass
+        return False
+    return True
 
 
 _WEB_HOST = "127.0.0.1"
@@ -767,7 +760,8 @@ def _start_embedded_web() -> None:
 
 def launch_float() -> bool:
     """以分离进程启动悬浮窗（终端可以随即关闭）。"""
-    _close_existing_float()
+    if _activate_existing_float():
+        return False
     script = Path(__file__).resolve().parent.parent / "quota.py"
     if _is_windows():
         pythonw = Path(sys.executable).with_name("pythonw.exe")

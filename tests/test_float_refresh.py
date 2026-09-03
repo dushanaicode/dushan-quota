@@ -166,6 +166,13 @@ class FloatRefreshTests(unittest.TestCase):
 
         api._window.evaluate_js.assert_called_once_with("refresh(true)")
 
+    @patch.object(float_win.subprocess, "Popen")
+    @patch.object(float_win, "_activate_existing_float", return_value=True)
+    def test_launch_reuses_existing_window(self, activate, popen):
+        self.assertFalse(float_win.launch_float())
+        activate.assert_called_once_with()
+        popen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
