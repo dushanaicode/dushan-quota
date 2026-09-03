@@ -333,11 +333,17 @@ _BG_MIME = {
 _BG_LIMIT = 30 * 1024 * 1024
 
 
+_DEFAULT_BG = Path(__file__).resolve().parent / "assets" / "bg-default.jpg"
+
+
 def _bg_find() -> Path | None:
+    """用户自选背景优先；没有则回退到内置默认背景。"""
     for suffix in _BG_MIME:
         candidate = store_dir() / f"float-bg{suffix}"
         if candidate.is_file():
             return candidate
+    if _DEFAULT_BG.is_file():
+        return _DEFAULT_BG
     return None
 
 

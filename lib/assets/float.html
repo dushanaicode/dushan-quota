@@ -155,7 +155,7 @@
     <div class="sec">背景图片</div>
     <div class="bgrow">
       <span class="bgbtn" id="bgPick">选择图片…</span>
-      <span class="bgbtn" id="bgClear" style="display:none">清除背景</span>
+      <span class="bgbtn" id="bgClear" style="display:none">恢复默认</span>
     </div>
     <div id="bgDimWrap" style="display:none">
     <div class="albl"><span>背景压暗</span><span id="bgDimVal">55%</span></div>
@@ -373,8 +373,11 @@ async function init(){
     }catch(e){}
   };
   $('bgClear').onclick = async ()=>{
-    try{ await api.clear_background(); }catch(e){}
-    applyBackground(null);
+    try{
+      await api.clear_background();
+      const b = await api.background();
+      applyBackground(b && b.data_url);
+    }catch(e){ applyBackground(null); }
   };
   try{ const b = await api.background(); if(b && b.data_url) applyBackground(b.data_url); }catch(e){}
 
