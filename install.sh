@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-echo "=== Quota CLI install ==="
+echo "=== Dushan Quota install ==="
 
 if command -v python3 >/dev/null 2>&1; then
   PY=python3

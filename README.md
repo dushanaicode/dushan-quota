@@ -1,8 +1,8 @@
 <p align="center">
-  <img src=".image/dushan-quota-icon.png" width="120" alt="Quota CLI 图标">
+  <img src=".image/dushan-quota-icon.png" width="120" alt="Dushan Quota 图标">
 </p>
 
-<h1 align="center">Quota CLI</h1>
+<h1 align="center">Dushan Quota</h1>
 
 <p align="center">
   在 Web 和 Windows 桌面悬浮窗里，统一查看多个 AI Provider 的账号额度，并按需写入 IDE 与 Agent Harness。
@@ -15,10 +15,10 @@
 </p>
 
 <p align="center">
-  <img src=".image/web-dashboard.png" width="100%" alt="Quota CLI Web 额度总览">
+  <img src=".image/web-dashboard.png" width="100%" alt="Dushan Quota Web 额度总览">
 </p>
 
-Quota CLI 是一个本地优先的 AI 账号额度聚合工具。它会发现本机已有登录态和手动添加的 API Key，并行查询各平台的额度、套餐、重置时间与订阅周期，再把结果放进一份共享快照中。
+Dushan Quota 是一个本地优先的 AI 账号额度聚合工具。它会发现本机已有登录态和手动添加的 API Key，并行查询各平台的额度、套餐、重置时间与订阅周期，再把结果放进一份共享快照中。
 
 你可以把它理解成两部分：
 
@@ -31,7 +31,7 @@ Quota CLI 是一个本地优先的 AI 账号额度聚合工具。它会发现本
 
 - **双端看板**：Web 适合完整管理，悬浮窗适合桌面常驻（自带默认背景，可换图、可换主题）；终端运行 `quota` 直接启动悬浮窗。
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
-- **共享快照**：Web 与悬浮窗共用 `~/.quota-cli/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
+- **共享快照**：Web 与悬浮窗共用数据目录中的 `quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
@@ -48,7 +48,7 @@ Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之�
 两个界面连接的是同一份本地额度快照：一个界面完成刷新后，另一个界面会复用结果，避免同一周期重复请求 Provider。
 
 <p align="center">
-  <img src=".image/floating-window.png" width="34%" alt="Quota CLI Windows 桌面悬浮窗">
+  <img src=".image/floating-window.png" width="34%" alt="Dushan Quota Windows 桌面悬浮窗">
 </p>
 
 ## 支持的 Provider
@@ -73,7 +73,7 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 
 ## 写入 IDE 与 Agent Harness
 
-这里的 Harness 指 OpenCode、OMP、各官方 CLI / IDE 等认证目标。Quota CLI 不负责安装这些软件，只负责在目标已经存在时写入兼容的凭证。
+这里的 Harness 指 OpenCode、OMP、各官方 CLI / IDE 等认证目标。Dushan Quota 不负责安装这些软件，只负责在目标已经存在时写入兼容的凭证。
 
 先在 Web UI 或悬浮窗里完成一次刷新以收集账号（写入 agent.db），再运行 `quota ui`，在账号卡片点击“写入到…”。
 
@@ -157,7 +157,7 @@ python quota.py ui
 把下面内容交给本机 Agent：
 
 ```text
-请安装并验证 Quota CLI：
+请安装并验证 Dushan Quota：
 
 1. 仓库：https://github.com/dushanaicode/dushan-quota
 2. 确认 Python 3.10+ 可用。
@@ -187,13 +187,13 @@ python quota.py ui
 | `quota rules` | 查看各 Provider 的认证入口 |
 | `quota config` | 查看配置、数据路径与环境变量状态 |
 | `quota env <NAME> <VALUE>` | 把受支持的变量保存到本地配置 |
-| `quota remove <ACCOUNT_ID>` | 删除 dushan-quota 本地账号 |
+| `quota remove <ACCOUNT_ID>` | 删除 Dushan Quota 本地账号 |
 
 命令行中的 Key 可能进入 shell 历史。添加敏感凭证时，更建议使用 `quota add` 交互输入或 `quota ui`。
 
 ## 工作方式
 
-1. **发现账号**：从本机客户端、环境变量和 dushan-quota 本地库收集账号，按身份与 Key 去重。
+1. **发现账号**：从本机客户端、环境变量和 Dushan Quota 本地库收集账号，按身份与 Key 去重。
 2. **并行查询**：按 Provider 调用对应额度接口，最多使用 8 个工作线程。
 3. **共享结果**：结果写入不含密钥的共享快照，Web 与悬浮窗共同读取。
 4. **凭证保鲜**：有 refresh token 的 OAuth 账号会在需要时刷新，并尽可能回写来源。
@@ -201,7 +201,7 @@ python quota.py ui
 
 ## 本地数据与安全边界
 
-默认数据目录是 `~/.quota-cli/`；可以用 `QUOTA_CLI_HOME` 改到其他位置。
+运行 `quota config` 可查看当前数据目录和兼容环境变量配置；项目改名不会迁移或删除现有用户数据。
 
 | 文件 | 用途 | 是否包含完整凭证 |
 | --- | --- | --- |
@@ -213,14 +213,14 @@ python quota.py ui
 | `quota-snapshot.lock` | 跨进程刷新锁 | 否 |
 
 - 项目没有遥测，也没有自建凭证中转服务；查询额度时会从本机直接请求对应 Provider API。
-- `accounts.json` 和 `agent.db` 保存的是可用的完整凭证，不是系统钥匙串。请像保护 SSH Key 一样保护 `~/.quota-cli/`，不要同步到网盘或提交到 Git。
+- `accounts.json` 和 `agent.db` 保存的是可用的完整凭证，不是系统钥匙串。请像保护 SSH Key 一样保护 Dushan Quota 数据目录，不要同步到网盘或提交到 Git。
 - `quota ui` 默认只绑定 `127.0.0.1:18765`。Web 后端没有登录认证和 TLS，**不要直接暴露到局域网或公网**。
 - 界面只展示脱敏后的 Key；共享快照不会写入 access token、refresh token 或 API Key。
 - OpenAI“重置额度”会消耗一次 reset credit，只有在界面明确确认且服务端状态完整时才会执行。
 
 ## 部署、升级与开发
 
-Quota CLI 当前采用“克隆源码到长期保留目录后安装”的本机部署方式，不是公网服务，也不是容器化应用。
+Dushan Quota 当前采用“克隆源码到长期保留目录后安装”的本机部署方式，不是公网服务，也不是容器化应用。
 
 仓库当前没有提供：
 

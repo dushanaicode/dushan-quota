@@ -3,7 +3,7 @@ name: dushan-quota
 description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cursor/Cursor Agent 额度；全平台令牌过期自动刷新并汇总进 agent.db；可写入 OpenCode/OMP/各官方 CLI；Web UI 支持重置 OpenAI 额度、隐藏卡片、主题切换。用户提到额度、quota、套餐、认证账号、添加 API Key、环境变量、令牌过期、刷新令牌、写入凭证、重置额度时使用。
 ---
 
-# Quota CLI
+# Dushan Quota
 
 路径：`C:\Users\Administrator\dushan-quota\quota.py`
 
