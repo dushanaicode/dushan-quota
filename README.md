@@ -32,8 +32,7 @@ py -m pipx ensurepath --prepend
 重新打开终端后，安装并启动：
 
 ```powershell
-$constraint = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
-pipx install --pip-args="--constraint $constraint" dushan-quota
+pipx install --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-quota
 quota
 ```
 
@@ -42,8 +41,7 @@ quota
 升级也使用同一份稳定约束：
 
 ```powershell
-$constraint = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
-pipx upgrade --pip-args="--constraint $constraint" dushan-quota
+pipx upgrade --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-quota
 ```
 
 <details>
@@ -56,7 +54,7 @@ pipx upgrade --pip-args="--constraint $constraint" dushan-quota
 
 1. 执行 py -m pip install --user "pipx==1.8.0"。
 2. 执行 py -m pipx ensurepath --prepend，并按提示重新打开终端。
-3. 使用 https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt 作为 pip constraint，执行 pipx install 安装 dushan-quota。
+3. 执行 pipx install，并通过 --pip-args="pip==25.2" 固定共享 pip。
 4. 执行 quota config，确认命令和数据目录正常。
 5. 执行 quota ui，确认页面可以打开。
 6. 不要输出任何 Key、Token 或账号凭证。

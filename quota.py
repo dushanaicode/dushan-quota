@@ -20,8 +20,7 @@ PYPI_URL = "https://pypi.org/project/dushan-quota/"
 WEB_URL = "http://127.0.0.1:18765/"
 PIPX_VERSION = "1.8.0"
 PIP_VERSION = "25.2"
-PIPX_CONSTRAINT_URL = "https://raw.githubusercontent.com/dushanaicode/dushan-quota/main/pipx-constraints.txt"
-UPGRADE_COMMAND = f'pipx upgrade --pip-args="--constraint {PIPX_CONSTRAINT_URL}" dushan-quota'
+UPGRADE_COMMAND = f'pipx upgrade --index-url https://pypi.org/simple --pip-args="pip=={PIP_VERSION}" dushan-quota'
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
