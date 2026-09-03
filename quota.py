@@ -12,9 +12,17 @@ from lib.models import AUTH_RULES
 from lib.store import accounts_path
 
 
+GITHUB_URL = "https://github.com/dushanaicode/dushan-quota"
+INSTALL_COMMAND = "pipx install dushan-quota"
+UPGRADE_COMMAND = "pipx upgrade dushan-quota"
+
+
 def main():
+    _configure_stdio()
     config.apply_config_env()
+    version = _current_version()
     parser = argparse.ArgumentParser(description="AI 额度看板（Web UI / 悬浮窗）")
+    parser.add_argument("--version", action="version", version=f"Dushan Quota {version}")
     sub = parser.add_subparsers(dest="command")
 
     add = sub.add_parser("add", help="添加账号")
@@ -87,10 +95,97 @@ def main():
         from lib.float_win import serve_float
         serve_float()
         return
+    if not _startup_update(version=version):
+        return
     from lib.float_win import launch_float
 
-    launch_float()
-    print("悬浮窗已启动；点窗口标题栏的 🌐 可打开 Web 配置页。关闭悬浮窗即停止全部服务。")
+    _print_launch_summary(launch_float())
+
+
+def _current_version() -> str:
+    from lib.web import _current_version as current_version
+
+    return current_version()
+
+
+def _print_banner(version: str, output=print) -> None:
+    output("+-- Dushan Quota -----------------------------------------")
+    output(f"| 版本    v{version}")
+    output(f"| GitHub  {GITHUB_URL}")
+    output(f"| 安装    {INSTALL_COMMAND}")
+    output(f"| 升级    {UPGRADE_COMMAND}")
+    output("+---------------------------------------------------------")
+
+
+def _startup_update(
+    *,
+    version: str | None = None,
+    update_result: dict | None = None,
+    input_fn=None,
+    output=print,
+    interactive: bool | None = None,
+) -> bool:
+    version = version or _current_version()
+    _print_banner(version, output)
+    output("正在检查 GitHub Release...")
+    if update_result is None:
+        from lib.web import _update_payload
+
+        update_result = _update_payload()
+    if not update_result.get("ok"):
+        output(f"[!] 更新检查暂时不可用：{update_result.get('error') or '未知错误'}")
+        return True
+    latest = str(update_result.get("latest_version") or "").strip()
+    if not update_result.get("update_available"):
+        output(f"[OK] {update_result.get('message') or f'当前已是最新版本 v{version}'}")
+        return True
+
+    cfg = config.load_config()
+    if latest and cfg.get("ignored_update_version") == latest:
+        output(f"- 已永久跳过 v{latest}；发现更高版本时仍会提醒。")
+        return True
+
+    output(f"[!] 发现新版本 v{latest}（当前 v{version}）")
+    if interactive is None:
+        interactive = bool(sys.stdin.isatty() and sys.stdout.isatty())
+    if not interactive:
+        output(f"  升级命令：{UPGRADE_COMMAND}")
+        return True
+
+    ask = input_fn or input
+    while True:
+        choice = ask("[1] 升级  [2] 本次跳过  [3] 永久跳过此版本（默认 2）：").strip().lower()
+        if choice in {"1", "u", "upgrade", "升级"}:
+            output("请先关闭正在运行的悬浮窗，然后执行：")
+            output(f"  {UPGRADE_COMMAND}")
+            return False
+        if choice in {"", "2", "s", "skip", "跳过"}:
+            output("- 已跳过本次提醒，继续启动。")
+            return True
+        if choice in {"3", "n", "never", "永久"}:
+            cfg["ignored_update_version"] = latest
+            try:
+                config.save_config(cfg)
+            except OSError as error:
+                output(f"[!] 无法保存跳过设置：{error}")
+            else:
+                output(f"- 已永久跳过 v{latest}；未来更高版本仍会提醒。")
+            return True
+        output("请输入 1、2 或 3。")
+
+
+def _print_launch_summary(started: bool, output=print) -> None:
+    output(f"[OK] 悬浮窗：{'已启动' if started else '已在运行'}")
+    output("  Web UI：http://127.0.0.1:18765/")
+    output("  点击悬浮窗标题栏可打开 Web 配置页；关闭悬浮窗后，本地 Web 服务也会一起停止。")
+
+
+def _configure_stdio() -> None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def _handle_add(args):
@@ -135,9 +230,4 @@ def _print_config():
 
 
 if __name__ == "__main__":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
     main()

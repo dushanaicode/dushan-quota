@@ -32,6 +32,7 @@ def config_path() -> Path:
 def default_config() -> dict:
     return {
         "watch_seconds": 15,
+        "ignored_update_version": "",
         "env": {name: "" for name in ENV_KEYS if name not in HOME_ENV_KEYS},
         "hidden": [],
         "history": [],
@@ -52,6 +53,8 @@ def load_config() -> dict:
         return data
     if isinstance(raw.get("watch_seconds"), int) and raw["watch_seconds"] >= 0:
         data["watch_seconds"] = raw["watch_seconds"]
+    if isinstance(raw.get("ignored_update_version"), str):
+        data["ignored_update_version"] = raw["ignored_update_version"].strip()
     env = raw.get("env")
     if isinstance(env, dict):
         for name, value in env.items():

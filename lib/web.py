@@ -313,16 +313,19 @@ _HISTORY_FIELDS = (
 
 
 def _current_version() -> str:
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    else:
+        match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+        if match:
+            return match.group(1)
     try:
         return package_version("dushan-quota")
     except PackageNotFoundError:
-        pass
-    try:
-        text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
-    except OSError:
         return "unknown"
-    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    return match.group(1) if match else "unknown"
 
 
 def _version_parts(value: str):

@@ -22,13 +22,27 @@ Dushan Quota 是个小巧的本地 AI 额度看板。它会找到本机已有的
 
 ## 快速安装
 
-已经装好 [pipx](https://pipx.pypa.io/) 的话，一行就够：
+Windows 还没有 [pipx](https://pipx.pypa.io/) 的话，先执行一次：
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath --prepend
+```
+
+重新打开终端后，安装并启动：
 
 ```bash
 pipx install dushan-quota
+quota
 ```
 
-装好后运行 `quota` 打开悬浮窗，或者运行 `quota ui` 直接进 Web 页面。
+`quota` 会先显示当前版本和 GitHub 地址，再检查最新 Release。发现新版本时，可以查看升级命令、本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。
+
+升级也是一行：
+
+```bash
+pipx upgrade dushan-quota
+```
 
 <details>
 <summary>让本机 Agent 帮你安装</summary>
@@ -62,7 +76,7 @@ pipx install dushan-quota
 - **背景随你换**：自带一张默认背景，也可以换成自己喜欢的图片；窗口怎么缩放，图片都会自动铺满。
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
 - **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
-- **更新检查**：Web 顶栏可手动检查 GitHub Release；不会后台联网或自动执行升级命令。
+- **更新检查**：运行 `quota` 会检查 GitHub Release，Web 顶栏也能手动检查；升级仍由你确认，不会悄悄改动环境。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
@@ -130,6 +144,7 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 | 命令 | 用途 |
 | --- | --- |
 | `quota` | 启动悬浮窗（内嵌 Web 服务，关闭即全停） |
+| `quota --version` | 查看当前版本 |
 | `quota ui` | 打开本机 Web UI（服务未运行时会先拉起悬浮窗） |
 | `quota float` | 启动桌面悬浮窗 |
 | `quota add` | 交互式添加账号 |
