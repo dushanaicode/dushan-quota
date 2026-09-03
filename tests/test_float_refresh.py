@@ -173,6 +173,15 @@ class FloatRefreshTests(unittest.TestCase):
         activate.assert_called_once_with()
         popen.assert_not_called()
 
+    @patch.object(float_win.subprocess, "Popen")
+    @patch.object(float_win, "_activate_existing_float", return_value=False)
+    @patch.object(float_win, "_is_windows", return_value=True)
+    def test_windows_launch_does_not_use_detached_creation_flags(self, is_windows, activate, popen):
+        self.assertTrue(float_win.launch_float())
+        options = popen.call_args.kwargs
+        self.assertNotIn("creationflags", options)
+        self.assertEqual(float_win.subprocess.DEVNULL, options["stderr"])
+
 
 if __name__ == "__main__":
     unittest.main()

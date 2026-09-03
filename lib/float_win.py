@@ -766,11 +766,11 @@ def launch_float() -> bool:
     if _is_windows():
         pythonw = Path(sys.executable).with_name("pythonw.exe")
         exe = str(pythonw) if pythonw.is_file() else sys.executable
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-        creation = 0x00000008 | 0x00000200 | 0x08000000
         subprocess.Popen(
             [exe, str(script), "float-run"],
-            creationflags=creation,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             close_fds=True,
         )
         return True
