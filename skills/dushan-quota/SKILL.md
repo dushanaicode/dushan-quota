@@ -5,7 +5,7 @@ description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cur
 
 # Dushan Quota
 
-路径：`C:\Users\Administrator\dushan-quota\quota.py`
+命令：`quota`
 
 人用：终端执行 `quota` 直接启动悬浮窗（内嵌 Web 服务，关闭悬浮窗即全部停止）。点悬浮窗标题栏 🌐 打开 Web 配置页，加号/OAuth 都在网页里完成。
 
@@ -30,12 +30,12 @@ curl "http://127.0.0.1:18765/api/quota?force=1"  # 仅在用户明确要求立�
 ## 账号
 
 ```
-python C:\Users\Administrator\dushan-quota\quota.py accounts
-python C:\Users\Administrator\dushan-quota\quota.py add zai --key <API_KEY>
-python C:\Users\Administrator\dushan-quota\quota.py add kimi --key <API_KEY>
-python C:\Users\Administrator\dushan-quota\quota.py add grok --local
-python C:\Users\Administrator\dushan-quota\quota.py add cursor_agent --key <crsr_...>
-python C:\Users\Administrator\dushan-quota\quota.py remove <id>
+quota accounts
+quota add zai --key <API_KEY>
+quota add kimi --key <API_KEY>
+quota add grok --local
+quota add cursor_agent --key <crsr_...>
+quota remove <id>
 ```
 
 平台：`grok` `openai` `claude` `zai` `kimi` `deepseek` `antigravity` `cursor` `cursor_agent`
@@ -55,13 +55,14 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 | POST | `/api/hide` / `/api/unhide` | 隐藏/恢复卡片，body `{"provider","identity"}`；unhide 空 body 全恢复 |
 | GET/POST | `/api/config` | 读/写设置（`watch_seconds` 自动刷新间隔秒数，0=仅手动） |
 | GET | `/api/logs` | 运行日志（内存环形缓冲 500 条，`?limit=` `?level=` 过滤；同时落盘 `quota.log` JSONL） |
+| GET | `/api/update-check` | 手动检查 GitHub Release；只读，不自动执行升级命令 |
 | POST | `/api/float` | 启动桌面悬浮窗 |
 | GET | `/api/rules` | 平台与添加方式 |
 | POST | `/api/accounts/key` | 添加 API Key，body `{"provider","key"}` |
 
 ## 中央凭证库（agent.db，自动刷新）
 
-`%USERPROFILE%\.quota-cli\agent.db`（SQLite，表 `accounts`）汇总**所有来源**账号的凭证：API Key 全量 + 脱敏版（`api_key_masked`）、access/refresh 令牌、到期时间、套餐、来源、订阅起止（`plan_start/plan_end`）。每轮发现账号自动同步快照，刷新后立刻更新行，**库里永远是最新可用票**（按到期时间裁决，Cockpit 等只读来源的旧票不会盖掉库里的新票）。这是"从本库选账号写入各 harness"的数据底座。
+`%USERPROFILE%\.dushan-quota\agent.db`（SQLite，表 `accounts`）汇总**所有来源**账号的凭证：API Key 全量 + 脱敏版（`api_key_masked`）、access/refresh 令牌、到期时间、套餐、来源、订阅起止（`plan_start/plan_end`）。每轮发现账号自动同步快照，刷新后立刻更新行，**库里永远是最新可用票**（按到期时间裁决，Cockpit 等只读来源的旧票不会盖掉库里的新票）。这是"从本库选账号写入各 harness"的数据底座。
 
 所有 OAuth 平台**过期自动刷新**（提前 60 秒或 401 时触发），新票写回中央库并回写来源工具：
 
@@ -77,7 +78,7 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 
 OpenAI 重置次数要区分两个字段：`available_count` 是总剩余，`applicable_available_count` 是当前可使用数。只有二者都大于 0、HTTP API 收到 `confirmed:true` 后，后端才允许调用消费端点；状态缺失或当前可用为 0 时一律 fail closed，不调用消费接口。
 
-Web UI 与悬浮窗共用 `%USERPROFILE%\.quota-cli\quota-snapshot.json`。跨进程锁把同一周期的并发请求合并为一次联网刷新，界面手动刷新或 API 的 `?force=1` 才绕过正常缓存周期；快照不写入任何认证密钥。
+Web UI 与悬浮窗共用 `%USERPROFILE%\.dushan-quota\quota-snapshot.json`。跨进程锁把同一周期的并发请求合并为一次联网刷新，界面手动刷新或 API 的 `?force=1` 才绕过正常缓存周期；快照不写入任何认证密钥。
 
 ## Cursor 两套票（不能混用）
 
@@ -114,12 +115,12 @@ OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorize
 
 ## 环境变量
 
-配置文件：`%USERPROFILE%\.quota-cli\config.json`
+配置文件：`%USERPROFILE%\.dushan-quota\config.json`
 
 ```
-python C:\Users\Administrator\dushan-quota\quota.py config
-python C:\Users\Administrator\dushan-quota\quota.py env ZHIPU_API_KEY <value>
-python C:\Users\Administrator\dushan-quota\quota.py env CURSOR_API_KEY <value> --user
+quota config
+quota env ZHIPU_API_KEY <value>
+quota env CURSOR_API_KEY <value> --user
 ```
 
 会先读 OpenCode `auth.json`、Cockpit、本机官方目录、dushan-quota 本地库、环境变量。同一 API Key 多来源自动去重。

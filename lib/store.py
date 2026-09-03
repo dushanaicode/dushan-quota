@@ -5,11 +5,21 @@ import uuid
 from pathlib import Path
 
 
+HOME_ENV_KEYS = ("DUSHAN_QUOTA_HOME", "QUOTA_CLI_HOME")
+_STORE_MARKERS = ("accounts.json", "agent.db", "config.json")
+
+
 def store_dir() -> Path:
-    raw = os.environ.get("QUOTA_CLI_HOME", "").strip()
-    if raw:
-        return Path(raw)
-    return Path.home() / ".quota-cli"
+    for name in HOME_ENV_KEYS:
+        raw = os.environ.get(name, "").strip()
+        if raw:
+            return Path(raw)
+    home = Path.home()
+    current = home / ".dushan-quota"
+    legacy = home / ".quota-cli"
+    if legacy.is_dir() and not any((current / name).exists() for name in _STORE_MARKERS):
+        return legacy
+    return current
 
 
 def accounts_path() -> Path:

@@ -4,10 +4,11 @@ import subprocess
 from pathlib import Path
 
 from .models import AUTH_RULES
-from .store import store_dir
+from .store import HOME_ENV_KEYS, store_dir
 
 
 ENV_KEYS = (
+    "DUSHAN_QUOTA_HOME",
     "QUOTA_CLI_HOME",
     "XAI_API_KEY",
     "ZHIPU_API_KEY",
@@ -31,7 +32,7 @@ def config_path() -> Path:
 def default_config() -> dict:
     return {
         "watch_seconds": 15,
-        "env": {name: "" for name in ENV_KEYS if name != "QUOTA_CLI_HOME"},
+        "env": {name: "" for name in ENV_KEYS if name not in HOME_ENV_KEYS},
         "hidden": [],
         "history": [],
         "float": {},
@@ -128,7 +129,7 @@ def set_env_value(name: str, value: str, persist_user: bool = False) -> None:
     if name not in ENV_KEYS:
         raise ValueError(f"不支持的环境变量: {name}")
     config = load_config()
-    if name == "QUOTA_CLI_HOME":
+    if name in HOME_ENV_KEYS:
         os.environ[name] = value
     else:
         config["env"][name] = value
@@ -143,7 +144,7 @@ def env_status() -> list[tuple[str, str, str]]:
     rows = []
     for name in ENV_KEYS:
         process = os.environ.get(name, "").strip()
-        stored = (config.get("env") or {}).get(name, "") if name != "QUOTA_CLI_HOME" else ""
+        stored = (config.get("env") or {}).get(name, "") if name not in HOME_ENV_KEYS else ""
         rows.append((name, process, stored))
     return rows
 

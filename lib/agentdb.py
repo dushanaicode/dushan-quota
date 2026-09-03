@@ -1,4 +1,4 @@
-"""中央凭证库 ~/.quota-cli/agent.db（SQLite）。
+"""中央凭证库 ~/.dushan-quota/agent.db（SQLite）。
 
 汇总所有来源账号的凭证：API Key（全量 + 脱敏）、access/refresh 令牌、到期时间。
 每轮发现账号都会同步快照；每次刷新都会更新行，保证库里永远是最新可用票据。

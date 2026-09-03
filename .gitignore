@@ -7,7 +7,9 @@ vendor/
 .DS_Store
 Thumbs.db
 .quota-cli/
+.dushan-quota/
 
 dist/
 build/
 *.egg-info/
+Temp/

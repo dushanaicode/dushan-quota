@@ -1,4 +1,4 @@
-"""中央认证库 ~/.quota-cli/auth.json：全平台 OAuth 过期自动刷新 + 来源回写。
+"""中央认证库 ~/.dushan-quota/auth.json：全平台 OAuth 过期自动刷新 + 来源回写。
 
 两条线不要混（详见 README）：
 - Cursor IDE 的 session 票走 api2.cursor.sh/oauth/token；

@@ -1,15 +1,25 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 
 class LogbufTests(unittest.TestCase):
     def setUp(self):
-        os.environ["QUOTA_CLI_HOME"] = tempfile.mkdtemp()
+        temp_root = Path.cwd() / "Temp"
+        temp_root.mkdir(exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=temp_root)
+        self.environment = patch.dict(os.environ, {"DUSHAN_QUOTA_HOME": self.temporary.name})
+        self.environment.start()
         from lib import logbuf
 
         logbuf._BUFFER.clear()
         self.logbuf = logbuf
+
+    def tearDown(self):
+        self.environment.stop()
+        self.temporary.cleanup()
 
     def test_entries_and_level_filter(self):
         self.logbuf.info("hello", provider="x")

@@ -362,6 +362,7 @@
       <button data-t="green" style="--dot:#55b579" title="绿意盎然"></button>
     </div>
     <a class="btn" href="https://github.com/dushanaicode/dushan-quota" target="_blank" rel="noopener" title="GitHub 仓库">GitHub</a>
+    <button class="btn" id="btnUpdate" onclick="checkUpdate()">检查更新</button>
     <button class="btn" id="btnHistory" onclick="toggleHistory(true)">历史<span class="header-count" id="historyBadge">0</span></button>
     <button class="btn" id="btnFocus" onclick="toggleFocus(true)">总览</button>
     <button class="btn" id="btnRefresh" onclick="refreshQuota(true)">刷新</button>
@@ -453,7 +454,7 @@
       <span class="hint" style="align-self:center">托盘图标，可拖动/缩放/置顶</span>
     </div>
     <label>数据</label>
-    <p class="hint">凭证库 <code>~/.quota-cli/agent.db</code> · 订阅周期与刷新令牌自动记录</p>
+    <p class="hint">凭证库 <code>~/.dushan-quota/agent.db</code> · 订阅周期与刷新令牌自动记录</p>
     <div class="row end">
       <button class="btn primary" onclick="closeSet()">完成</button>
     </div>
@@ -547,6 +548,30 @@ function toast(text, bad){
   const t = document.getElementById('toast');
   t.textContent = text; t.className = bad ? 'bad show' : 'show';
   clearTimeout(t._tm); t._tm = setTimeout(() => t.className = '', 2600);
+}
+
+async function checkUpdate(){
+  const btn = document.getElementById('btnUpdate');
+  if (btn.dataset.url) { window.open(btn.dataset.url, '_blank', 'noopener'); return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>检查中';
+  try {
+    const data = await api('/api/update-check');
+    if (!data.ok) throw new Error(data.error || '检查更新失败');
+    if (data.update_available) {
+      btn.dataset.url = data.release_url;
+      btn.textContent = `更新 v${data.latest_version}`;
+      btn.title = '点击打开发布页';
+      toast(`${data.message}，再次点击打开发布页`);
+    } else {
+      btn.textContent = '检查更新';
+      toast(`${data.message}（当前 v${data.current_version}）`);
+    }
+  } catch(e) {
+    btn.textContent = '检查更新';
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function skeleton(){

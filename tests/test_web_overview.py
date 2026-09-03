@@ -16,6 +16,10 @@ class WebOverviewTests(unittest.TestCase):
         self.assertNotIn('data-tab="soon"', self.html)
         self.assertNotIn("即将重置", self.html)
 
+    def test_update_button_uses_read_only_check_endpoint(self):
+        self.assertIn('id="btnUpdate" onclick="checkUpdate()">检查更新</button>', self.html)
+        self.assertIn("api('/api/update-check')", self.html)
+
     def test_subscription_overview_uses_normalized_subscription_fields(self):
         self.assertIn("fmtDate(it.sub_start)", self.html)
         self.assertIn("fmtDate(it.sub_end)", self.html)

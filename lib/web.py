@@ -1,20 +1,25 @@
 import json
+import re
 import time
 import urllib.error
 import urllib.request
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import config, logbuf, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
 from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json
 from .discover import collect_accounts
+from .httputil import request_json
 from .models import AUTH_RULES
 from .render import _reset_text
 
 WEB_DIR = Path(__file__).resolve().parent / "assets"
+RELEASE_API = "https://api.github.com/repos/dushanaicode/dushan-quota/releases/latest"
+RELEASES_URL = "https://github.com/dushanaicode/dushan-quota/releases"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +39,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/health":
             self._json({"ok": True, "service": "dushan-quota"})
+            return
+        if parsed.path == "/api/update-check":
+            self._json(_update_payload())
             return
         if parsed.path == "/api/accounts":
             self._json({"accounts": store.list_stored()})
@@ -302,6 +310,51 @@ _HISTORY_FIELDS = (
     "sub_end",
     "sub_status",
 )
+
+
+def _current_version() -> str:
+    try:
+        return package_version("dushan-quota")
+    except PackageNotFoundError:
+        pass
+    try:
+        text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return "unknown"
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+
+def _version_parts(value: str):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(value or "").strip())
+    return tuple(map(int, match.groups())) if match else None
+
+
+def _update_payload() -> dict:
+    current = _current_version()
+    status, _, data = request_json(
+        RELEASE_API,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": f"dushan-quota/{current}"},
+        timeout=5,
+    )
+    base = {"current_version": current, "release_url": RELEASES_URL}
+    if status == 404:
+        return {"ok": True, "update_available": False, "latest_version": "", "message": "暂无已发布版本", **base}
+    if status != 200 or not isinstance(data, dict):
+        return {"ok": False, "error": f"无法检查更新（GitHub HTTP {status or '连接失败'}）", **base}
+    latest = str(data.get("tag_name") or "").removeprefix("v")
+    current_parts = _version_parts(current)
+    latest_parts = _version_parts(latest)
+    if current_parts is None or latest_parts is None:
+        return {"ok": False, "error": "发布版本格式无效", **base}
+    available = latest_parts > current_parts
+    return {
+        "ok": True,
+        "update_available": available,
+        "latest_version": latest,
+        "message": f"发现新版本 v{latest}" if available else f"已是最新版本 v{current}",
+        **base,
+    }
 
 
 def _history_text(value, limit: int = 512) -> str:

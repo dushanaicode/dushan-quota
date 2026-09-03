@@ -31,7 +31,8 @@ Dushan Quota 是一个本地优先的 AI 账号额度聚合工具。它会发现
 
 - **双端看板**：Web 适合完整管理，悬浮窗适合桌面常驻（自带默认背景，可换图、可换主题）；终端运行 `quota` 直接启动悬浮窗。
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
-- **共享快照**：Web 与悬浮窗共用数据目录中的 `quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
+- **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
+- **更新检查**：Web 顶栏可手动检查 GitHub Release；不会后台联网或自动执行升级命令。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
@@ -201,7 +202,7 @@ python quota.py ui
 
 ## 本地数据与安全边界
 
-运行 `quota config` 可查看当前数据目录和兼容环境变量配置；项目改名不会迁移或删除现有用户数据。
+默认数据目录是 `~/.dushan-quota/`；可以用 `DUSHAN_QUOTA_HOME` 改到其他位置。升级时若新目录尚未初始化，程序仍会读取旧目录，便于先复制、验证，再由用户手动清理旧数据。
 
 | 文件 | 用途 | 是否包含完整凭证 |
 | --- | --- | --- |

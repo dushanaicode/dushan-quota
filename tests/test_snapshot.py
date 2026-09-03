@@ -15,7 +15,7 @@ from lib.models import Account, QuotaResult, Window
 class SnapshotTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.environment = patch.dict(os.environ, {"QUOTA_CLI_HOME": self.temporary.name})
+        self.environment = patch.dict(os.environ, {"DUSHAN_QUOTA_HOME": self.temporary.name})
         self.environment.start()
         self.account = Account(
             provider="openai",
