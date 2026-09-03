@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"rules": AUTH_RULES})
             return
         if parsed.path == "/api/health":
-            self._json({"ok": True, "service": "quota-cli"})
+            self._json({"ok": True, "service": "dushan-quota"})
             return
         if parsed.path == "/api/accounts":
             self._json({"accounts": store.list_stored()})
@@ -604,12 +604,12 @@ def _web_ready(host: str, port: int) -> bool:
     try:
         with urllib.request.urlopen(health_url, timeout=0.25) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        if response.status == 200 and payload == {"ok": True, "service": "quota-cli"}:
+        if response.status == 200 and payload == {"ok": True, "service": "dushan-quota"}:
             return True
     except (OSError, urllib.error.URLError, json.JSONDecodeError):
         pass
 
-    # Reuse quota-cli instances started by an older build that did not yet
+    # Reuse dushan-quota instances started by an older build that did not yet
     # expose /api/health. This also avoids spawning a second process on the
     # same port while the old foreground server is still being stopped.
     try:

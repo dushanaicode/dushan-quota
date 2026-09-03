@@ -203,7 +203,7 @@ def _process_exists(pid: int) -> bool:
             active = bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))) and exit_code.value == 259
             kernel32.CloseHandle(handle)
             return active
-        # Refresh locks are created only by quota-cli processes owned by this
+        # Refresh locks are created only by dushan-quota processes owned by this
         # user, so a process that cannot be opened cannot be the lock owner.
         return False
     try:

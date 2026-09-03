@@ -590,7 +590,7 @@ def _from_store(add):
             Account(
                 provider=provider,
                 label=str(item.get("label") or provider),
-                source=str(item.get("source") or "quota-cli"),
+                source=str(item.get("source") or "dushan-quota"),
                 identity=identity,
                 auth_mode=str(item.get("auth_mode") or ""),
                 email=str(item.get("email") or ""),

@@ -36,7 +36,7 @@ class GrokCliProvisionTests(unittest.TestCase):
         account = Account(
             provider="grok",
             label="Grok",
-            source="quota-cli",
+            source="dushan-quota",
             identity="grok-user",
             auth_mode="oauth",
             user_id="grok-user",

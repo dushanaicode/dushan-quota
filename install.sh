@@ -45,8 +45,8 @@ case ":$PATH:" in
     ;;
 esac
 
-SKILL_SRC="$ROOT/skills/quota-cli/SKILL.md"
-SKILL_DST="${HOME}/.config/opencode/skills/quota-cli"
+SKILL_SRC="$ROOT/skills/dushan-quota/SKILL.md"
+SKILL_DST="${HOME}/.config/opencode/skills/dushan-quota"
 if [ -f "$SKILL_SRC" ]; then
   mkdir -p "$SKILL_DST"
   cp "$SKILL_SRC" "$SKILL_DST/SKILL.md"

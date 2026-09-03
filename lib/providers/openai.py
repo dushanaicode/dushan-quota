@@ -367,7 +367,7 @@ def _subscription_request(access: str, path: str, query: dict):
         "Authorization": f"Bearer {access}",
         "Accept": "application/json",
         "Referer": "https://chatgpt.com/",
-        "User-Agent": "Mozilla/5.0 Quota-CLI/1.0",
+        "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0",
         "x-openai-target-path": path,
         "x-openai-target-route": path,
     }

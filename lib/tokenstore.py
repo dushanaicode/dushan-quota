@@ -131,7 +131,7 @@ def _form_post(url: str, fields: dict):
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Quota-CLI/1.0"},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -146,7 +146,7 @@ def _json_post(url: str, payload: dict):
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Quota-CLI/1.0"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -175,6 +175,8 @@ def _write_back(account, access: str, refresh: str, expires_in, id_token: str = 
     writers = {
         "opencode": _write_opencode,
         "official-grok": _write_grok_cli,
+        "dushan-quota": _write_quota_store,
+        # Keep the pre-rename source value working for existing accounts.json data.
         "quota-cli": _write_quota_store,
         "cursor-local": _write_cursor_ide,
         "codex-local": _write_codex_auth,

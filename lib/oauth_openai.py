@@ -203,7 +203,7 @@ def _jwt_claims(token: str) -> dict:
 
 def _json_request(url: str, data=None, headers=None) -> dict:
     req_headers = {
-        "User-Agent": "Mozilla/5.0 Quota-CLI/1.0",
+        "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0",
         "Accept": "application/json",
     }
     if headers:

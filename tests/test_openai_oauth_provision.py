@@ -92,7 +92,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
         account = Account(
             provider="openai",
             label="OpenAI",
-            source="quota-cli",
+            source="dushan-quota",
             identity="test@example.com",
             auth_mode="oauth",
             secret={
@@ -130,7 +130,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
         account = Account(
             provider="openai",
             label="OpenAI",
-            source="quota-cli",
+            source="dushan-quota",
             identity="openai:key:5678",
             auth_mode="api_key",
             secret={"api_key": "sk-test-secret-key"},

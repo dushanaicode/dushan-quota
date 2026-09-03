@@ -1,11 +1,11 @@
 ---
-name: quota-cli
+name: dushan-quota
 description: 查询并管理本机 Grok/OpenAI/Claude/Zhipu/Kimi/Antigravity/Cursor/Cursor Agent 额度；全平台令牌过期自动刷新并汇总进 agent.db；可写入 OpenCode/OMP/各官方 CLI；Web UI 支持重置 OpenAI 额度、隐藏卡片、主题切换。用户提到额度、quota、套餐、认证账号、添加 API Key、环境变量、令牌过期、刷新令牌、写入凭证、重置额度时使用。
 ---
 
 # Quota CLI
 
-路径：`C:\Users\Administrator\quota-cli\quota.py`
+路径：`C:\Users\Administrator\dushan-quota\quota.py`
 
 人用：终端执行 `quota` 直接启动悬浮窗（内嵌 Web 服务，关闭悬浮窗即全部停止）。点悬浮窗标题栏 🌐 打开 Web 配置页，加号/OAuth 都在网页里完成。
 
@@ -30,12 +30,12 @@ curl "http://127.0.0.1:18765/api/quota?force=1"  # 仅在用户明确要求立�
 ## 账号
 
 ```
-python C:\Users\Administrator\quota-cli\quota.py accounts
-python C:\Users\Administrator\quota-cli\quota.py add zai --key <API_KEY>
-python C:\Users\Administrator\quota-cli\quota.py add kimi --key <API_KEY>
-python C:\Users\Administrator\quota-cli\quota.py add grok --local
-python C:\Users\Administrator\quota-cli\quota.py add cursor_agent --key <crsr_...>
-python C:\Users\Administrator\quota-cli\quota.py remove <id>
+python C:\Users\Administrator\dushan-quota\quota.py accounts
+python C:\Users\Administrator\dushan-quota\quota.py add zai --key <API_KEY>
+python C:\Users\Administrator\dushan-quota\quota.py add kimi --key <API_KEY>
+python C:\Users\Administrator\dushan-quota\quota.py add grok --local
+python C:\Users\Administrator\dushan-quota\quota.py add cursor_agent --key <crsr_...>
+python C:\Users\Administrator\dushan-quota\quota.py remove <id>
 ```
 
 平台：`grok` `openai` `claude` `zai` `kimi` `deepseek` `antigravity` `cursor` `cursor_agent`
@@ -70,7 +70,7 @@ Agent 可用的 HTTP API（先 `quota ui` 启动）：
 | Grok / xAI | `auth.x.ai/oauth2/token`（refresh 轮换，必须回写） | OpenCode `auth.json`、`~/.grok/auth.json` |
 | OpenAI | `auth.openai.com/oauth/token`（refresh 轮换） | OpenCode `auth.json` |
 | Claude | `console.anthropic.com/v1/oauth/token` | OpenCode `auth.json` |
-| Antigravity | `oauth2.googleapis.com/token` | quota-cli `accounts.json`（Cockpit 来源仅内存） |
+| Antigravity | `oauth2.googleapis.com/token` | dushan-quota `accounts.json`（Cockpit 来源仅内存） |
 | Cursor（IDE） | `api2.cursor.sh/oauth/token`（session 票） | `state.vscdb` 的 `cursorAuth/accessToken` |
 | Cursor Agent | `api2.cursor.sh/auth/exchange_user_api_key`（`crsr_` 每次换新，天然不过期） | 无需回写 |
 | Kimi/Zhipu/Z.ai/DeepSeek | API Key 不过期 | — |
@@ -110,19 +110,19 @@ Web UI 账号卡「写入到…」或 `/api/provision`：从 agent.db 选账号 
 
 OMP oauth 行：`data={"access","refresh","expires"(ms, JWT exp-5min),"authorizedAt"}`；OpenAI Codex 额外写 `accountId/email/orgId/orgName`，provider 必须是 `openai-codex`，identity 为 `email:<email>|org:<workspace>`（缺 email 时回退 account）；api_key 行：`data={"key","source"}`。cursor_agent 的 refresh 必须填 `crsr_`，不能填短寿 JWT。
 
-注意（已内置看护）：OMP 的 `refreshCursorToken` 会把 `exchange_user_api_key` 返回的短寿 JWT 覆盖进 refresh，第二轮刷新必 403 并把凭证写进 `auth_credential_blocks` 拉黑。quota-cli 每轮拉取时自动修复（`lib/provision.py guard_omp_cursor`）：refresh 不是 crsr_ / 已过期 / 有 block → 换新票并清除拉黑，仅对已写入过 OMP 的账号生效。
+注意（已内置看护）：OMP 的 `refreshCursorToken` 会把 `exchange_user_api_key` 返回的短寿 JWT 覆盖进 refresh，第二轮刷新必 403 并把凭证写进 `auth_credential_blocks` 拉黑。dushan-quota 每轮拉取时自动修复（`lib/provision.py guard_omp_cursor`）：refresh 不是 crsr_ / 已过期 / 有 block → 换新票并清除拉黑，仅对已写入过 OMP 的账号生效。
 
 ## 环境变量
 
 配置文件：`%USERPROFILE%\.quota-cli\config.json`
 
 ```
-python C:\Users\Administrator\quota-cli\quota.py config
-python C:\Users\Administrator\quota-cli\quota.py env ZHIPU_API_KEY <value>
-python C:\Users\Administrator\quota-cli\quota.py env CURSOR_API_KEY <value> --user
+python C:\Users\Administrator\dushan-quota\quota.py config
+python C:\Users\Administrator\dushan-quota\quota.py env ZHIPU_API_KEY <value>
+python C:\Users\Administrator\dushan-quota\quota.py env CURSOR_API_KEY <value> --user
 ```
 
-会先读 OpenCode `auth.json`、Cockpit、本机官方目录、quota-cli 本地库、环境变量。同一 API Key 多来源自动去重。
+会先读 OpenCode `auth.json`、Cockpit、本机官方目录、dushan-quota 本地库、环境变量。同一 API Key 多来源自动去重。
 
 ## 规则
 

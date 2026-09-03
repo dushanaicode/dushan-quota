@@ -81,7 +81,7 @@ def _profile(api_key: str, variant: str) -> dict:
     for url in urls:
         status, _, data = request_json(
             url,
-            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "quota-cli/1.0"},
+            headers={"Authorization": f"Bearer {api_key}", "User-Agent": "dushan-quota/1.0"},
         )
         if status != 200 or not isinstance(data, dict):
             continue

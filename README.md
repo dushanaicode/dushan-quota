@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".image/quota-cli-icon.png" width="120" alt="Quota CLI 图标">
+  <img src=".image/dushan-quota-icon.png" width="120" alt="Quota CLI 图标">
 </p>
 
 <h1 align="center">Quota CLI</h1>
@@ -119,8 +119,8 @@ pipx install .
 ### Windows
 
 ```powershell
-git clone https://github.com/dushanaicode/quota-cli.git
-cd quota-cli
+git clone https://github.com/dushanaicode/dushan-quota.git
+cd dushan-quota
 .\install.cmd
 
 # 新开终端后验证
@@ -132,8 +132,8 @@ quota ui
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/dushanaicode/quota-cli.git
-cd quota-cli
+git clone https://github.com/dushanaicode/dushan-quota.git
+cd dushan-quota
 sh install.sh
 
 # 新开终端后验证
@@ -159,7 +159,7 @@ python quota.py ui
 ```text
 请安装并验证 Quota CLI：
 
-1. 仓库：https://github.com/dushanaicode/quota-cli
+1. 仓库：https://github.com/dushanaicode/dushan-quota
 2. 确认 Python 3.10+ 可用。
 3. 克隆仓库并进入根目录。
 4. Windows 运行 install.cmd；macOS/Linux 运行 sh install.sh。
@@ -187,13 +187,13 @@ python quota.py ui
 | `quota rules` | 查看各 Provider 的认证入口 |
 | `quota config` | 查看配置、数据路径与环境变量状态 |
 | `quota env <NAME> <VALUE>` | 把受支持的变量保存到本地配置 |
-| `quota remove <ACCOUNT_ID>` | 删除 quota-cli 本地账号 |
+| `quota remove <ACCOUNT_ID>` | 删除 dushan-quota 本地账号 |
 
 命令行中的 Key 可能进入 shell 历史。添加敏感凭证时，更建议使用 `quota add` 交互输入或 `quota ui`。
 
 ## 工作方式
 
-1. **发现账号**：从本机客户端、环境变量和 quota-cli 本地库收集账号，按身份与 Key 去重。
+1. **发现账号**：从本机客户端、环境变量和 dushan-quota 本地库收集账号，按身份与 Key 去重。
 2. **并行查询**：按 Provider 调用对应额度接口，最多使用 8 个工作线程。
 3. **共享结果**：结果写入不含密钥的共享快照，Web 与悬浮窗共同读取。
 4. **凭证保鲜**：有 refresh token 的 OAuth 账号会在需要时刷新，并尽可能回写来源。
@@ -263,7 +263,7 @@ Web 前端位于 `lib/assets/index.html`，悬浮窗页面位于 `lib/assets/flo
 
 ## Agent Skill
 
-仓库附带 [`skills/quota-cli/SKILL.md`](skills/quota-cli/SKILL.md)。安装脚本会把它复制到 OpenCode 的 `~/.config/opencode/skills/quota-cli/`；其他 Agent 可以按各自的 Skill 目录规则导入。
+仓库附带 [`skills/dushan-quota/SKILL.md`](skills/dushan-quota/SKILL.md)。安装脚本会把它复制到 OpenCode 的 `~/.config/opencode/skills/dushan-quota/`；其他 Agent 可以按各自的 Skill 目录规则导入。
 
 Agent 查询额度时建议走本机 Web API（先 `quota ui` 确保服务已启动；服务由悬浮窗进程内嵌提供）：
 
@@ -272,6 +272,10 @@ curl http://127.0.0.1:18765/api/quota
 ```
 
 只有用户明确要求立即联网时，才使用 `http://127.0.0.1:18765/api/quota?force=1`；不要在日志或回复中输出完整凭证。运行日志可通过 `curl http://127.0.0.1:18765/api/logs` 读取。
+
+## 免责声明
+
+本项目仅供学习使用。使用者应自行遵守适用法律法规及各平台的服务条款，并对使用行为及后果负责。
 
 ## License
 

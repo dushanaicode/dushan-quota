@@ -653,7 +653,7 @@ class _Tray:
                 pystray.MenuItem("刷新", self._refresh),
                 pystray.MenuItem("退出", self._quit),
             )
-            self._icon = pystray.Icon("quota-cli", _tray_image(), "Quota 悬浮窗", menu)
+            self._icon = pystray.Icon("dushan-quota", _tray_image(), "Quota 悬浮窗", menu)
             threading.Thread(target=self._icon.run, daemon=True).start()
         except Exception:
             self._icon = None

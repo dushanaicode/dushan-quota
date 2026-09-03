@@ -377,7 +377,7 @@ def _write_omp(account: Account, confirmed: bool) -> dict:
     else:
         if not api_key:
             return {"ok": False, "error": "该账号没有 API Key 可写"}
-        source = "login" if provider_key == "openai" else "quota-cli"
+        source = "login" if provider_key == "openai" else "dushan-quota"
         payload = {"key": api_key, "source": source}
         identity_key = None
 
@@ -387,7 +387,7 @@ def _write_omp(account: Account, confirmed: bool) -> dict:
             "SELECT id, data, provider FROM auth_credentials WHERE provider = ? AND disabled_cause IS NULL",
             (provider_key,),
         ).fetchone()
-        # quota-cli 旧版本误把 OMP 的导入类型 `codex` 当成模型 provider；
+        # 改名前的旧版本误把 OMP 的导入类型 `codex` 当成模型 provider；
         # 没有正确记录时就原位升级旧行，保留 credential id 与关联状态。
         if row is None and provider_key == "openai-codex":
             row = conn.execute(

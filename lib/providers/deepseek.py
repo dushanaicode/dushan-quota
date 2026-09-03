@@ -10,7 +10,7 @@ def fetch(account: Account) -> QuotaResult:
         return QuotaResult(account=account, ok=False, title="DeepSeek", error="缺少 API Key")
     status, text, data = request_json(
         BALANCE_URL,
-        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "quota-cli/1.0"},
+        headers={"Authorization": f"Bearer {api_key}", "User-Agent": "dushan-quota/1.0"},
     )
     if status != 200 or not isinstance(data, dict):
         return QuotaResult(account=account, ok=False, title="DeepSeek", error=f"{status} {text[:80]}")

@@ -37,7 +37,7 @@ def _usage(access: str):
         headers={
             "Authorization": f"Bearer {access}",
             "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "quota-cli/1.0",
+            "User-Agent": "dushan-quota/1.0",
         },
     )
 

@@ -19,9 +19,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dushanaicode/quota-cli"
-Repository = "https://github.com/dushanaicode/quota-cli"
-Issues = "https://github.com/dushanaicode/quota-cli/issues"
+Homepage = "https://github.com/dushanaicode/dushan-quota"
+Repository = "https://github.com/dushanaicode/dushan-quota"
+Issues = "https://github.com/dushanaicode/dushan-quota/issues"
 
 [project.scripts]
 quota = "quota:main"
