@@ -1,6 +1,7 @@
 import base64
 import ctypes
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,13 +18,14 @@ from .render import _reset_text
 from .snapshot import get_snapshot
 from .store import store_dir
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = Path(__file__).resolve().parent / "assets"
 _GWL_EXSTYLE = -20
 _WS_EX_LAYERED = 0x00080000
 _WS_EX_TOOLWINDOW = 0x00000080
 _WS_EX_APPWINDOW = 0x00040000
 _LWA_ALPHA = 0x00000002
 _DWMWA_WINDOW_CORNER_PREFERENCE = 33
+_DWMWCP_DONOTROUND = 1
 _DWMWCP_ROUND = 2
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
@@ -39,6 +41,10 @@ _HT_BOTTOMRIGHT = 17
 
 def _is_windows() -> bool:
     return sys.platform == "win32"
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
 
 
 def _enable_dpi_awareness() -> None:
@@ -138,6 +144,12 @@ def _user32():
 
 def _set_alpha(window, alpha_percent: int) -> None:
     """整窗透明度（含文字），百分比 0-100。"""
+    if _is_macos():
+        try:
+            window.native.setAlphaValue_(max(0.3, min(1.0, int(alpha_percent) / 100)))
+        except Exception:
+            pass
+        return
     if not _is_windows():
         return
     hwnd = _hwnd(window)
@@ -194,6 +206,16 @@ def _delete_taskbar_tab(hwnd: int) -> None:
         pass
 
 
+def _mac_hide_dock_icon() -> None:
+    """macOS 没有任务栏：把进程切成 accessory，隐藏 Dock 图标与菜单栏应用菜单。"""
+    try:
+        from AppKit import NSApplication
+
+        NSApplication.sharedApplication().setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory
+    except Exception:
+        pass
+
+
 def _apply_no_taskbar(window) -> None:
     """只 DeleteTab，不动 WinForms 句柄。
 
@@ -206,25 +228,76 @@ def _apply_no_taskbar(window) -> None:
         _delete_taskbar_tab(hwnd)
 
 
-def _set_round_corners(window) -> None:
+def _set_round_corners(window, rounded: bool = True) -> None:
     if not _is_windows():
         return
     hwnd = _hwnd(window)
     if not hwnd:
         return
+    if _dwm_round_corners(hwnd, rounded):
+        return
+    _region_round_corners(hwnd, rounded)
+
+
+def _dwm_round_corners(hwnd: int, rounded: bool) -> bool:
+    """Windows 11 原生圆角；系统不支持（Windows 10 返回 E_INVALIDARG）时返回 False。"""
     try:
-        pref = ctypes.c_int(_DWMWCP_ROUND)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+        pref = ctypes.c_int(_DWMWCP_ROUND if rounded else _DWMWCP_DONOTROUND)
+        hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
             hwnd,
             _DWMWA_WINDOW_CORNER_PREFERENCE,
             ctypes.byref(pref),
             ctypes.sizeof(pref),
         )
+        if hr != 0:
+            return False
+        ctypes.windll.user32.SetWindowPos(
+            hwnd,
+            0,
+            0, 0, 0, 0,
+            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_NOACTIVATE | _SWP_FRAMECHANGED,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _region_round_corners(hwnd: int, rounded: bool) -> None:
+    """Windows 10 回退：用 SetWindowRgn 把无边框窗口裁成圆角。"""
+    try:
+        user32 = ctypes.windll.user32
+        if not rounded:
+            user32.SetWindowRgn(hwnd, None, True)
+            return
+        rect = wintypes.RECT()
+        if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+            return
+        width = rect.right - rect.left
+        height = rect.bottom - rect.top
+        if width <= 0 or height <= 0:
+            return
+        try:
+            dpi = user32.GetDpiForWindow(hwnd)
+        except Exception:
+            dpi = 96
+        diameter = max(8, int(14 * dpi / 96) * 2)
+        rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter)
+        if not rgn:
+            return
+        # SetWindowRgn 成功后系统接管 rgn 句柄，不能再 DeleteObject
+        user32.SetWindowRgn(hwnd, rgn, True)
     except Exception:
         pass
 
 
 def _set_topmost(window, on_top: bool) -> None:
+    if _is_macos():
+        # NSFloatingWindowLevel=3 置顶，NSNormalWindowLevel=0 普通
+        try:
+            window.native.setLevel_(3 if on_top else 0)
+        except Exception:
+            pass
+        return
     if not _is_windows():
         return
     hwnd = _hwnd(window)
@@ -291,6 +364,7 @@ class Api:
     def __init__(self):
         self._window: webview.Window | None = None
         self._on_top = True
+        self._rounded = True
 
     def quota(self, force=False):
         try:
@@ -304,6 +378,7 @@ class Api:
     def settings(self):
         saved = config.load_config().get("float", {})
         saved["on_top"] = self._on_top
+        saved["platform"] = sys.platform
         return saved
 
     def save_settings(self, raw):
@@ -424,28 +499,82 @@ class Api:
 
     def begin_drag(self, x, y):
         """标题栏拖动：系统原生接管，可跨屏、跟手。"""
+        if _is_macos():
+            return self._mac_track(resize=False)
         return self._nc_action(_HTCAPTION, x, y)
 
     def begin_resize(self, x, y):
         """右下角缩放：系统原生接管，结束后持久化窗口尺寸。"""
+        if _is_macos():
+            return self._mac_track(resize=True)
 
         def _persist():
-            try:
-                cfg = config.load_config()
-                data = cfg.setdefault("float", {})
-                data["width"] = int(self._window.width)
-                data["height"] = int(self._window.height)
-                config.save_config(cfg)
-            except Exception:
-                pass
+            self._persist_size()
+            # 缩放后窗口尺寸变了，Win10 的圆角是窗口区域裁剪，需要重算
+            if self._window:
+                _set_round_corners(self._window, self._rounded)
 
         return self._nc_action(_HT_BOTTOMRIGHT, x, y, after=_persist)
+
+    def _mac_track(self, resize: bool) -> dict:
+        """macOS 无边框窗口拖动/缩放：轮询鼠标直到松开左键（坐标系 y 轴向上）。
+
+        在 JS 桥线程内阻塞执行，等价于 Windows 的 SendMessage 同步拖动循环。
+        """
+        if not self._window:
+            return {"ok": False}
+        try:
+            from AppKit import NSEvent
+
+            nswindow = self._window.native
+            start_mouse = NSEvent.mouseLocation()
+            frame = nswindow.frame()
+            origin_x, origin_y = frame.origin.x, frame.origin.y
+            width, height = frame.size.width, frame.size.height
+            top = origin_y + height
+            while NSEvent.pressedMouseButtons() & 1:
+                loc = NSEvent.mouseLocation()
+                dx = loc.x - start_mouse.x
+                dy = loc.y - start_mouse.y
+                if resize:
+                    new_w = max(220, width + dx)
+                    new_h = max(260, height - dy)
+                    nswindow.setFrame_display_(((origin_x, top - new_h), (new_w, new_h)), True)
+                else:
+                    nswindow.setFrameOrigin_((origin_x + dx, origin_y + dy))
+                time.sleep(0.016)
+        except Exception:
+            return {"ok": False}
+        if resize:
+            self._persist_size()
+        return {"ok": True}
+
+    def _persist_size(self) -> None:
+        try:
+            cfg = config.load_config()
+            data = cfg.setdefault("float", {})
+            data["width"] = int(self._window.width)
+            data["height"] = int(self._window.height)
+            config.save_config(cfg)
+        except Exception:
+            pass
 
     def open_web(self):
         import webbrowser
 
         webbrowser.open(f"http://{_WEB_HOST}:{_WEB_PORT}/")
         return {"ok": True}
+
+    def set_rounded(self, on):
+        rounded = bool(on)
+        self._rounded = rounded
+        if self._window:
+            _set_round_corners(self._window, rounded)
+        cfg = config.load_config()
+        data = cfg.setdefault("float", {})
+        data["rounded"] = rounded
+        config.save_config(cfg)
+        return {"ok": True, "rounded": rounded}
 
     def quit(self):
         logbuf.info("悬浮窗退出")
@@ -535,6 +664,14 @@ class _Tray:
         if not window:
             return
         self._visible = not self._visible
+        try:
+            if self._visible:
+                window.show()
+            else:
+                window.hide()
+            return
+        except Exception:
+            pass
 
         def _apply():
             window.native.Visible = self._visible
@@ -556,23 +693,44 @@ class _Tray:
         self.stop()
         window = self._api._window
         if window:
+            try:
+                window.destroy()
+                return
+            except Exception:
+                pass
             _invoke_on_ui(window, lambda: window.native.Close())
 
 
-def _close_existing_float() -> None:
-    """关掉已有 Quota 窗。不能只 Restore：旧实例若已空白会一直卡住。"""
-    if not _is_windows():
-        return
-    user32 = ctypes.windll.user32
-    existing = user32.FindWindowW(None, "Quota")
-    if existing:
-        user32.PostMessageW(existing, 0x0010, 0, 0)  # WM_CLOSE
-        import time
+def _float_pid_path() -> Path:
+    return store_dir() / "float.pid"
 
+
+def _close_existing_float() -> None:
+    """关掉已有悬浮窗实例。Windows 按窗口标题找；其他平台用 pidfile。"""
+    if _is_windows():
+        user32 = ctypes.windll.user32
+        existing = user32.FindWindowW(None, "Quota")
+        if existing:
+            user32.PostMessageW(existing, 0x0010, 0, 0)  # WM_CLOSE
+            for _ in range(20):
+                if not user32.IsWindow(existing):
+                    break
+                time.sleep(0.05)
+        return
+    try:
+        pid = int(_float_pid_path().read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return
+    try:
+        os.kill(pid, 15)  # SIGTERM
         for _ in range(20):
-            if not user32.IsWindow(existing):
+            try:
+                os.kill(pid, 0)
+            except OSError:
                 break
             time.sleep(0.05)
+    except OSError:
+        pass
 
 
 _WEB_HOST = "127.0.0.1"
@@ -602,20 +760,27 @@ def _start_embedded_web() -> None:
 
 
 def launch_float() -> bool:
-    """以无控制台的 pythonw 分离进程启动悬浮窗。"""
-    if not _is_windows():
-        serve_float()
-        return True
+    """以分离进程启动悬浮窗（终端可以随即关闭）。"""
     _close_existing_float()
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    exe = str(pythonw) if pythonw.is_file() else sys.executable
     script = Path(__file__).resolve().parent.parent / "quota.py"
-    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-    creation = 0x00000008 | 0x00000200 | 0x08000000
+    if _is_windows():
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        exe = str(pythonw) if pythonw.is_file() else sys.executable
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        creation = 0x00000008 | 0x00000200 | 0x08000000
+        subprocess.Popen(
+            [exe, str(script), "float-run"],
+            creationflags=creation,
+            close_fds=True,
+        )
+        return True
     subprocess.Popen(
-        [exe, str(script), "float-run"],
-        creationflags=creation,
+        [sys.executable, str(script), "float-run"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         close_fds=True,
+        start_new_session=True,
     )
     return True
 
@@ -624,6 +789,12 @@ def serve_float():
     _enable_dpi_awareness()
     scale = _primary_scale()
     config.apply_config_env()
+    try:
+        _float_pid_path().write_text(str(os.getpid()), encoding="ascii")
+    except OSError:
+        pass
+    if _is_macos():
+        _mac_hide_dock_icon()
     saved_float = config.load_config().get("float", {})
     api = Api()
     html = (WEB_DIR / "float.html").read_text(encoding="utf-8") if (WEB_DIR / "float.html").is_file() else ""
@@ -639,6 +810,7 @@ def serve_float():
         frameless=True,
         easy_drag=False,
         on_top=True,
+        transparent=_is_macos(),
         background_color="#10131a",
     )
     api._window = window
@@ -646,13 +818,15 @@ def serve_float():
     def _ready():
         saved = config.load_config().get("float", {})
         api._on_top = bool(saved.get("on_top", True))
-        _set_round_corners(window)
+        api._rounded = bool(saved.get("rounded", True))
+        _set_round_corners(window, api._rounded)
         _set_alpha(window, int(saved.get("alpha", 82)))
         _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
         _set_topmost(window, api._on_top)
 
     def _on_shown():
         _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
+        _set_round_corners(window, api._rounded)
 
     try:
         window.events.shown += _on_shown
@@ -665,8 +839,12 @@ def serve_float():
     tray = _Tray(api)
     tray.start()
     _start_embedded_web()
-    logbuf.info("悬浮窗已启动")
+    logbuf.info("悬浮窗已启动", platform=sys.platform)
     try:
         webview.start(_ready, gui="edgechromium" if _is_windows() else None, debug=False)
     finally:
         tray.stop()
+        try:
+            _float_pid_path().unlink(missing_ok=True)
+        except OSError:
+            pass

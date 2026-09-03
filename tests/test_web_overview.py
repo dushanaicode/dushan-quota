@@ -6,7 +6,7 @@ class WebOverviewTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = (
-            Path(__file__).resolve().parents[1] / "web" / "index.html"
+            Path(__file__).resolve().parents[1] / "lib" / "assets" / "index.html"
         ).read_text(encoding="utf-8")
 
     def test_overview_replaces_focus_and_upcoming_reset_labels(self):

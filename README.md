@@ -40,7 +40,7 @@ Quota CLI 是一个本地优先的 AI 账号额度聚合工具。它会发现本
 
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
-| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、自定义背景图（cover 自适应任意窗口尺寸）、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | 完整体验以 Windows 为准 |
+| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、自定义背景图（cover 自适应任意窗口尺寸）、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
 | Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号与额度的完整管理 | Provider 筛选、四款主题、添加账号、OAuth、历史恢复、写入 Harness、OpenAI 重置额度、运行日志查看 | 默认仅 `127.0.0.1:18765` |
 
 Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
@@ -101,6 +101,20 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 - Python 3.10+
 - Git
 - Windows 使用悬浮窗时，需要系统可用的 Edge WebView2
+
+### pipx / pip（标准 Python 包）
+
+仓库已是标准 Python 包（`pyproject.toml`），可以不克隆源码直接安装：
+
+```bash
+# 发布到 PyPI 后
+pipx install ai-quota-cli
+
+# 或从克隆的仓库目录安装
+pipx install .
+```
+
+安装后 `quota` 命令直接进入 PATH，无需 install 脚本。
 
 ### Windows
 
@@ -210,10 +224,9 @@ Quota CLI 当前采用“克隆源码到长期保留目录后安装”的本机�
 
 仓库当前没有提供：
 
-- PyPI 包或 `pip install quota-cli`
 - Dockerfile / Docker Compose
 - 独立 EXE、DMG、AppImage
-- Homebrew、Winget 等安装包
+- Homebrew、Winget 等安装包（PyPI 包 `ai-quota-cli` 的打包配置已就绪，发布后即可 `pipx install ai-quota-cli`）
 - Nginx、公网鉴权或 TLS 配置
 
 因此，不要把 Web UI 直接部署成公开服务。服务器场景用 `quota ui-run` 在本机起服务，再用 SSH 端口转发访问（`ssh -L 18765:127.0.0.1:18765`），凭证与数据仍放在运行用户自己的数据目录中。
@@ -246,7 +259,7 @@ python -m venv .venv
 ./.venv/bin/python -m unittest discover -s tests -v
 ```
 
-Web 前端位于 `web/index.html`，悬浮窗页面位于 `web/float.html`，均为原生 HTML/CSS/JS，不需要前端构建步骤。
+Web 前端位于 `lib/assets/index.html`，悬浮窗页面位于 `lib/assets/float.html`，均为原生 HTML/CSS/JS，不需要前端构建步骤。
 
 ## Agent Skill
 

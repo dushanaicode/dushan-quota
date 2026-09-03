@@ -40,6 +40,7 @@
     --card:rgba(20,30,45,.04);
   }
   html,body { background:var(--panel); overflow:hidden; height:100%; }
+  html.mac, html.mac body { background:transparent; }
   body { color:var(--text); font-size:13px; user-select:none; -webkit-user-select:none; }
   #panel {
     background:var(--panel);
@@ -84,6 +85,9 @@
   .ico:active { transform:scale(.85); }
   .ico:hover { opacity:1; background:var(--track); }
   .ico.on { opacity:1; }
+  .ico.pin i { display:inline-block; font-style:normal; transform:rotate(-45deg); filter:grayscale(1); transition:transform .2s ease, filter .2s ease; }
+  .ico.pin.on { opacity:1; }
+  .ico.pin.on i { transform:rotate(0deg); filter:none; }
   .ico.loading { opacity:1; pointer-events:none; animation:spin .7s linear infinite; }
   #panel.refreshed { animation:flash .55s ease-out; }
   @keyframes spin { to { transform:rotate(360deg); } }
@@ -117,7 +121,7 @@
     background:var(--card); border:1px solid var(--line); border-radius:10px;
   }
   #cfg .sec { font-size:11px; color:var(--dim); margin:6px 0 3px; }
-  #pick, #themes { display:flex; flex-wrap:wrap; gap:5px; padding:3px 0 1px; }
+  #pick, #themes, #meta, #winOpts { display:flex; flex-wrap:wrap; gap:5px; padding:3px 0 1px; }
   .chip { font-size:11px; padding:3px 10px; border-radius:99px; background:var(--track); color:var(--faint); cursor:pointer; transition:background .15s, color .15s, transform .1s; }
   .chip:hover { color:var(--text); }
   .chip.on { color:var(--text); background:var(--accent-soft); }
@@ -137,7 +141,7 @@
   <div class="hdr" id="hdr">
     <span class="dot" id="stateDot"></span><b>Quota</b><span class="status" id="status" title="">准备中</span><span class="sp"></span>
     <span class="ico" id="tWeb" title="打开 Web 配置页">🌐</span>
-    <span class="ico" id="tPin" title="置顶">📌</span>
+    <span class="ico pin" id="tPin" title="置顶"><i>📌</i></span>
     <span class="ico" id="tCfg" title="设置">⚙</span>
     <span class="ico" id="tRef" title="刷新">↻</span>
     <span class="ico" id="tQuit" title="退出">✕</span>
@@ -147,6 +151,7 @@
     <div class="sec">窗口</div>
     <div class="albl"><span>不透明度</span><span id="aVal">82%</span></div>
     <input type="range" id="alphaR" min="20" max="100">
+    <div id="winOpts"><span class="chip" id="roundedChip">圆角窗口</span></div>
     <div class="sec">背景图片</div>
     <div class="bgrow">
       <span class="bgbtn" id="bgPick">选择图片…</span>
@@ -155,16 +160,22 @@
     <div id="bgDimWrap" style="display:none">
     <div class="albl"><span>背景压暗</span><span id="bgDimVal">55%</span></div>
     <input type="range" id="bgDimR" min="0" max="90">
+    <div class="albl"><span>背景模糊</span><span id="bgBlurVal">8px</span></div>
+    <input type="range" id="bgBlurR" min="0" max="30">
+    <div class="albl"><span>毛玻璃模糊</span><span id="glassBlurVal">16px</span></div>
+    <input type="range" id="glassBlurR" min="0" max="30">
     </div>
     <div class="sec">配色主题</div>
     <div id="themes"></div>
     <div class="sec">显示内容</div>
     <div id="pick"></div>
+    <div class="sec">卡片信息</div>
+    <div id="meta"></div>
   </div>
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true, bg_dim:55, theme:'dark' };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark' };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
 let api = null;
@@ -224,11 +235,8 @@ function applyTheme(){
   document.querySelectorAll('#themes .chip').forEach(el=>el.classList.toggle('on', el.dataset.t === (S.theme||'dark')));
 }
 
-function buildPick(){
-  const names = [...new Set(cache.map(i=>i.title))];
-  const chips = names.map(n=>[n,n]).concat([['#email','邮箱'],['#plan','套餐']]);
-  $('pick').innerHTML = chips.map(([k,label])=>`<span class="chip" data-n="${esc(k)}">${esc(label)}</span>`).join('');
-  $('pick').querySelectorAll('.chip').forEach(el=>{
+function wireChips(container){
+  container.querySelectorAll('.chip').forEach(el=>{
     el.classList.toggle('on', S.show[el.dataset.n]!==false);
     el.onclick = ()=>{
       S.show[el.dataset.n] = S.show[el.dataset.n]===false;
@@ -236,6 +244,12 @@ function buildPick(){
       save(); render(cache);
     };
   });
+}
+function buildPick(){
+  const names = [...new Set(cache.map(i=>i.title))];
+  $('pick').innerHTML = names.map(n=>`<span class="chip" data-n="${esc(n)}">${esc(n)}</span>`).join('');
+  $('meta').innerHTML = [['#email','邮箱'],['#plan','套餐']].map(([k,label])=>`<span class="chip" data-n="${k}">${label}</span>`).join('');
+  wireChips($('pick')); wireChips($('meta'));
 }
 
 function setRefreshState(text, state='ok', detail=''){
@@ -251,12 +265,11 @@ function flashUpdated(){
   void panel.offsetWidth;
   panel.classList.add('refreshed');
 }
-function resultLabel(meta, forced){
+function resultLabel(meta){
   const stamp = new Date(meta.fetched_at || Date.now()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
   if(meta.state === 'stale' || meta.stale) return [`旧数据 · ${stamp}`, 'error', '刷新失败，正在显示上一次成功快照'];
   if(meta.state === 'error') return ['刷新失败', 'error', meta.error || '刷新失败，请稍后重试'];
-  if(meta.from_cache && !forced) return [`缓存 · ${Math.round(meta.age_seconds || 0)}s`, 'ok', `快照时间 ${stamp}`];
-  return [`已更新 · ${stamp}`, 'ok', meta.from_cache ? '已读取其他客户端完成的共享刷新' : '已完成 Provider 刷新'];
+  return [`已更新 · ${stamp}`, 'ok', `快照时间 ${stamp}`];
 }
 async function refresh(force=false){
   if(refreshing) return;
@@ -269,7 +282,7 @@ async function refresh(force=false){
     const next = Array.isArray(payload) ? payload : (payload.results || []);
     if(next.length || !cache.length) cache = next;
     render(cache); buildPick();
-    const [text, state, detail] = resultLabel(meta, !!force);
+    const [text, state, detail] = resultLabel(meta);
     setRefreshState(text, state, detail);
     if(state === 'ok' && force) flashUpdated();
   }catch(e){
@@ -286,13 +299,23 @@ function applyAlpha(){
   $('alphaR').value = S.alpha;
   try{ api.set_alpha(S.alpha); }catch(e){}
 }
-function applyScrim(){ $('scrim').style.background = `rgba(16,19,26,${(S.bg_dim||0)/100})`; }
+function applyScrim(){
+  $('scrim').style.background = `rgba(16,19,26,${(S.bg_dim||0)/100})`;
+  const blur = `blur(${S.glass_blur ?? 16}px)`;
+  $('scrim').style.backdropFilter = blur;
+  $('scrim').style.webkitBackdropFilter = blur;
+}
+function applyBgBlur(){
+  const b = S.bg_blur || 0;
+  $('bg').style.filter = b ? `blur(${b}px)` : '';
+  $('bg').style.transform = b ? `scale(${1 + 2*b/250})` : '';
+}
 function applyBackground(dataUrl){
   const has = !!dataUrl;
   document.body.classList.toggle('bg', has);
   $('bgClear').style.display = has ? '' : 'none';
   $('bgDimWrap').style.display = has ? '' : 'none';
-  if(has){ $('bg').style.backgroundImage = `url("${dataUrl}")`; applyScrim(); }
+  if(has){ $('bg').style.backgroundImage = `url("${dataUrl}")`; applyScrim(); applyBgBlur(); }
 }
 function paintPin(){ $('tPin').classList.toggle('on', !!S.on_top); }
 
@@ -322,6 +345,26 @@ async function init(){
   $('bgDimR').value = S.bg_dim;
   $('bgDimR').oninput = e=>{ S.bg_dim = +e.target.value; $('bgDimVal').textContent = S.bg_dim + '%'; applyScrim(); };
   $('bgDimR').onchange = ()=>save();
+  $('bgBlurVal').textContent = S.bg_blur + 'px';
+  $('bgBlurR').value = S.bg_blur;
+  $('bgBlurR').oninput = e=>{ S.bg_blur = +e.target.value; $('bgBlurVal').textContent = S.bg_blur + 'px'; applyBgBlur(); };
+  $('bgBlurR').onchange = ()=>save();
+  $('glassBlurVal').textContent = S.glass_blur + 'px';
+  $('glassBlurR').value = S.glass_blur;
+  $('glassBlurR').oninput = e=>{ S.glass_blur = +e.target.value; $('glassBlurVal').textContent = S.glass_blur + 'px'; applyScrim(); };
+  $('glassBlurR').onchange = ()=>save();
+  const roundedChip = $('roundedChip');
+  const isMac = S.platform === 'darwin';
+  const applyMacRadius = ()=>{ if(isMac) $('panel').style.borderRadius = (S.rounded===false) ? '0' : '14px'; };
+  if(isMac) document.documentElement.classList.add('mac');
+  const paintRounded = ()=>{ roundedChip.classList.toggle('on', S.rounded!==false); applyMacRadius(); };
+  roundedChip.onclick = async ()=>{
+    S.rounded = S.rounded===false;
+    paintRounded(); save();
+    if(isMac) return;
+    try{ await api.set_rounded(S.rounded); }catch(e){}
+  };
+  paintRounded();
   $('bgPick').onclick = async ()=>{
     try{
       const r = await api.pick_background();

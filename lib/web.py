@@ -14,7 +14,7 @@ from .discover import collect_accounts
 from .models import AUTH_RULES
 from .render import _reset_text
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = Path(__file__).resolve().parent / "assets"
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-quota-cli"
+version = "0.1.0"
+description = "本地优先的 AI 账号额度看板：Web UI + 桌面悬浮窗，统一查看 Grok/OpenAI/Claude/Zhipu/Kimi/DeepSeek/Antigravity/Cursor 额度并写入各 IDE/CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "dushanaicode" }]
+keywords = ["quota", "ai", "openai", "claude", "grok", "kimi", "dashboard"]
+dependencies = [
+    "pycryptodome>=3.20",
+    "pywebview>=5.0",
+    "pystray>=0.19",
+    "pillow>=10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/dushanaicode/quota-cli"
+Repository = "https://github.com/dushanaicode/quota-cli"
+Issues = "https://github.com/dushanaicode/quota-cli/issues"
+
+[project.scripts]
+quota = "quota:main"
+
+[tool.setuptools]
+py-modules = ["quota"]
+packages = ["lib", "lib.providers"]
+
+[tool.setuptools.package-data]
+lib = ["assets/*"]
