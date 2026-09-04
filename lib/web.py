@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import time
 import urllib.error
@@ -20,6 +21,16 @@ from .render import _reset_text
 WEB_DIR = Path(__file__).resolve().parent / "assets"
 RELEASE_API = "https://api.github.com/repos/dushanaicode/dushan-quota/releases/latest"
 RELEASES_URL = "https://github.com/dushanaicode/dushan-quota/releases"
+DEFAULT_WEB_PORT = 18765
+
+
+def configured_port() -> int:
+    """Return the optional per-instance Web port, falling back safely."""
+    try:
+        port = int(os.environ.get("DUSHAN_QUOTA_WEB_PORT", ""))
+    except ValueError:
+        return DEFAULT_WEB_PORT
+    return port if 1 <= port <= 65535 else DEFAULT_WEB_PORT
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -49,6 +60,24 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/quota":
             force = parse_qs(parsed.query).get("force", [""])[0].lower() in {"1", "true", "yes"}
             self._json(_quota_payload(force=force))
+            return
+        if parsed.path == "/api/usage":
+            query = parse_qs(parsed.query)
+            provider = query.get("provider", [""])[0].strip()
+            identity = query.get("identity", [""])[0].strip()
+            force = query.get("force", [""])[0].lower() in {"1", "true", "yes"}
+            if not provider or not identity:
+                self._json({"error": "缺少账号参数"}, 400)
+                return
+            try:
+                payload = _usage_payload(provider, identity, force=force)
+            except LookupError:
+                self._json({"error": "未找到该账号"}, 404)
+                return
+            except Exception:
+                self._json({"error": "用量查询失败，请稍后重试"}, 502)
+                return
+            self._json(payload)
             return
         if parsed.path == "/api/config":
             cfg = config.load_config()
@@ -485,8 +514,11 @@ def _reset_ts(reset_iso) -> int | None:
 
 
 def _quota_payload(force: bool = False):
+    from .usage import activation_statuses, supported as usage_supported
+
     now = datetime.now().astimezone()
     shared = snapshot.get_snapshot(force=force)
+    active = activation_statuses(shared.results)
     stored = {item.get("identity"): item.get("id") for item in store.list_stored()}
     archived_records = _archived_records(config.load_config())
     archived_by_key = {item["key"]: item for item in archived_records}
@@ -534,7 +566,9 @@ def _quota_payload(force: bool = False):
             "windows": windows,
             "stored_id": stored.get(item.account.identity),
             "reset_credits": reset_credits,
+            "activations": active.get((item.account.provider, item.account.identity), []),
         }
+        result["usage_supported"] = usage_supported(item)
         if key in archived_keys:
             history.append(_history_payload(archived_by_key[key], result))
             history_seen.add(key)
@@ -563,6 +597,40 @@ def _quota_payload(force: bool = False):
             "stale": shared.stale,
             "cache_seconds": snapshot.cache_ttl_seconds(),
         },
+    }
+
+
+def _usage_payload(provider: str, identity: str, *, force: bool = False) -> dict:
+    shared = snapshot.get_snapshot()
+    item = next(
+        (
+            result
+            for result in shared.results
+            if result.account.provider == provider and result.account.identity == identity
+        ),
+        None,
+    )
+    if item is None:
+        raise LookupError(identity)
+
+    from .usage import collect
+
+    data = collect(shared.results, force=force)
+    rows = list(data["accounts"].get((provider, identity), []))
+    return {
+        "ok": True,
+        "account": {
+            "provider": provider,
+            "identity": identity,
+            "title": item.title,
+            "email": item.email or item.account.email,
+            "name": item.name or item.account.name,
+            "plan": item.plan or item.account.plan,
+            "source": item.account.source,
+        },
+        "usage": rows,
+        "fetched_at": datetime.now().astimezone().isoformat(),
+        "quota_fetched_at": datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat(),
     }
 
 
@@ -608,13 +676,15 @@ def _save_oauth(provider: str, label: str, result: dict):
     store.upsert_account(record)
 
 
-def make_server(host="127.0.0.1", port=18765) -> ThreadingHTTPServer:
+def make_server(host="127.0.0.1", port=None) -> ThreadingHTTPServer:
     """Build the HTTP server without entering the serve loop (used in-process by the float window)."""
+    port = configured_port() if port is None else port
     config.apply_config_env()
     return ThreadingHTTPServer((host, port), Handler)
 
 
-def serve(host="127.0.0.1", port=18765, open_browser=True):
+def serve(host="127.0.0.1", port=None, open_browser=True):
+    port = configured_port() if port is None else port
     server = make_server(host, port)
     url = f"http://{host}:{port}/"
     print(f"Quota Web UI: {url}")
@@ -626,9 +696,10 @@ def serve(host="127.0.0.1", port=18765, open_browser=True):
         print("\n已停止 Web UI")
 
 
-def launch_web(host="127.0.0.1", port=18765, open_browser=True) -> dict:
+def launch_web(host="127.0.0.1", port=None, open_browser=True) -> dict:
     """Open the Web UI. The HTTP server lives inside the floating-window process:
     if no server responds, launch the float window (which embeds it) and wait."""
+    port = configured_port() if port is None else port
     url = f"http://{host}:{port}/"
     started = False
     if not _web_ready(host, port):

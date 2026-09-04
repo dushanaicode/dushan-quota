@@ -46,6 +46,27 @@ class WebOverviewTests(unittest.TestCase):
         self.assertIn("/api/forget", self.html)
         self.assertIn("确认删除", self.html)
 
+    def test_supported_accounts_open_lazy_usage_detail_modal(self):
+        self.assertIn('id="usageModal"', self.html)
+        self.assertIn('class="btn act-usage">用量详情</button>', self.html)
+        self.assertIn("api('/api/usage?' + query.toString())", self.html)
+        self.assertIn("<th>模型</th><th>总 Token</th><th>输入</th>", self.html)
+        self.assertIn("local?'本机':'远端'", self.html)
+        self.assertIn("左右滑动查看全部列 →", self.html)
+
+    def test_cards_show_recorded_activation_target_and_time(self):
+        self.assertIn('class="activation-badge ${esc(status)}"', self.html)
+        self.assertIn("active.label", self.html)
+        self.assertIn("fmtActivation(active.written_at)", self.html)
+        self.assertNotIn("最近写入", self.html)
+        self.assertIn("已激活但过期", self.html)
+        self.assertIn("已激活 · 不可续期", self.html)
+
+    def test_usage_detail_filters_period_and_harness(self):
+        self.assertIn("data-period=", self.html)
+        self.assertIn("data-harness=", self.html)
+        self.assertIn("aggregateLocalUsage", self.html)
+
 
 if __name__ == "__main__":
     unittest.main()

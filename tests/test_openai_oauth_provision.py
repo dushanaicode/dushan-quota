@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,8 +27,11 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.home = Path(self.temp_dir.name)
+        self.environment = patch.dict(os.environ, {"DUSHAN_QUOTA_HOME": str(self.home)})
+        self.environment.start()
 
     def tearDown(self):
+        self.environment.stop()
         self.temp_dir.cleanup()
 
     def test_discover_from_codex_local_oauth(self):

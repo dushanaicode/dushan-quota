@@ -169,6 +169,16 @@
     word-break:break-word; }
   .meta.dim { color:var(--muted); font-size:11px; opacity:.85; }
   .meta i { font-style:normal; color:var(--faint); margin:0 6px; }
+  .activation-row { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+  .activation-badge { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:3px 8px;
+    border:1px solid rgba(74,192,139,.2); border-radius:99px; background:rgba(74,192,139,.09);
+    color:var(--ok); font-size:9.5px; white-space:nowrap; }
+  .activation-badge::before { content:''; width:5px; height:5px; flex:none; border-radius:50%;
+    background:currentColor; box-shadow:0 0 8px currentColor; }
+  .activation-badge.expired, .activation-badge.invalid { border-color:rgba(205,97,89,.28);
+    background:rgba(205,97,89,.11); color:var(--bad); }
+  .activation-badge.blocked, .activation-badge.unrenewable { border-color:rgba(207,154,46,.28);
+    background:rgba(207,154,46,.11); color:var(--warn); }
   .wins { border-top:1px solid var(--line-soft); margin-top:10px; padding-top:8px; flex:1; }
   /* 两行式额度行（对齐悬浮窗）：名称+重置+百分比一行，细条整行在下 */
   .wrow { margin:8px 0 3px; }
@@ -187,7 +197,7 @@
   .wrow.money .txt { color:var(--muted); font-variant-numeric:tabular-nums; }
   .wrow.money.neg .txt { color:var(--bad); }
   .err { color:var(--bad); font-size:12px; padding:6px 0 2px; }
-  .foot { display:flex; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
+  .foot { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
   .foot .btn { padding:4px 11px; font-size:11px; color:var(--muted); border-radius:8px; }
   .foot .btn:hover { color:var(--text); }
   .foot .btn.arm { color:var(--warn); border-color:rgba(207,154,46,.4); }
@@ -348,6 +358,88 @@
   .log-line .lv.DEBUG { color:var(--faint); }
   .log-line .lt { flex:none; color:var(--faint); }
   .log-line .lm { color:var(--text); word-break:break-all; }
+
+  /* ---------- usage detail ---------- */
+  .panel.usage-panel { width:min(1060px,96vw); max-height:min(800px,90vh); padding:0; overflow:hidden;
+    display:flex; flex-direction:column; background:var(--surface); }
+  .ud-head { flex:none; display:flex; align-items:flex-start; gap:18px; padding:22px 24px 18px;
+    border-bottom:1px solid var(--line-soft); background:linear-gradient(135deg,var(--accent-soft),transparent 52%); }
+  .ud-heading { flex:1; min-width:0; }
+  .ud-kicker { color:var(--accent); font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; }
+  .usage-panel .ud-heading h2 { margin:2px 0 3px; font-size:19px; letter-spacing:.02em; }
+  .ud-account { color:var(--muted); font-size:11.5px; overflow-wrap:anywhere; }
+  .ud-close { flex:none; width:30px; height:30px; border:1px solid var(--line); border-radius:9px;
+    background:var(--surface-2); color:var(--muted); font-size:13px; }
+  .ud-close:hover { color:var(--bad); border-color:var(--bad); }
+  .ud-body { flex:1; min-height:0; overflow-y:auto; padding:20px 24px 28px; }
+  .ud-body::-webkit-scrollbar, .ud-model-wrap::-webkit-scrollbar { width:5px; height:5px; }
+  .ud-body::-webkit-scrollbar-thumb, .ud-model-wrap::-webkit-scrollbar-thumb { background:var(--line); border-radius:99px; }
+  .ud-loading, .ud-empty { min-height:260px; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:10px; color:var(--muted); text-align:center; }
+  .ud-loading i { width:22px; height:22px; border:2px solid var(--line); border-top-color:var(--accent);
+    border-radius:50%; animation:rot .8s linear infinite; }
+  .ud-empty b { color:var(--text); font-size:14px; }
+  .ud-filters { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:9px;
+    margin-bottom:14px; padding:8px; border:1px solid var(--line); border-radius:11px; background:var(--surface-2); }
+  .ud-filter-group { display:flex; flex-wrap:wrap; gap:4px; }
+  .ud-filter-group button { border:0; border-radius:7px; padding:5px 10px; background:transparent;
+    color:var(--muted); font-size:10px; transition:background .2s,color .2s; }
+  .ud-filter-group button:hover { color:var(--text); }
+  .ud-filter-group button.on { background:var(--accent-soft); color:var(--accent); }
+  .ud-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; }
+  .ud-metric { min-width:0; padding:13px 14px; border:1px solid var(--line); border-radius:12px;
+    background:var(--surface-2); }
+  .ud-metric-top { display:flex; align-items:center; gap:7px; min-width:0; }
+  .ud-badge { flex:none; border-radius:99px; padding:2px 7px; font-size:9px; letter-spacing:.06em;
+    background:var(--accent-soft); color:var(--accent); }
+  .ud-badge.local { background:rgba(127,182,133,.12); color:var(--ok); }
+  .ud-metric-label { min-width:0; color:var(--muted); font-size:10.5px; overflow-wrap:anywhere; }
+  .ud-value { margin-top:7px; color:var(--text); font-size:20px; line-height:1.25; font-weight:600;
+    font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .ud-value small { margin-left:4px; color:var(--faint); font-size:10px; font-weight:400; }
+  .ud-sub { margin-top:4px; color:var(--faint); font-size:9.5px; line-height:1.45; overflow-wrap:anywhere; }
+  .ud-progress { height:4px; margin-top:9px; overflow:hidden; border-radius:99px; background:var(--track); }
+  .ud-progress i { display:block; height:100%; border-radius:99px; background:var(--accent); }
+  .ud-section { margin-top:16px; border:1px solid var(--line); border-radius:13px; overflow:hidden;
+    background:var(--surface-2); }
+  .ud-section-head { display:flex; align-items:flex-start; gap:9px; padding:13px 15px 11px;
+    border-bottom:1px solid var(--line-soft); }
+  .ud-section-title { flex:1; min-width:0; }
+  .ud-section-title b { display:block; font-size:12.5px; font-weight:600; overflow-wrap:anywhere; }
+  .ud-section-title span { display:block; margin-top:1px; color:var(--faint); font-size:9.5px; overflow-wrap:anywhere; }
+  .ud-section-total { flex:none; color:var(--text); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .ud-breakdown { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px;
+    border-bottom:1px solid var(--line-soft); background:var(--line-soft); }
+  .ud-stat { padding:10px 14px; background:var(--surface-2); }
+  .ud-stat span { display:block; color:var(--faint); font-size:9px; letter-spacing:.04em; }
+  .ud-stat b { display:block; margin-top:2px; color:var(--text); font-size:12px; font-weight:500;
+    font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .ud-scroll-hint { display:none; padding:7px 11px 0; color:var(--faint); font-size:9px; text-align:right; }
+  .ud-model-wrap { overflow-x:auto; }
+  .ud-table { width:100%; min-width:760px; border-collapse:collapse; font-size:10.5px; }
+  .ud-table th { padding:9px 11px; color:var(--faint); font-size:9px; font-weight:500; text-align:right;
+    letter-spacing:.04em; border-bottom:1px solid var(--line-soft); }
+  .ud-table th:first-child, .ud-table td:first-child { text-align:left; }
+  .ud-table td { padding:9px 11px; color:var(--muted); text-align:right; font-variant-numeric:tabular-nums;
+    border-bottom:1px solid var(--line-soft); white-space:nowrap; }
+  .ud-table tbody tr:last-child td { border-bottom:0; }
+  .ud-table tbody tr:hover td { background:var(--accent-soft); color:var(--text); }
+  .ud-model-name { color:var(--text) !important; font-weight:500; white-space:normal !important; overflow-wrap:anywhere; }
+  .ud-note { margin-top:14px; padding:11px 13px; border-radius:10px; background:var(--track);
+    color:var(--muted); font-size:10.5px; line-height:1.65; }
+  .ud-footer { flex:none; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:12px 24px; border-top:1px solid var(--line-soft); background:var(--surface-2); }
+  .ud-fetched { color:var(--faint); font-size:9.5px; }
+  .ud-footer-actions { display:flex; gap:8px; }
+  @media (max-width:720px) {
+    #usageModal { padding:8px; }
+    .panel.usage-panel { width:100%; max-height:94vh; border-radius:13px; }
+    .ud-head, .ud-body { padding-left:16px; padding-right:16px; }
+    .ud-footer { padding:10px 16px; align-items:flex-end; }
+    .ud-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .ud-fetched { max-width:46%; }
+    .ud-scroll-hint { display:block; }
+  }
   ::selection { background:var(--accent-soft); }
 </style>
 </head>
@@ -457,6 +549,29 @@
     <p class="hint">凭证库 <code>~/.dushan-quota/agent.db</code> · 订阅周期与刷新令牌自动记录</p>
     <div class="row end">
       <button class="btn primary" onclick="closeSet()">完成</button>
+    </div>
+  </div>
+</div>
+
+<div id="usageModal" class="modal" onclick="if(event.target===this)closeUsage()">
+  <div class="panel usage-panel" role="dialog" aria-modal="true" aria-labelledby="usageTitle">
+    <div class="ud-head">
+      <div class="ud-heading">
+        <div class="ud-kicker">Usage intelligence</div>
+        <h2 id="usageTitle">用量详情</h2>
+        <div class="ud-account" id="usageAccount"></div>
+      </div>
+      <button class="ud-close" onclick="closeUsage()" aria-label="关闭用量详情">✕</button>
+    </div>
+    <div class="ud-body" id="usageBody">
+      <div class="ud-loading"><i></i><span>正在读取用量数据…</span></div>
+    </div>
+    <div class="ud-footer">
+      <span class="ud-fetched" id="usageFetched"></span>
+      <div class="ud-footer-actions">
+        <button class="btn" id="usageRefresh" onclick="refreshUsageDetail()">刷新用量</button>
+        <button class="btn primary" onclick="closeUsage()">完成</button>
+      </div>
     </div>
   </div>
 </div>
@@ -621,6 +736,164 @@ function winRow(w){
   const c = colorOf(p);
   return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${esc(w.reset || '')}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
 }
+function fmtActivation(iso){
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function compactNumber(value){
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '—';
+  const trim = text => text.replace(/\.?0+$/, '');
+  if (Math.abs(n) >= 1e9) return trim((n / 1e9).toFixed(Math.abs(n) >= 1e10 ? 1 : 2)) + 'B';
+  if (Math.abs(n) >= 1e6) return trim((n / 1e6).toFixed(Math.abs(n) >= 1e7 ? 1 : 2)) + 'M';
+  if (Math.abs(n) >= 1e3) return trim((n / 1e3).toFixed(Math.abs(n) >= 1e4 ? 1 : 2)) + 'K';
+  return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString([], {maximumFractionDigits:2});
+}
+function exactNumber(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toLocaleString([], {maximumFractionDigits:2}) : '—';
+}
+function usageBadge(source){
+  const local = source === 'local';
+  return `<span class="ud-badge ${local?'local':''}">${local?'本机':'远端'}</span>`;
+}
+function usageMetricValue(item){
+  if (item.total_tokens != null) {
+    return `<div class="ud-value" title="${exactNumber(item.total_tokens)} Token">${compactNumber(item.total_tokens)}<small>Token</small></div>`;
+  }
+  if (item.used != null && item.total != null) {
+    return `<div class="ud-value" title="${exactNumber(item.used)} / ${exactNumber(item.total)}">${compactNumber(item.used)}<small>/ ${compactNumber(item.total)}${item.unit?' '+esc(item.unit):''}</small></div>`;
+  }
+  return '<div class="ud-value">—</div>';
+}
+function usageMetricCard(item){
+  const used = Number(item.used), total = Number(item.total);
+  const pct = Number.isFinite(used) && Number.isFinite(total) && total > 0
+    ? Math.max(0, Math.min(100, used / total * 100)) : null;
+  return `<article class="ud-metric">
+    <div class="ud-metric-top">${usageBadge(item.source)}<span class="ud-metric-label">${esc(item.label||'用量')}</span></div>
+    ${usageMetricValue(item)}
+    ${item.detail?`<div class="ud-sub">${esc(item.detail)}</div>`:''}
+    ${pct==null?'':`<div class="ud-progress" title="已用 ${pct.toFixed(1)}%"><i style="width:${pct}%"></i></div>`}
+  </article>`;
+}
+const USAGE_FIELDS = [
+  ['input','输入 Token'],['cached','缓存读取'],['cache_write','缓存写入'],
+  ['output','输出 Token'],['reasoning','推理 Token'],
+];
+function usageBreakdown(values){
+  if (!values || typeof values !== 'object') return '';
+  const fields = USAGE_FIELDS.filter(([key]) => values[key] != null && (key==='input' || key==='output' || Number(values[key])>0));
+  if (!fields.length) return '';
+  return `<div class="ud-breakdown">${fields.map(([key,label]) => `<div class="ud-stat"><span>${label}</span><b title="${exactNumber(values[key])}">${exactNumber(values[key])}</b></div>`).join('')}</div>`;
+}
+function usageModelTable(models){
+  if (!Array.isArray(models) || !models.length) return '';
+  const cell = value => `<td title="${exactNumber(value)}">${exactNumber(value)}</td>`;
+  return `<div class="ud-scroll-hint">左右滑动查看全部列 →</div><div class="ud-model-wrap"><table class="ud-table">
+    <thead><tr><th>模型</th><th>总 Token</th><th>输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>推理</th></tr></thead>
+    <tbody>${models.map(model => `<tr><td class="ud-model-name">${esc(model.name||'未标记模型')}</td>${cell(model.total_tokens)}${cell(model.input)}${cell(model.cached)}${cell(model.cache_write)}${cell(model.output)}${cell(model.reasoning)}</tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function usageSection(item){
+  const hasDetails = item.breakdown || (Array.isArray(item.models) && item.models.length);
+  if (!hasDetails) return '';
+  const total = item.total_tokens == null ? '' : `${compactNumber(item.total_tokens)} Token`;
+  return `<section class="ud-section">
+    <div class="ud-section-head">${usageBadge(item.source)}<div class="ud-section-title"><b>${esc(item.label||'用量明细')}</b><span>${esc(item.detail||'')}</span></div><div class="ud-section-total">${total}</div></div>
+    ${usageBreakdown(item.breakdown)}${usageModelTable(item.models)}
+  </section>`;
+}
+
+let usageCtx = null;
+let usageRequestToken = 0;
+let usageDetailData = null;
+let usagePeriod = '30d';
+let usageHarness = 'all';
+function usageLoading(text='正在读取本机与远端用量…'){
+  document.getElementById('usageBody').innerHTML = `<div class="ud-loading"><i></i><span>${esc(text)}</span></div>`;
+}
+function renderUsageDetail(data){
+  usageDetailData = data;
+  const rows = Array.isArray(data.usage) ? data.usage : [];
+  const account = data.account || {};
+  document.getElementById('usageTitle').textContent = `${account.title||'账号'} · 用量详情`;
+  document.getElementById('usageAccount').textContent = [account.email||account.name||account.identity, account.plan, account.source].filter(Boolean).join(' · ');
+  const localHarnesses = [...new Map(rows.filter(row => row.source==='local' && row.harness).map(row => [row.harness,row.harness_label||row.harness])).entries()];
+  if (usageHarness!=='all' && usageHarness!=='remote' && !localHarnesses.some(([key]) => key===usageHarness)) usageHarness='all';
+  const periodRows = rows.filter(row => (row.period||'30d')===usagePeriod);
+  const visible = usageHarness==='all' ? periodRows
+    : usageHarness==='remote' ? periodRows.filter(row => row.source==='remote')
+    : periodRows.filter(row => row.source==='local' && row.harness===usageHarness);
+  const local = visible.filter(row => row.source==='local');
+  const remote = visible.filter(row => row.source==='remote');
+  const metrics = [...remote];
+  if (local.length===1) metrics.unshift(local[0]);
+  else if (local.length>1) metrics.unshift(aggregateLocalUsage(local));
+  const periods = [['1d','1 天'],['7d','7 天'],['30d','30 天'],['all','累计']];
+  const filters = `<div class="ud-filters">
+    <div class="ud-filter-group ud-periods">${periods.map(([key,label])=>`<button data-period="${key}" class="${key===usagePeriod?'on':''}">${label}</button>`).join('')}</div>
+    <div class="ud-filter-group ud-harnesses"><button data-harness="all" class="${usageHarness==='all'?'on':''}">全部</button>${rows.some(row=>row.source==='remote')?`<button data-harness="remote" class="${usageHarness==='remote'?'on':''}">远端</button>`:''}${localHarnesses.map(([key,label])=>`<button data-harness="${esc(key)}" class="${key===usageHarness?'on':''}">${esc(label)}</button>`).join('')}</div>
+  </div>`;
+  const content = visible.length ? `
+    <div class="ud-metrics">${metrics.map(usageMetricCard).join('')}</div>
+    ${visible.map(usageSection).join('')}
+    <div class="ud-note">“本机”按 Harness 分开统计并可汇总；“远端”是账号级数据，无法可靠拆分到具体 Harness，因此不与本机数值相加。</div>`
+    : '<div class="ud-empty"><b>该筛选范围暂无用量</b><span>没有找到能够可靠归属到该账号、时间段和 Harness 的 Token 记录。</span></div>';
+  document.getElementById('usageBody').innerHTML = filters + content;
+  document.querySelectorAll('.ud-periods button').forEach(button => button.onclick=()=>{usagePeriod=button.dataset.period;renderUsageDetail(usageDetailData);});
+  document.querySelectorAll('.ud-harnesses button').forEach(button => button.onclick=()=>{usageHarness=button.dataset.harness;renderUsageDetail(usageDetailData);});
+  const stamp = new Date(data.fetched_at || Date.now());
+  document.getElementById('usageFetched').textContent = `用量读取 ${stamp.toLocaleString('zh-CN',{hour12:false})}`;
+}
+function aggregateLocalUsage(rows){
+  const breakdown = {};
+  for(const [key] of USAGE_FIELDS) breakdown[key]=rows.reduce((sum,row)=>sum+Number((row.breakdown||{})[key]||0),0);
+  const harnesses=[...new Set(rows.map(row=>row.harness_label||row.harness).filter(Boolean))];
+  const period=usagePeriod==='all'?'累计':`近 ${usagePeriod.replace('d','')} 天`;
+  return {source:'local',label:`本机合计 · ${period}`,
+    total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown,
+    detail:harnesses.join(' + ')};
+}
+async function loadUsageDetail(force=false){
+  if (!usageCtx) return;
+  const token = ++usageRequestToken;
+  const btn = document.getElementById('usageRefresh');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>读取中';
+  usageLoading(force ? '正在刷新用量数据…' : '正在读取本机与远端用量…');
+  try {
+    const query = new URLSearchParams({provider:usageCtx.provider, identity:usageCtx.identity});
+    if (force) query.set('force','1');
+    const data = await api('/api/usage?' + query.toString());
+    if (token === usageRequestToken) renderUsageDetail(data);
+  } catch(e) {
+    if (token === usageRequestToken) {
+      document.getElementById('usageBody').innerHTML = `<div class="ud-empty"><b>用量读取失败</b><span>${esc(e.message)}</span></div>`;
+    }
+  } finally {
+    if (token === usageRequestToken) { btn.disabled = false; btn.textContent = '刷新用量'; }
+  }
+}
+function openUsage(item){
+  usageCtx = item;
+  usageDetailData = null;
+  usagePeriod = '30d';
+  usageHarness = 'all';
+  document.getElementById('usageTitle').textContent = `${item.title} · 用量详情`;
+  document.getElementById('usageAccount').textContent = [item.email||item.name||item.identity, item.plan].filter(Boolean).join(' · ');
+  document.getElementById('usageFetched').textContent = '';
+  document.getElementById('usageModal').classList.add('show');
+  loadUsageDetail(false);
+}
+function refreshUsageDetail(){ loadUsageDetail(true); }
+function closeUsage(){
+  usageRequestToken++;
+  usageCtx = null;
+  usageDetailData = null;
+  document.getElementById('usageModal').classList.remove('show');
+}
 
 function renderSide(){
   const nav = document.getElementById('sideNav');
@@ -646,6 +919,15 @@ function renderCards(){
   items.forEach((item, i) => {
     const line1 = [item.email, item.name].filter(Boolean).map(esc).join('<i>·</i>');
     const line2 = [item.user_id && item.user_id !== item.email ? item.user_id : '', [item.auth_mode, item.source].filter(Boolean).join(' / ')].filter(Boolean).map(esc).join('<i>·</i>');
+    const activationLine = (item.activations || []).map(active => {
+      const written = fmtActivation(active.written_at);
+      const full = active.written_at ? new Date(active.written_at).toLocaleString('zh-CN',{hour12:false}) : '时间未知';
+      const status = active.status || 'active';
+      const state = {expired:'已激活但过期',invalid:'已激活但失效',blocked:'已激活但受限',unrenewable:'已激活 · 不可续期'}[status] || '已激活';
+      const expiry = active.expires_at ? new Date(active.expires_at).toLocaleString('zh-CN',{hour12:false}) : '';
+      const title = [active.status_detail, expiry?`有效期 ${expiry}`:'', `写入时间 ${full}`].filter(Boolean).join(' · ');
+      return `<span class="activation-badge ${esc(status)}" title="${esc(title)}">${esc(active.label)} ${state}${written?` · ${esc(written)}`:''}</span>`;
+    }).join('');
     const subLine = subscriptionLine(item);
     const wins = (item.windows || []).map(winRow).join('');
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(item.plan)}">${esc(item.plan)}</span>` : '';
@@ -666,6 +948,9 @@ function renderCards(){
     const resetButton = item.provider === 'openai'
       ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditAvailable ? '' : 'disabled'} title="${esc(resetTitle)}">${esc(resetLabel)}</button>`
       : '';
+    const usageButton = item.usage_supported
+      ? '<button class="btn act-usage">用量详情</button>'
+      : '';
     const sec = document.createElement('section');
     sec.className = 'card';
     sec.style.animationDelay = (i * 45) + 'ms';
@@ -674,14 +959,18 @@ function renderCards(){
       <div class="card-head"><h2>${esc(item.title)}</h2>${pill}</div>
       <div class="meta">${line1 || '-'}</div>
       <div class="meta dim">${line2 || ' '}</div>
+      ${activationLine?`<div class="activation-row">${activationLine}</div>`:''}
       ${subLine}
       ${item.ok ? `<div class="wins">${wins}</div>` : `<div class="err">${esc(item.error || '获取失败')}</div>`}
       <div class="foot">
+        ${usageButton}
         <button class="btn act-sync">写入到…</button>
         ${resetButton}
       </div>`;
     sec.querySelector('.x').onclick = () => openCloseCardConfirm(item);
     sec.querySelector('.act-sync').onclick = () => openSync(item.provider, encodeURIComponent(item.identity || ''), item.title);
+    const ub = sec.querySelector('.act-usage');
+    if (ub) ub.onclick = () => openUsage(item);
     const rb = sec.querySelector('.act-reset');
     if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
     box.appendChild(sec);
@@ -1099,7 +1388,7 @@ async function doSync(harness, confirmed){
     return;
   }
   document.getElementById('syncConfirm').style.display = 'none';
-  if (data.ok) msg.textContent = data.message || '完成';
+  if (data.ok) { msg.textContent = data.message || '完成'; await refreshQuota(false); }
   else { msg.className = 'msg bad'; msg.textContent = data.error || '失败'; }
 }
 
@@ -1146,7 +1435,7 @@ document.getElementById('btnFloat').onclick = async () => {
   await api('/api/float', {method:'POST', body:'{}'});
   toast('悬浮窗已启动');
 };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeCardConfirm(); closeForgetConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); closeLogs(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd(); closeSync(); closeUsage(); closeCardConfirm(); closeForgetConfirm(); toggleFocus(false); toggleHistory(false); closeSet(); closeLogs(); } });
 (async () => {
   try {
     const cfg = await api('/api/config');

@@ -111,6 +111,26 @@
   .bar { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
   .bar i { display:block; height:100%; border-radius:99px; }
   .txt { font-size:11px; color:var(--muted); }
+  .usage { margin:8px 0 2px; padding:6px 8px; border-radius:8px; background:var(--card); border:1px solid var(--line); }
+  .usage-title { font-size:10px; color:var(--dim); margin-bottom:4px; }
+  .usage-filter { display:flex; align-items:center; gap:4px; margin:0 0 5px; overflow:hidden; }
+  .usage-periods { display:flex; gap:2px; min-width:0; }
+  .usage-periods button { border:0; border-radius:5px; padding:2px 5px; background:var(--track); color:var(--dim); font-size:8.5px; }
+  .usage-periods button.on { background:var(--accent-soft); color:var(--accent); }
+  .usage-filter select { min-width:0; flex:1; height:20px; border:1px solid var(--line); border-radius:5px;
+    padding:0 3px; background:var(--track); color:var(--muted); font-size:8.5px; outline:none; }
+  .usage-line, .usage-model-main { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:baseline; gap:7px; padding:2px 0; }
+  .usage-line .src { font-size:10px; color:var(--accent); white-space:nowrap; }
+  .usage-line .ulbl, .usage-model-main .ulbl { min-width:0; font-size:10.5px; color:var(--muted); white-space:normal; overflow-wrap:anywhere; }
+  .usage-line .uval, .usage-model-main .uval { font-size:10.5px; color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .usage-detail { font-size:9.5px; line-height:1.4; color:var(--dim); margin:0 0 2px 31px; white-space:normal; overflow-wrap:anywhere; }
+  .usage-model { padding:3px 0 2px 14px; }
+  .usage-model-main { padding:0; }
+  .usage-model-main .ulbl { color:var(--faint); }
+  .usage-model-main::before { content:'·'; color:var(--dim); }
+  .usage-stats { display:flex; flex-wrap:wrap; gap:2px 10px; margin:1px 0 4px 31px; font-size:9.5px; line-height:1.35; color:var(--dim); }
+  .usage-model .usage-stats { margin:1px 0 0 14px; }
+  .usage-stat { white-space:nowrap; }
   .g { color:var(--ok); } .y { color:var(--warn); } .r { color:var(--bad); }
   .bar i.g { background:var(--ok); }
   .bar i.y { background:var(--warn); }
@@ -175,7 +195,7 @@
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark' };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', usage_period:'30d', usage_harness:'all' };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
 let api = null;
@@ -190,6 +210,69 @@ function row(w){
   const p = Math.round(w.remaining_percent), c = color(p);
   const rst = w.reset ? esc(w.reset) : '';
   return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${rst}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
+}
+
+function usageOn(){ return S.show['#usage']===true; }
+function fmtUsage(v){
+  const n = Number(v);
+  if(!Number.isFinite(n)) return '';
+  if(Math.abs(n)>=1e9) return (n/1e9).toFixed(n>=1e10?1:2).replace(/\.?0+$/,'')+'B';
+  if(Math.abs(n)>=1e6) return (n/1e6).toFixed(n>=1e7?1:2).replace(/\.?0+$/,'')+'M';
+  if(Math.abs(n)>=1e3) return (n/1e3).toFixed(n>=1e4?1:2).replace(/\.?0+$/,'')+'K';
+  return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString([], {maximumFractionDigits:2});
+}
+function usageValue(u){
+  if(u.total_tokens!=null) return `${fmtUsage(u.total_tokens)} Token`;
+  if(u.used!=null && u.total!=null) return `${fmtUsage(u.used)} / ${fmtUsage(u.total)}${u.unit?' '+esc(u.unit):''}`;
+  return '';
+}
+function usageStats(values){
+  if(!values || typeof values!=='object') return '';
+  const stats = [
+    ['输入',values.input,true],
+    ['缓存读',values.cached,Number(values.cached)>0],
+    ['缓存写',values.cache_write,Number(values.cache_write)>0],
+    ['输出',values.output,true],
+    ['推理',values.reasoning,Number(values.reasoning)>0],
+  ].filter(([,value,show])=>show && value!=null && Number.isFinite(Number(value)));
+  if(!stats.length) return '';
+  return `<div class="usage-stats">${stats.map(([label,value])=>`<span class="usage-stat" title="${Number(value).toLocaleString()}">${label} ${fmtUsage(value)}</span>`).join('')}</div>`;
+}
+function usageAggregate(rows){
+  const breakdown={};
+  for(const key of ['input','cached','cache_write','output','reasoning']) breakdown[key]=rows.reduce((sum,row)=>sum+Number((row.breakdown||{})[key]||0),0);
+  const period=S.usage_period==='all'?'累计':`近 ${String(S.usage_period).replace('d','')} 天`;
+  return {source:'local',label:`本机合计 · ${period}`,total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown,
+    detail:[...new Set(rows.map(row=>row.harness_label||row.harness).filter(Boolean))].join(' + ')};
+}
+function usageHarnesses(){
+  return [...new Map(cache.flatMap(item=>item.usage||[]).filter(row=>row.source==='local'&&row.harness).map(row=>[row.harness,row.harness_label||row.harness])).entries()];
+}
+function setUsagePeriod(value){ S.usage_period=value; save(); render(cache); }
+function setUsageHarness(value){ S.usage_harness=value; save(); render(cache); }
+function usageBlock(rows){
+  if(!usageOn() || !Array.isArray(rows) || !rows.length) return '';
+  const period=S.usage_period||'30d', harness=S.usage_harness||'all';
+  const periodRows=rows.filter(row=>(row.period||'30d')===period);
+  const local=periodRows.filter(row=>row.source==='local');
+  const remote=periodRows.filter(row=>row.source==='remote');
+  const visible=harness==='all'?[...(local.length===1?local:local.length?[usageAggregate(local)]:[]),...remote]
+    :harness==='remote'?remote:local.filter(row=>row.harness===harness);
+  const periods=[['1d','1天'],['7d','7天'],['30d','30天'],['all','累计']];
+  const harnesses=usageHarnesses();
+  let html = `<div class="usage"><div class="usage-title">用量信息</div><div class="usage-filter"><div class="usage-periods">${periods.map(([key,label])=>`<button class="${key===period?'on':''}" onclick="setUsagePeriod('${key}')">${label}</button>`).join('')}</div><select onchange="setUsageHarness(this.value)"><option value="all" ${harness==='all'?'selected':''}>全部 Harness</option><option value="remote" ${harness==='remote'?'selected':''}>仅远端</option>${harnesses.map(([key,label])=>`<option value="${esc(key)}" ${harness===key?'selected':''}>${esc(label)}</option>`).join('')}</select></div>`;
+  if(!visible.length) return html+'<div class="usage-detail" style="margin-left:0">该范围暂无用量</div></div>';
+  for(const u of visible){
+    const src = u.source==='local'?'本机':'远端';
+    html += `<div class="usage-line"><span class="src">${src}</span><span class="ulbl">${esc(u.label||'用量')}</span><span class="uval">${usageValue(u)}</span></div>`;
+    if(u.detail) html += `<div class="usage-detail" title="${esc(u.detail)}">${esc(u.detail)}</div>`;
+    html += usageStats(u.breakdown);
+    for(const m of (Array.isArray(u.models)?u.models:[])){
+      const value = m.total_tokens==null ? '' : `${fmtUsage(m.total_tokens)} Token`;
+      html += `<div class="usage-model"><div class="usage-model-main"><span class="ulbl">${esc(m.name||'未标记模型')}</span><span class="uval">${value}</span></div>${usageStats(m)}</div>`;
+    }
+  }
+  return html+'</div>';
 }
 
 function fmtDate(iso){
@@ -219,6 +302,7 @@ function render(items){
     const sub = subscriptionText(it);
     if(sub) html += `<div class="sub">${esc(sub)}</div>`;
     html += it.ok ? it.windows.map(row).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
+    html += usageBlock(it.usage);
     html += `</div>`;
   }
   $('list').innerHTML = html || '<div class="txt" style="padding:6px 0">没有账号</div>';
@@ -237,18 +321,22 @@ function applyTheme(){
 
 function wireChips(container){
   container.querySelectorAll('.chip').forEach(el=>{
-    el.classList.toggle('on', S.show[el.dataset.n]!==false);
+    const enabled = el.dataset.n==='#usage' ? usageOn() : S.show[el.dataset.n]!==false;
+    el.classList.toggle('on', enabled);
     el.onclick = ()=>{
-      S.show[el.dataset.n] = S.show[el.dataset.n]===false;
-      el.classList.toggle('on', S.show[el.dataset.n]!==false);
-      save(); render(cache);
+      const key = el.dataset.n;
+      const next = key==='#usage' ? !usageOn() : S.show[key]===false;
+      S.show[key] = next;
+      el.classList.toggle('on', next);
+      save();
+      if(key==='#usage' && next) refresh(false); else render(cache);
     };
   });
 }
 function buildPick(){
   const names = [...new Set(cache.map(i=>i.title))];
   $('pick').innerHTML = names.map(n=>`<span class="chip" data-n="${esc(n)}">${esc(n)}</span>`).join('');
-  $('meta').innerHTML = [['#email','邮箱'],['#plan','套餐']].map(([k,label])=>`<span class="chip" data-n="${k}">${label}</span>`).join('');
+  $('meta').innerHTML = [['#email','邮箱'],['#plan','套餐'],['#usage','用量信息']].map(([k,label])=>`<span class="chip" data-n="${k}">${label}</span>`).join('');
   wireChips($('pick')); wireChips($('meta'));
 }
 
@@ -277,7 +365,7 @@ async function refresh(force=false){
   $('tRef').classList.add('loading');
   setRefreshState('刷新中…', 'loading', force ? '正在强制刷新共享快照' : '正在读取共享快照');
   try{
-    const payload = await api.quota(!!force);
+    const payload = await api.quota(!!force, usageOn());
     const meta = Array.isArray(payload) ? {} : (payload.snapshot || {});
     const next = Array.isArray(payload) ? payload : (payload.results || []);
     if(next.length || !cache.length) cache = next;
@@ -326,6 +414,8 @@ async function init(){
   api = window.pywebview.api;
 
   try{ S = Object.assign(S, await api.settings()); }catch(e){}
+  if(!['1d','7d','30d','all'].includes(S.usage_period)) S.usage_period='30d';
+  if(!S.usage_harness) S.usage_harness='all';
   applyAlpha(); paintPin(); buildThemes(); applyTheme();
 
   $('tRef').onclick = ()=>refresh(true);

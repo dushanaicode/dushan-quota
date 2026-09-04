@@ -9,7 +9,7 @@ def fetch(account: Account) -> QuotaResult:
     api_key = (account.secret.get("api_key") or "").strip()
     if not api_key:
         return QuotaResult(account=account, ok=False, title=account.label, error="缺少 API Key")
-    variant = account.secret.get("variant") or ""
+    variant = str(account.secret.get("variant") or "").lower()
     url = ZHIPU_URL if "zhipu" in variant else ZAI_URL
     title = "Zhipu" if "zhipu" in variant else "Z.ai"
     status, text, data = request_json(
@@ -52,8 +52,16 @@ def fetch(account: Account) -> QuotaResult:
 
             millis = reset_raw if reset_raw > 10_000_000_000 else reset_raw * 1000
             reset = datetime.fromtimestamp(millis / 1000, tz=timezone.utc).isoformat()
+        total, used = _usage_amounts(item)
         windows.append(
-            Window(name=name, remaining_percent=max(0.0, min(100.0, 100.0 - float(percent))), reset_iso=reset)
+            Window(
+                name=name,
+                remaining_percent=max(0.0, min(100.0, 100.0 - float(percent))),
+                used=used,
+                total=total,
+                reset_iso=reset,
+                meta={"unit": "Token" if kind == "TOKENS_LIMIT" else "额度" if kind == "CREDIT_LIMIT" else ""},
+            )
         )
     if not windows:
         return QuotaResult(account=account, ok=False, title=title, error="无可用额度窗口")
@@ -93,3 +101,28 @@ def _profile(api_key: str, variant: str) -> dict:
         if email or name or user_id:
             return {"email": str(email), "name": str(name), "user_id": str(user_id), "plan": str(plan)}
     return {}
+
+
+def _usage_amounts(item: dict) -> tuple[float | None, float | None]:
+    total = _number(item.get("usage"))
+    current = _number(item.get("currentValue"))
+    remaining = _number(item.get("remaining"))
+    if total is None or total <= 0:
+        return None, None
+    candidates = []
+    if current is not None:
+        candidates.append(current)
+    if remaining is not None:
+        candidates.append(total - remaining)
+    if not candidates:
+        return None, None
+    return total, max(0.0, min(total, max(candidates)))
+
+
+def _number(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

@@ -63,6 +63,52 @@ class FloatRefreshTests(unittest.TestCase):
         self.assertEqual("2030-02-03T04:05:06+00:00", payload["results"][0]["sub_end"])
         self.assertEqual("known", payload["results"][0]["sub_status"])
 
+    @patch("lib.usage.collect")
+    @patch.object(float_win, "get_snapshot")
+    def test_payload_adds_optional_account_and_provider_usage(self, get_snapshot, collect):
+        get_snapshot.return_value = Snapshot(
+            results=[self.result],
+            fetched_at=time.time(),
+            from_cache=False,
+            generation="generation-usage",
+        )
+        collect.return_value = {
+            "accounts": {
+                ("openai", "account-1"): [
+                    {"source": "remote", "label": "累计", "total_tokens": 100},
+                ]
+            },
+            "providers": {
+                "openai": [
+                    {"source": "local", "label": "近 30 天", "total_tokens": 40},
+                ]
+            },
+        }
+
+        payload = float_win._fetch_payload(include_usage=True)
+
+        collect.assert_called_once_with([self.result], force=False)
+        self.assertEqual([100, 40], [item["total_tokens"] for item in payload["results"][0]["usage"]])
+
+    def test_float_page_has_usage_toggle_and_optional_fetch(self):
+        html = (float_win.WEB_DIR / "float.html").read_text(encoding="utf-8")
+        self.assertIn("['#usage','用量信息']", html)
+        self.assertIn("api.quota(!!force, usageOn())", html)
+        self.assertIn("usageBlock(it.usage)", html)
+        self.assertIn("function usageStats(values)", html)
+        self.assertIn("usage_period:'30d'", html)
+        self.assertIn("setUsageHarness", html)
+        self.assertIn("全部 Harness", html)
+        self.assertIn("white-space:normal; overflow-wrap:anywhere", html)
+
+    def test_window_title_can_isolate_a_local_test_instance(self):
+        with patch.dict(os.environ, {"DUSHAN_QUOTA_WINDOW_TITLE": "Quota-T"}):
+            self.assertEqual("Quota-T", float_win._window_title())
+
+    def test_web_port_can_isolate_a_local_test_instance(self):
+        with patch.dict(os.environ, {"DUSHAN_QUOTA_WEB_PORT": "18766"}):
+            self.assertEqual(18766, float_win._web_port())
+
     @patch.object(float_win, "get_snapshot")
     def test_payload_marks_old_data_as_stale(self, get_snapshot):
         get_snapshot.return_value = Snapshot(

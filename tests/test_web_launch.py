@@ -1,10 +1,18 @@
 import unittest
+import os
 from unittest.mock import patch
 
 from lib import web
 
 
 class WebLaunchTests(unittest.TestCase):
+    def test_configured_port_accepts_valid_value_and_rejects_invalid_values(self):
+        with patch.dict(os.environ, {"DUSHAN_QUOTA_WEB_PORT": "18766"}):
+            self.assertEqual(18766, web.configured_port())
+        for value in ("bad", "0", "65536"):
+            with self.subTest(value=value), patch.dict(os.environ, {"DUSHAN_QUOTA_WEB_PORT": value}):
+                self.assertEqual(web.DEFAULT_WEB_PORT, web.configured_port())
+
     @patch.object(web.webbrowser, "open")
     @patch.object(web, "_wait_for_web", return_value=True)
     @patch("lib.float_win.launch_float")

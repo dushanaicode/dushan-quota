@@ -192,12 +192,43 @@ def record_provision(provider: str, identity: str, harness: str, detail: str = "
         conn.close()
 
 
-def list_provisions() -> list[dict]:
+def record_activation_observation(provider: str, identity: str, harness: str, written_at: int) -> None:
+    """Persist a current credential-file marker once for future attribution."""
+    timestamp = int(written_at or 0)
+    if not provider or not identity or not harness or timestamp <= 0:
+        return
     conn = _connect()
     try:
-        rows = conn.execute(
-            "SELECT provider, identity, harness, detail, written_at FROM provisions ORDER BY written_at DESC"
-        ).fetchall()
+        exists = conn.execute(
+            "SELECT 1 FROM provisions WHERE provider = ? AND identity = ? AND harness = ? AND written_at = ?",
+            (provider, identity, harness, timestamp),
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO provisions (provider, identity, harness, detail, written_at) VALUES (?,?,?,?,?)",
+                (provider, identity, harness, "observed-current-credential", timestamp),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def list_provisions() -> list[dict]:
+    path = db_path()
+    if not path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error:
+        return []
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT provider, identity, harness, detail, written_at "
+                "FROM provisions ORDER BY written_at DESC, id DESC"
+            ).fetchall()
+        except sqlite3.Error:
+            return []
     finally:
         conn.close()
     return [

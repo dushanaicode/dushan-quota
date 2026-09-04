@@ -132,7 +132,7 @@ def _from_codex_local(home: Path, add):
                     },
                 )
             )
-            # 2) Add Account A (the id_token account, e.g. worrycj692@gmail.com)
+            # 2) Add Account A (the id_token account, e.g. account-a@example.com)
             identity_a = id_acc_id or id_email or "codex-id"
             db_tokens = agentdb.get_tokens("openai", identity_a) or {}
             saved_access = db_tokens.get("access") or ""

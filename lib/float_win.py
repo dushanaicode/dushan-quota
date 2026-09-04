@@ -68,14 +68,28 @@ def _primary_scale() -> float:
         return 1.0
 
 
-def _fetch_payload(force: bool = False) -> dict:
+def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
     now = datetime.now().astimezone()
     shared = get_snapshot(force=force)
     archived = config.archived_keys()
+    visible_results = [
+        item
+        for item in shared.results
+        if config.account_key(item.account.provider, item.account.identity) not in archived
+    ]
+    usage_data = {"accounts": {}, "providers": {}}
+    if include_usage:
+        try:
+            from .usage import collect
+
+            usage_data = collect(visible_results, force=force)
+        except Exception:
+            # Usage is optional enrichment; quota must remain available when a
+            # local log or provider-specific usage source fails.
+            pass
     results = []
-    for item in shared.results:
-        if config.account_key(item.account.provider, item.account.identity) in archived:
-            continue
+    attached_provider_usage = set()
+    for item in visible_results:
         windows = [
             {
                 "name": window.name,
@@ -87,6 +101,10 @@ def _fetch_payload(force: bool = False) -> dict:
             }
             for window in item.windows
         ]
+        usage_rows = list(usage_data["accounts"].get((item.account.provider, item.account.identity), []))
+        if item.account.provider not in attached_provider_usage:
+            usage_rows.extend(usage_data["providers"].get(item.account.provider, []))
+            attached_provider_usage.add(item.account.provider)
         results.append(
             {
                 "title": item.title,
@@ -99,6 +117,7 @@ def _fetch_payload(force: bool = False) -> dict:
                 "sub_end": item.sub_end,
                 "sub_status": item.sub_status,
                 "windows": [w for w in windows if w["text"] is not None or w["remaining_percent"] is not None],
+                "usage": usage_rows,
             }
         )
     return {
@@ -372,9 +391,9 @@ class Api:
         self._on_top = True
         self._rounded = True
 
-    def quota(self, force=False):
+    def quota(self, force=False, include_usage=False):
         try:
-            return _fetch_payload(bool(force))
+            return _fetch_payload(bool(force), bool(include_usage))
         except Exception:
             return {
                 "results": [{"title": "错误", "ok": False, "error": "刷新失败，请稍后重试", "windows": []}],
@@ -568,7 +587,7 @@ class Api:
     def open_web(self):
         import webbrowser
 
-        webbrowser.open(f"http://{_WEB_HOST}:{_WEB_PORT}/")
+        webbrowser.open(f"http://{_WEB_HOST}:{_web_port()}/")
         return {"ok": True}
 
     def set_rounded(self, on):
@@ -711,11 +730,15 @@ def _float_pid_path() -> Path:
     return store_dir() / "float.pid"
 
 
+def _window_title() -> str:
+    return os.environ.get("DUSHAN_QUOTA_WINDOW_TITLE", "").strip() or "Quota"
+
+
 def _activate_existing_float() -> bool:
     """已有悬浮窗时恢复并置前，避免重复启动把原窗口关掉。"""
     if _is_windows():
         user32 = ctypes.windll.user32
-        existing = user32.FindWindowW(None, "Quota")
+        existing = user32.FindWindowW(None, _window_title())
         if not existing:
             return False
         user32.ShowWindow(existing, 9)  # SW_RESTORE
@@ -733,7 +756,12 @@ def _activate_existing_float() -> bool:
 
 
 _WEB_HOST = "127.0.0.1"
-_WEB_PORT = 18765
+
+
+def _web_port() -> int:
+    from .web import configured_port
+
+    return configured_port()
 
 
 def _embedded_web_loop() -> None:
@@ -744,11 +772,12 @@ def _embedded_web_loop() -> None:
     from . import web
 
     while True:
+        port = _web_port()
         try:
-            if not web._web_ready(_WEB_HOST, _WEB_PORT):
-                server = web.make_server(_WEB_HOST, _WEB_PORT)
+            if not web._web_ready(_WEB_HOST, port):
+                server = web.make_server(_WEB_HOST, port)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
-                logbuf.info("内嵌 Web 服务已启动", url=f"http://{_WEB_HOST}:{_WEB_PORT}/")
+                logbuf.info("内嵌 Web 服务已启动", url=f"http://{_WEB_HOST}:{port}/")
         except Exception as exc:
             logbuf.warn("内嵌 Web 服务启动失败", error=str(exc))
         time.sleep(20)
@@ -799,7 +828,7 @@ def serve_float():
     api = Api()
     html = (WEB_DIR / "float.html").read_text(encoding="utf-8") if (WEB_DIR / "float.html").is_file() else ""
     window = webview.create_window(
-        title="Quota",
+        title=_window_title(),
         html=html,
         js_api=api,
         width=int(saved_float.get("width") or 290 * scale),

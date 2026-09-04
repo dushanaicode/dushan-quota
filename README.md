@@ -10,6 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Release-v0.2.0-C3B191" alt="Release v0.2.0">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -18,7 +19,30 @@
   <img src=".image/web-dashboard.png" width="100%" alt="Dushan Quota Web 额度总览">
 </p>
 
-Dushan Quota 是个小巧的本地 AI 额度看板。它会找到本机已有的登录账号和手动添加的 API Key，把各个平台的额度、套餐和重置时间放到一起看。
+Dushan Quota 是一个本地优先的 AI 账号额度与 Token 用量看板。它会发现本机已有登录账号和手动添加的 API Key，把各平台的额度、套餐、重置时间、本机客户端用量与远端账号用量放到一起，同时明确区分账号和 Harness，避免把一台机器的总量重复算到多个账号。
+
+## v0.2.0：账号级用量看板
+
+- **按账号归属**：同一个 `(Provider, Harness)` 只显示一个当前激活账号；Codex、OpenCode、OMP 可以同时激活不同的 OpenAI 账号。
+- **按时间查看**：本机 Token 支持近 1 天、7 天、30 天与累计；远端数据按 Provider 实际提供的统计周期展示。
+- **按 Harness 筛选**：Codex、OpenCode、OMP、Kimi Code CLI、Claude Code、Grok CLI 可以单独查看，也可以汇总。
+- **按模型拆分**：展示总 Token、输入、输出、缓存读取、缓存写入和推理 Token；来源没有某项时不伪造数据。
+- **激活健康状态**：区分“已激活”“不可续期”“已激活但过期”“已激活但失效”和“已激活但受限”，悬停可查看有效期与写入时间。
+- **本机与远端分离**：远端账号统计无法可靠归属到某个 Harness，因此不会与本机用量强行相加。
+
+### Token 数据源
+
+| Provider | 远端 Token | 本机 Token | 账号归属方式 |
+| --- | --- | --- | --- |
+| OpenAI / ChatGPT / Codex | 今日、7 天、30 天、累计 | Codex、OpenCode、OMP | 远端按账号；Codex/OpenCode 按激活时间线；OMP 优先使用 `credential_pin` |
+| Grok / xAI | 当前版本仅查询额度窗口；API Team 历史用量需要 Management Key | Grok CLI、OpenCode、OMP | 当前凭据或激活时间线 |
+| Claude | Anthropic Admin Key 可查询 1/7/30 天模型 Token | Claude Code、OpenCode、OMP | 当前凭据或激活时间线 |
+| Kimi Code | 服务端周/5h 百分比仅作为额度，不伪装成 Token | Kimi Code CLI、OpenCode、OMP | 当前 Kimi 凭据；多账号时使用激活时间线 |
+| Zhipu / Z.ai | 近 30 天模型 Token | OpenCode、OMP | API Key 与激活时间线 |
+| DeepSeek | 官方 API 暂无历史用量查询 | OpenCode、OMP | API Key 与激活时间线 |
+| Antigravity / Cursor | 暂无可靠 Token 历史接口 | 暂未统计 Token | 继续展示官方额度和计数窗口 |
+
+本机累计表示“当前设备仍保留的日志累计”，不等于 Provider 服务端的账号终身累计。无法确认账号归属的历史日志不会强行分配。
 
 ## 快速安装
 
@@ -42,6 +66,7 @@ quota
 
 ```powershell
 pipx upgrade --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-quota
+quota --version
 ```
 
 <details>
@@ -76,6 +101,8 @@ pipx upgrade --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-q
 - **双端看板**：Web 适合完整管理，悬浮窗适合放在桌面上随时看一眼；运行 `quota` 就能打开。
 - **背景随你换**：自带一张默认背景，也可以换成自己喜欢的图片；窗口怎么缩放，图片都会自动铺满。
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
+- **用量智能**：按账号、模型、时间与 Harness 汇总本机/远端 Token，支持详细输入、输出、缓存和推理拆分。
+- **激活状态**：读取目标 Harness 的当前凭据，展示激活账号、写入时间、有效期、过期、失效、受限与不可续期状态。
 - **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
 - **更新检查**：运行 `quota` 会检查 GitHub Release，Web 顶栏也能手动检查；升级仍由你确认，不会悄悄改动环境。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
@@ -86,8 +113,8 @@ pipx upgrade --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-q
 
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
-| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 置顶、拖动、缩放、透明度、换成自己喜欢的背景图、5 款配色主题、托盘、手动刷新、展示项选择；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
-| Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号与额度的完整管理 | Provider 筛选、四款主题、添加账号、OAuth、历史恢复、写入 Harness、OpenAI 重置额度、运行日志查看 | 默认仅 `127.0.0.1:18765` |
+| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 额度、Token 用量、1/7/30 天/累计、Harness 筛选、置顶、透明度、背景与主题；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
+| Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号、额度与用量的完整管理 | Provider/账号/模型/Harness 用量详情、激活健康状态、添加账号、OAuth、历史恢复、凭据写入、OpenAI 重置额度、日志 | 默认仅 `127.0.0.1:18765` |
 
 Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
 
@@ -112,6 +139,8 @@ Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之�
 | Antigravity | `antigravity` | Gemini 与 Claude/GPT 的周/5h 窗口、套餐 | Google OAuth | Antigravity IDE |
 | Cursor | `cursor` | Total、Auto + Composer、API 等用量与套餐 | Cursor IDE session | Cursor IDE |
 | Cursor Agent | `cursor_agent` | Included、Auto、API、套餐与计费周期 | `crsr_` API Key 或本机登录 | OMP、Cursor Agent |
+
+在 Web 账号卡片点击“用量详情”，或在悬浮窗设置中开启“用量信息”，即可使用 v0.2.0 的时间、Harness 和模型维度统计。只有存在可靠 Token 数据源的平台才显示入口；额度百分比、余额和任务次数不会被换算为 Token。
 
 > **“可导入”不等于“可查询”。** OpenAI Platform API Key、普通 Anthropic API Key 和 xAI API Key 可以进入本地凭证库或用于部分写入目标，但当前 ChatGPT、Claude Code、Grok 的额度查询仍依赖对应产品的 OAuth / 登录态。
 
@@ -199,6 +228,13 @@ git clone https://github.com/dushanaicode/dushan-quota.git
 cd dushan-quota
 python -m pip install -e .
 python -m unittest discover -s tests -q
+```
+
+已有源码目录可直接更新：
+
+```bash
+git pull --ff-only
+python -m pip install -e .
 ```
 
 Web 前端位于 `lib/assets/index.html`，悬浮窗页面位于 `lib/assets/float.html`，均为原生 HTML/CSS/JS，不需要前端构建步骤。

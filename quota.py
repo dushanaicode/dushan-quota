@@ -32,6 +32,12 @@ _YELLOW = "\033[38;5;221m"
 _GRAY = "\033[38;5;245m"
 
 
+def _web_url() -> str:
+    from lib.web import configured_port
+
+    return f"http://127.0.0.1:{configured_port()}/"
+
+
 def main():
     _configure_stdio()
     config.apply_config_env()
@@ -53,7 +59,7 @@ def main():
     sub.add_parser("ui", help="打开本机 Web UI")
     ui_run = sub.add_parser("ui-run", help=argparse.SUPPRESS)
     ui_run.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
-    ui_run.add_argument("--port", type=int, default=18765, help=argparse.SUPPRESS)
+    ui_run.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
     sub.add_parser("float", help="打开悬浮窗（置顶可拖动）")
     sub.add_parser("float-run", help=argparse.SUPPRESS)
 
@@ -147,7 +153,7 @@ def _print_banner(version: str, output=print, *, color: bool | None = None, widt
     output(border("├" + "─" * (width - 2) + "┤"))
     output(_panel_row("GitHub", GITHUB_URL.removeprefix("https://"), width, color))
     output(_panel_row("PyPI", PYPI_URL.removeprefix("https://"), width, color))
-    output(_panel_row("Web UI", WEB_URL, width, color))
+    output(_panel_row("Web UI", _web_url(), width, color))
     output(_panel_row("工具链", f"pipx {PIPX_VERSION} · pip {PIP_VERSION}", width, color))
     output(_panel_row("更新", "启动时检查 · 由你决定是否升级", width, color))
     output(border("╰" + "─" * (width - 2) + "╯"))
@@ -274,7 +280,7 @@ def _startup_update(
 
 def _print_launch_summary(started: bool, output=print) -> None:
     _status("ok", "桌面", f"悬浮窗{'已启动' if started else '已在运行'}", output)
-    _status("info", "Web UI", WEB_URL, output)
+    _status("info", "Web UI", _web_url(), output)
     _status("muted", "提示", "点击悬浮窗标题栏打开 Web 配置；关闭窗口后服务也会停止。", output)
 
 
