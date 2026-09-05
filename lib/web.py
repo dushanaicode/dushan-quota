@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import config, logbuf, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
-from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json
+from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json, _save_oauth_account
 from .discover import collect_accounts
 from .httputil import request_json
 from .models import AUTH_RULES
@@ -118,8 +118,12 @@ class Handler(BaseHTTPRequestHandler):
             login_id = parse_qs(parsed.query).get("login_id", [""])[0]
             result = oauth_openai.poll_login(login_id)
             if result.get("status") == "ok":
-                _save_oauth("openai", "OpenAI", result)
-            self._json(result)
+                try:
+                    _save_oauth("openai", "OpenAI", result)
+                except (ValueError, OSError):
+                    self._json({"status": "error", "error": "保存授权失败，请重新尝试"})
+                    return
+            self._json({key: value for key, value in result.items() if key not in {"access", "refresh", "id_token"}})
             return
         if parsed.path == "/api/oauth/antigravity/poll":
             login_id = parse_qs(parsed.query).get("login_id", [""])[0]
@@ -168,7 +172,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(oauth_grok.start_login())
                 return
             if path == "/api/oauth/openai/start":
-                self._json(oauth_openai.start_login())
+                identity = str(payload.get("identity") or "")
+                if identity:
+                    account = next((a for a in collect_accounts() if a.provider == "openai" and a.identity == identity), None)
+                    account_id = (account.secret.get("account_id") or account.user_id) if account else ""
+                    if not account_id:
+                        self._json({"error": "无法确认待重新授权的账号"}, 400)
+                        return
+                    self._json(oauth_openai.start_login(account_id=account_id, identity=identity))
+                else:
+                    self._json(oauth_openai.start_login())
+                return
+            if path == "/api/oauth/openai/cancel":
+                oauth_openai.cancel_login(str(payload.get("login_id") or ""))
+                self._json({"ok": True})
                 return
             if path == "/api/oauth/antigravity/start":
                 redirect = f"http://{self.server.server_address[0]}:{self.server.server_address[1]}/oauth-callback"
@@ -629,6 +646,7 @@ def _usage_payload(provider: str, identity: str, *, force: bool = False) -> dict
             "source": item.account.source,
         },
         "usage": rows,
+        "harnesses": data.get("harnesses", {}).get((provider, identity), []),
         "fetched_at": datetime.now().astimezone().isoformat(),
         "quota_fetched_at": datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat(),
     }
@@ -657,23 +675,7 @@ def _history_payload(record: dict, result: dict | None = None) -> dict:
 
 
 def _save_oauth(provider: str, label: str, result: dict):
-    profile = result.get("profile") or {}
-    record = {
-        "provider": provider,
-        "auth_mode": "oauth",
-        "label": label,
-        "identity": profile.get("email") or profile.get("user_id") or profile.get("principal_id") or f"{provider}-oauth",
-        "email": profile.get("email") or "",
-        "name": profile.get("name") or "",
-        "user_id": profile.get("user_id") or profile.get("principal_id") or "",
-        "access": result.get("access") or "",
-        "refresh": result.get("refresh") or "",
-    }
-    if result.get("id_token"):
-        record["id_token"] = result["id_token"]
-    if profile.get("plan_type"):
-        record["plan"] = profile["plan_type"]
-    store.upsert_account(record)
+    return _save_oauth_account(provider, label, result)
 
 
 def make_server(host="127.0.0.1", port=None) -> ThreadingHTTPServer:

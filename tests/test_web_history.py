@@ -48,7 +48,7 @@ class WebHistoryTests(unittest.TestCase):
     def payload(self):
         with patch.object(web.snapshot, "get_snapshot", return_value=self.shared), patch.object(
             web.store, "list_stored", return_value=[]
-        ):
+        ), patch("lib.usage.activation_statuses", return_value={}):
             return web._quota_payload()
 
     def test_archive_preserves_safe_summary_and_can_be_restored(self):

@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from . import agentdb
+from . import agentdb, tokenstore
 from .crypto_store import cockpit_key, load_maybe_encrypted
 from .env_auth import collect_env_accounts
 from .models import Account
@@ -30,9 +30,22 @@ def opencode_auth(home: Path) -> dict:
 def collect_accounts(home: Path | None = None) -> list[Account]:
     home = home or home_dir()
     accounts: list[Account] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], Account] = {}
+    stored = list_stored()
+    # Keep existing identity/history keys when older OAuth imports used an email.
+    openai_identities = {
+        str(item.get("user_id")): str(item["identity"])
+        for item in stored
+        if item.get("provider") == "openai" and item.get("user_id") and item.get("identity")
+    }
 
     def add(account: Account):
+        if account.provider == "openai" and account.auth_mode != "api_key":
+            account_id = _openai_account_id(account.secret.get("access")) or account.secret.get("account_id") or account.user_id
+            if account_id:
+                account.identity = openai_identities.get(account_id, account_id)
+                account.secret["account_id"] = account_id
+                account.user_id = account_id
         key = (account.provider, account.identity)
         api_key = str(account.secret.get("api_key") or "")
         if api_key:
@@ -40,8 +53,11 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
         if not account.identity and not api_key:
             return
         if key in seen:
+            previous = seen[key]
+            if account.provider == "openai" and agentdb._secret_expiry(account.secret) > agentdb._secret_expiry(previous.secret):
+                previous.secret = account.secret
             return
-        seen.add(key)
+        seen[key] = account
         accounts.append(account)
 
     auth = opencode_auth(home)
@@ -52,10 +68,13 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
     _from_cursor_local(home, add)
     _from_cursor_agent_local(home, add)
     _from_claude_local(home, add)
-    _from_store(add)
+    _from_store(add, stored)
     for account in collect_env_accounts():
         add(account)
-    agentdb.sync_accounts(accounts)
+    with tokenstore.OPENAI_LOCK:
+        for account in accounts:
+            tokenstore.adopt_latest(account)
+        agentdb.sync_accounts(accounts)
     return accounts
 
 
@@ -84,7 +103,7 @@ def _from_codex_local(home: Path, add):
         # Case 1: id_token and access belong to the same user or only one is present
         if (id_acc_id and acc_acc_id and id_acc_id == acc_acc_id) or not id_acc_id or not acc_acc_id:
             if access:
-                account_id = account_id_hint or acc_acc_id or id_acc_id or ""
+                account_id = acc_acc_id or id_acc_id or account_id_hint or ""
                 identity = account_id or _jwt_sub(access) or "codex-local"
                 add(
                     Account(
@@ -110,7 +129,7 @@ def _from_codex_local(home: Path, add):
         else:
             # Case 2: Multi-account state in auth.json (id_token belongs to Account A, access belongs to Account B)
             # 1) Add Account B (the access token account)
-            account_id_b = account_id_hint or acc_acc_id or ""
+            account_id_b = acc_acc_id or account_id_hint or ""
             identity_b = account_id_b or _jwt_sub(access) or "codex-local"
             add(
                 Account(
@@ -218,21 +237,22 @@ def _from_opencode(auth: dict, add):
 
     openai = auth.get("openai")
     if isinstance(openai, dict) and openai.get("type") == "oauth" and openai.get("access"):
+        account_id = _openai_account_id(openai.get("access")) or openai.get("accountId")
         add(
             Account(
                 provider="openai",
                 label="OpenAI",
                 source="opencode",
-                identity=openai.get("accountId") or _openai_account_id(openai.get("access")) or "opencode-openai",
+                identity=account_id or "opencode-openai",
                 auth_mode="oauth",
                 email=_openai_email(openai.get("access")) or "",
-                user_id=openai.get("accountId") or _openai_account_id(openai.get("access")) or "",
+                user_id=account_id or "",
                 name=_openai_name(openai.get("access")) or "",
                 secret={
                     "access": openai.get("access", ""),
                     "id_token": openai.get("id_token") or openai.get("idToken") or "",
                     "refresh": openai.get("refresh", ""),
-                    "account_id": openai.get("accountId") or _openai_account_id(openai.get("access")),
+                    "account_id": account_id,
                     "expires": openai.get("expires"),
                 },
             )
@@ -563,8 +583,8 @@ def _jwt_sub(token: str | None) -> str | None:
     return payload.get("principal_id") or payload.get("sub")
 
 
-def _from_store(add):
-    for item in list_stored():
+def _from_store(add, records=None):
+    for item in list_stored() if records is None else records:
         provider = str(item.get("provider") or "")
         if not provider:
             continue
@@ -574,8 +594,8 @@ def _from_store(add):
         refresh = str(item.get("refresh") or "").strip()
         id_token = str(item.get("id_token") or "").strip()
 
-        # Fallback to agent.db if tokens are in SQLite
-        if not access or not refresh:
+        # OpenAI merges complete bundles after discovery, never individual old/new tokens.
+        if provider != "openai" and (not access or not refresh):
             db_token = agentdb.get_tokens(provider, identity)
             if db_token:
                 if not access:
@@ -583,6 +603,11 @@ def _from_store(add):
                 if not refresh:
                     refresh = str(db_token.get("refresh") or "").strip()
 
+        if provider == "openai" and not access:
+            bundle = agentdb.get_tokens(provider, identity) or {}
+            access = bundle.get("access") or ""
+            refresh = bundle.get("refresh") or refresh
+            id_token = bundle.get("id_token") or id_token
         if not access and not refresh and not api_key and not id_token:
             continue
 

@@ -8,11 +8,13 @@ import json
 import shutil
 import sqlite3
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import agentdb, tokenstore
 from .models import Account
+from .oauth_openai import matching_id_token
 
 XAI_ISSUER = "https://auth.x.ai"
 XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
@@ -123,10 +125,14 @@ def provision(account: Account, harness: str, confirmed: bool = False) -> dict:
         return {"ok": False, "error": f"未知 harness: {harness}"}
     if account.provider not in item["providers"]:
         return {"ok": False, "error": f"{item['label']} 不支持 {account.provider}"}
-    access = tokenstore.ensure_fresh(account)
-    if access:
-        account.secret["access"] = access
-    return item["run"](account, confirmed)
+    with tokenstore.OPENAI_LOCK if account.provider == "openai" else nullcontext():
+        try:
+            access = tokenstore.ensure_fresh(account)
+        except tokenstore.RefreshError as error:
+            return {"ok": False, "error": str(error), "reauth_required": error.reauth}
+        if access:
+            account.secret["access"] = access
+        return item["run"](account, confirmed)
 
 
 def _opencode_path() -> Path:
@@ -298,6 +304,7 @@ def _codex_local_tokens(account: Account, access: str) -> dict:
 
 
 def _openai_oauth_metadata(account: Account, access: str, id_token: str = "") -> dict:
+    id_token = matching_id_token(access, id_token, account.secret.get("account_id") or account.user_id)
     access_claims = _jwt_payload(access)
     auth = _openai_auth_claims(access)
     id_auth = _openai_auth_claims(id_token)
@@ -567,7 +574,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
         agentdb.record_provision(account.provider, account.identity, "codex", f"apiKey backup={backup}")
         return {"ok": True, "message": "已写入 Codex（API Key 模式）"}
 
-    access = tokenstore.ensure_fresh(account) or (account.secret.get("access") or "")
+    access = account.secret.get("access") or ""
     if not access:
         return {"ok": False, "error": "该账号缺少 access 令牌"}
 
@@ -587,23 +594,10 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
         or ""
     )
     refresh = account.secret.get("refresh") or ""
+    if not refresh:
+        return {"ok": False, "error": "缺少续期凭据，请重新授权此账号", "reauth_required": True}
 
-    # Resolve id_token: must be a REAL signed JWT belonging to THIS account
-    id_token = account.secret.get("id_token") or ""
-    if id_token:
-        try:
-            hdr_part = id_token.split(".")[0]
-            hdr_part += "=" * ((4 - len(hdr_part) % 4) % 4)
-            hdr = json.loads(base64.urlsafe_b64decode(hdr_part))
-        except Exception:
-            hdr = {}
-        # Reject fake synthesized tokens (alg:none or missing kid = not a real OpenAI JWT)
-        if hdr.get("alg") == "none" or not hdr.get("kid"):
-            id_token = ""
-
-    # No real id_token? Just use access_token directly (cockpit-tools approach)
-    if not id_token:
-        id_token = access
+    id_token = matching_id_token(access, account.secret.get("id_token") or "", account_id) or access
 
     backup = _backup(path)
     data["auth_mode"] = None

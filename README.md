@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.2.0-C3B191" alt="Release v0.2.0">
+  <img src="https://img.shields.io/badge/Release-v0.3.0-C3B191" alt="Release v0.3.0">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -21,11 +21,16 @@
 
 Dushan Quota 是一个本地优先的 AI 账号额度与 Token 用量看板。它会发现本机已有登录账号和手动添加的 API Key，把各平台的额度、套餐、重置时间、本机客户端用量与远端账号用量放到一起，同时明确区分账号和 Harness，避免把一台机器的总量重复算到多个账号。
 
+## v0.3.0：修复自动刷新闪烁
+
+- **悬浮窗**：开启“动画效果”后，周期自动刷新不再整列表淡入闪烁；入场动画只在卡片结构变化（新增、移除、切换显示）时播放，数值与进度条仍然以动画平滑过渡。
+- **Web UI**：卡片、额度对比与历史列表的入场动画同样只在内容集合变化时播放，后台自动刷新静默更新数值。
+
 ## v0.2.0：账号级用量看板
 
 - **按账号归属**：同一个 `(Provider, Harness)` 只显示一个当前激活账号；Codex、OpenCode、OMP 可以同时激活不同的 OpenAI 账号。
 - **按时间查看**：本机 Token 支持近 1 天、7 天、30 天与累计；远端数据按 Provider 实际提供的统计周期展示。
-- **按 Harness 筛选**：Codex、OpenCode、OMP、Kimi Code CLI、Claude Code、Grok CLI 可以单独查看，也可以汇总。
+- **按客户端筛选**：每个账号独立选择客户端。列表依据该账号的配置和使用记录生成，OpenCode / OMP 区分“已配置”和“历史”。
 - **按模型拆分**：展示总 Token、输入、输出、缓存读取、缓存写入和推理 Token；来源没有某项时不伪造数据。
 - **激活健康状态**：区分“已激活”“不可续期”“已激活但过期”“已激活但失效”和“已激活但受限”，悬停可查看有效期与写入时间。
 - **本机与远端分离**：远端账号统计无法可靠归属到某个 Harness，因此不会与本机用量强行相加。
@@ -60,7 +65,7 @@ pipx install --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-q
 quota
 ```
 
-`quota` 会先显示当前版本和 GitHub 地址，再检查最新 Release。发现新版本时，可以查看升级命令、本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。
+`quota`、`quota float` 和本地 `quota-t` 都会显示彩色启动页，包含当前版本、最新 Release、GitHub 地址、Web 地址和完整升级命令。发现新版本时，可以查看升级命令、本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。`quota-t` 使用本地源码，页面中的 pipx 命令用于更新已安装的 `quota` 发行版。
 
 升级也使用同一份稳定约束：
 
@@ -103,9 +108,11 @@ quota --version
 - **自动发现**：读取 Codex、OpenCode、Cockpit、Grok CLI、Claude Code、Cursor 等本机登录态，也支持环境变量、JSON 和手动添加。
 - **用量智能**：按账号、模型、时间与 Harness 汇总本机/远端 Token，支持详细输入、输出、缓存和推理拆分。
 - **激活状态**：读取目标 Harness 的当前凭据，展示激活账号、写入时间、有效期、过期、失效、受限与不可续期状态。
+- **悬浮窗设置**：小窗口可滚动查看全部选项；“动画效果”可开关并保存。
 - **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
 - **更新检查**：运行 `quota` 会检查 GitHub Release，Web 顶栏也能手动检查；升级仍由你确认，不会悄悄改动环境。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
+- **OpenAI 多账号恢复**：优先使用账号库中的新令牌，刷新时只同步仍使用该账号的 Codex / OpenCode。续期失败会显示原因，也可以在原卡片点击“重新授权”，保留账号和历史记录；登录其他账号时会拒绝覆盖。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
 

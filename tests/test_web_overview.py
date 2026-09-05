@@ -32,7 +32,7 @@ class WebOverviewTests(unittest.TestCase):
         self.assertIn('id="closeCardModal"', self.html)
         self.assertIn("关闭这张卡片？", self.html)
         self.assertIn("确认关闭", self.html)
-        self.assertIn("账号、登录状态和认证凭证不会被删除", self.html)
+        self.assertIn("账号和登录信息保留", self.html)
         self.assertIn("/api/archive", self.html)
         self.assertIn("/api/restore", self.html)
         self.assertNotIn("移入历史", self.html)

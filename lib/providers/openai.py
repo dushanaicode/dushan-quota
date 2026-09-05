@@ -17,6 +17,16 @@ OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
 def fetch(account: Account) -> QuotaResult:
+    try:
+        return _fetch(account)
+    except tokenstore.RefreshError as error:
+        id_token = account.secret.get("id_token") or ""
+        start, end, status = _token_subscription(id_token, account.plan)
+        return QuotaResult(account=account, ok=False, title="OpenAI", error=str(error),
+                           plan=account.plan, sub_start=start, sub_end=end, sub_status=status)
+
+
+def _fetch(account: Account) -> QuotaResult:
     access = tokenstore.ensure_fresh(account)
     id_token = str(account.secret.get("id_token") or "")
     token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type")
@@ -34,7 +44,9 @@ def fetch(account: Account) -> QuotaResult:
         )
     status, text, data = _usage(account, access)
     if status == 401:
-        access = tokenstore.refresh_account(account) or access
+        access = tokenstore.refresh_account(account)
+        if not access:
+            raise tokenstore.RefreshError("invalid_response", "续期服务未返回有效凭据，请稍后重试")
         id_token = str(account.secret.get("id_token") or id_token)
         token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type") or token_plan_type
         status, text, data = _usage(account, access)
@@ -51,7 +63,7 @@ def fetch(account: Account) -> QuotaResult:
             account=account,
             ok=False,
             title="OpenAI",
-            error=f"{status} {text[:80]}",
+            error="登录验证失败（HTTP 401），请重新授权此账号" if status == 401 else f"{status} {text[:80]}",
             plan=(
                 _plan(token_plan_type or subscription_plan)
                 if (token_plan_type or subscription_plan)
@@ -123,6 +135,13 @@ def _usage(account: Account, access: str):
 
 
 def reset_credits(account: Account, *, confirmed: bool = False) -> dict:
+    try:
+        return _reset_account_credits(account, confirmed=confirmed)
+    except tokenstore.RefreshError as error:
+        return {"ok": False, "error": str(error), "reauth_required": error.reauth}
+
+
+def _reset_account_credits(account: Account, *, confirmed: bool = False) -> dict:
     """Consume one reset credit only after explicit confirmation and eligibility checks."""
     import uuid
 

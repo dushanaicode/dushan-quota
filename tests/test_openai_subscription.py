@@ -323,7 +323,7 @@ class OpenAISubscriptionTests(unittest.TestCase):
             web.snapshot, "cache_ttl_seconds", return_value=60
         ), patch.object(web.store, "list_stored", return_value=[]), patch.object(
             web.config, "load_config", return_value={}
-        ), patch.object(float_win, "get_snapshot", return_value=shared):
+        ), patch.object(float_win, "get_snapshot", return_value=shared), patch("lib.usage.activation_statuses", return_value={}):
             web_item = web._quota_payload()["results"][0]
             float_item = float_win._fetch_payload()["results"][0]
 

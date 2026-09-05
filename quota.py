@@ -107,11 +107,6 @@ def main():
 
         serve(host=args.host, port=args.port, open_browser=False)
         return
-    if args.command == "float":
-        from lib.float_win import launch_float
-        started = launch_float()
-        print("悬浮窗已启动（任务栏无图标，点窗口 ✕ 退出）" if started else "悬浮窗已在运行")
-        return
     if args.command == "float-run":
         from lib.float_win import serve_float
         serve_float()
@@ -135,7 +130,7 @@ def _print_banner(version: str, output=print, *, color: bool | None = None, widt
     width = max(48, min(76, width or columns - 2))
     body_width = width - 6
     brand = "◆  DUSHAN QUOTA"
-    release = f"v{version}  STABLE"
+    release = f"当前 v{version}"
     gap = " " * max(1, body_width - _cell_width(brand) - _cell_width(release))
     border = lambda text: _paint(text, _GRAY, color)
 
@@ -149,13 +144,16 @@ def _print_banner(version: str, output=print, *, color: bool | None = None, widt
         + "  "
         + border("│")
     )
-    output(_panel_text("本地 AI 额度看板  ·  Web + 桌面悬浮窗", width, color, _DIM))
+    output(_panel_text("AI 额度  ·  Token 用量  ·  多账号管理", width, color, _DIM))
     output(border("├" + "─" * (width - 2) + "┤"))
-    output(_panel_row("GitHub", GITHUB_URL.removeprefix("https://"), width, color))
-    output(_panel_row("PyPI", PYPI_URL.removeprefix("https://"), width, color))
+    output(_panel_row("GitHub", GITHUB_URL, width, color))
+    output(_panel_row("发布页", GITHUB_URL + "/releases", width, color))
+    output(_panel_row("PyPI", PYPI_URL, width, color))
     output(_panel_row("Web UI", _web_url(), width, color))
     output(_panel_row("工具链", f"pipx {PIPX_VERSION} · pip {PIP_VERSION}", width, color))
-    output(_panel_row("更新", "启动时检查 · 由你决定是否升级", width, color))
+    mode = "本地源码" if (ROOT / ".git").exists() else "已安装发行版"
+    title = os.environ.get("DUSHAN_QUOTA_WINDOW_TITLE", "").strip()
+    output(_panel_row("运行方式", f"{title} · {mode}" if title else mode, width, color))
     output(border("╰" + "─" * (width - 2) + "╯"))
 
 
@@ -168,19 +166,25 @@ def _panel_text(text: str, width: int, color: bool, style: str = "") -> str:
 def _panel_row(label: str, value: str, width: int, color: bool) -> str:
     label_width = 8
     padded_label = label + " " * max(0, label_width - _cell_width(label))
-    value = _fit_cells(value, width - 6 - label_width - 1)
-    body = padded_label + " " + value
-    padding = " " * max(0, width - 6 - _cell_width(body))
-    return (
-        _paint("│", _GRAY, color)
-        + "  "
-        + _paint(padded_label, _CYAN, color)
-        + " "
-        + value
-        + padding
-        + "  "
-        + _paint("│", _GRAY, color)
-    )
+    lines = []
+    for index, chunk in enumerate(_wrap_cells(value, width - 6 - label_width - 1)):
+        prefix = padded_label if index == 0 else " " * label_width
+        padding = " " * max(0, width - 6 - label_width - 1 - _cell_width(chunk))
+        lines.append(_paint("│", _GRAY, color) + "  " + _paint(prefix, _CYAN, color)
+                     + " " + chunk + padding + "  " + _paint("│", _GRAY, color))
+    return "\n".join(lines)
+
+
+def _wrap_cells(text: str, width: int) -> list[str]:
+    lines, chunk, used = [], "", 0
+    for char in text.replace("\n", " ").replace("\r", " "):
+        size = _cell_width(char)
+        if chunk and used + size > width:
+            lines.append(chunk)
+            chunk, used = "", 0
+        chunk += char
+        used += size
+    return [*lines, chunk] if chunk else lines or [""]
 
 
 def _status(kind: str, label: str, message: str, output=print, *, color: bool | None = None) -> None:
@@ -236,16 +240,23 @@ def _startup_update(
         from lib.web import _update_payload
 
         update_result = _update_payload()
-    if not update_result.get("ok"):
-        _status("warn", "更新", f"暂时不可用：{update_result.get('error') or '未知错误'}", output)
-        return True
     latest = str(update_result.get("latest_version") or "").strip()
-    if not update_result.get("update_available"):
-        _status("ok", "更新", update_result.get("message") or f"当前已是最新版本 v{version}", output)
+    available = bool(update_result.get("ok") and update_result.get("update_available"))
+    cfg = config.load_config() if available else {}
+    ignored = bool(latest and cfg.get("ignored_update_version") == latest)
+    if not update_result.get("ok"):
+        _status("warn", "最新版本", f"查询失败：{update_result.get('error') or '请稍后重试'}", output)
+    elif latest:
+        kind = "muted" if ignored else "warn" if available else "ok"
+        state = "可升级" if available else "无需升级"
+        _status(kind, "最新版本", f"v{latest} · {state}", output)
+    else:
+        _status("muted", "最新版本", update_result.get("message") or "暂无已发布版本", output)
+    _print_upgrade_command(output)
+    if not available:
         return True
 
-    cfg = config.load_config()
-    if latest and cfg.get("ignored_update_version") == latest:
+    if ignored:
         _status("muted", "更新", f"已永久跳过 v{latest}；发现更高版本时仍会提醒。", output)
         return True
 
@@ -253,15 +264,13 @@ def _startup_update(
     if interactive is None:
         interactive = bool(sys.stdin.isatty() and sys.stdout.isatty())
     if not interactive:
-        output(f"\n  升级命令\n  {UPGRADE_COMMAND}\n")
         return True
 
     ask = input_fn or input
     while True:
         choice = ask("[1] 升级  [2] 本次跳过  [3] 永久跳过此版本（默认 2）：").strip().lower()
         if choice in {"1", "u", "upgrade", "升级"}:
-            output("\n请先关闭正在运行的悬浮窗，然后执行：")
-            output(f"  {UPGRADE_COMMAND}\n")
+            output("\n请先关闭正在运行的悬浮窗，再执行上方的升级命令。\n")
             return False
         if choice in {"", "2", "s", "skip", "跳过"}:
             _status("muted", "更新", "已跳过本次提醒，继续启动。", output)
@@ -278,10 +287,19 @@ def _startup_update(
         output("请输入 1、2 或 3。")
 
 
+def _print_upgrade_command(output=print) -> None:
+    output("")
+    _status("info", "升级命令", "", output)
+    output("    " + _paint(UPGRADE_COMMAND, _CYAN, _color_enabled()))
+    if (ROOT / ".git").exists():
+        _status("muted", "源码模式", "此命令升级已安装的 quota；本地源码保持独立。", output)
+    output("")
+
+
 def _print_launch_summary(started: bool, output=print) -> None:
     _status("ok", "桌面", f"悬浮窗{'已启动' if started else '已在运行'}", output)
     _status("info", "Web UI", _web_url(), output)
-    _status("muted", "提示", "点击悬浮窗标题栏打开 Web 配置；关闭窗口后服务也会停止。", output)
+    _status("muted", "提示", "点击 🌐 打开 Web；点击 ✕ 退出。", output)
 
 
 def _configure_stdio() -> None:

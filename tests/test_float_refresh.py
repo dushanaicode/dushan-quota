@@ -65,7 +65,7 @@ class FloatRefreshTests(unittest.TestCase):
 
     @patch("lib.usage.collect")
     @patch.object(float_win, "get_snapshot")
-    def test_payload_adds_optional_account_and_provider_usage(self, get_snapshot, collect):
+    def test_payload_uses_only_account_usage_and_client_bindings(self, get_snapshot, collect):
         get_snapshot.return_value = Snapshot(
             results=[self.result],
             fetched_at=time.time(),
@@ -83,22 +83,28 @@ class FloatRefreshTests(unittest.TestCase):
                     {"source": "local", "label": "近 30 天", "total_tokens": 40},
                 ]
             },
+            "harnesses": {
+                ("openai", "account-1"): [{"key": "codex", "label": "Codex", "configured": True}],
+                ("openai", "account-2"): [{"key": "omp", "label": "OMP", "configured": True}],
+            },
         }
 
         payload = float_win._fetch_payload(include_usage=True)
 
         collect.assert_called_once_with([self.result], force=False)
-        self.assertEqual([100, 40], [item["total_tokens"] for item in payload["results"][0]["usage"]])
+        self.assertEqual([100], [item["total_tokens"] for item in payload["results"][0]["usage"]])
+        self.assertEqual("account-1", payload["results"][0]["identity"])
+        self.assertEqual(["codex"], [h["key"] for h in payload["results"][0]["harnesses"]])
 
     def test_float_page_has_usage_toggle_and_optional_fetch(self):
         html = (float_win.WEB_DIR / "float.html").read_text(encoding="utf-8")
         self.assertIn("['#usage','用量信息']", html)
         self.assertIn("api.quota(!!force, usageOn())", html)
-        self.assertIn("usageBlock(it.usage)", html)
+        self.assertIn("usageBlock(it)", html)
         self.assertIn("function usageStats(values)", html)
         self.assertIn("usage_period:'30d'", html)
         self.assertIn("setUsageHarness", html)
-        self.assertIn("全部 Harness", html)
+        self.assertIn("全部客户端", html)
         self.assertIn("white-space:normal; overflow-wrap:anywhere", html)
 
     def test_window_title_can_isolate_a_local_test_instance(self):
@@ -108,6 +114,14 @@ class FloatRefreshTests(unittest.TestCase):
     def test_web_port_can_isolate_a_local_test_instance(self):
         with patch.dict(os.environ, {"DUSHAN_QUOTA_WEB_PORT": "18766"}):
             self.assertEqual(18766, float_win._web_port())
+
+    def test_animation_and_per_account_client_preferences_are_saved(self):
+        api = float_win.Api()
+        selected = {"openai:account-1": "opencode", "grok:account-2": "grok_cli"}
+        api.save_settings({"animations": True, "usage_harnesses": selected})
+        restored = float_win.Api().settings()
+        self.assertTrue(restored["animations"])
+        self.assertEqual(selected, restored["usage_harnesses"])
 
     @patch.object(float_win, "get_snapshot")
     def test_payload_marks_old_data_as_stale(self, get_snapshot):

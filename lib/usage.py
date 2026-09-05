@@ -120,8 +120,9 @@ def collect(results, *, force: bool = False) -> dict:
     current_activations = _current_activations(results)
     for current in current_activations:
         _remember_activation(current)
+    provisions = _known_provisions(results)
     activation_digest = hashlib.sha256(
-        json.dumps([*_known_provisions(results), *current_activations], sort_keys=True, default=str).encode()
+        json.dumps([*provisions, *current_activations], sort_keys=True, default=str).encode()
     ).hexdigest()[:12]
 
     accounts = _accounts_with_secrets(results, providers)
@@ -229,7 +230,41 @@ def collect(results, *, force: bool = False) -> dict:
                 period_order.get(row.get("period"), 9),
             )
         )
-    return {"accounts": account_rows, "providers": provider_rows}
+    return {
+        "accounts": account_rows,
+        "providers": provider_rows,
+        "harnesses": _account_harnesses(results, account_rows, current_activations, provisions),
+    }
+
+
+def _account_harnesses(results, account_rows: dict, current: list[dict], provisions: list[dict]) -> dict:
+    """Offer supported clients only when this account has configuration or usage evidence."""
+    from .provision import HARNESSES
+
+    configured = {(r["provider"], r["identity"], r["harness"]) for r in current if r.get("verified", True)}
+    output = {}
+    for result in results:
+        provider, identity = result.account.provider, result.account.identity
+        key = (provider, identity)
+        candidates = {
+            row.get("harness") for row in account_rows.get(key, []) if row.get("source") == "local"
+        }
+        candidates.update(
+            r["harness"] for r in [*current, *provisions]
+            if (r["provider"], r["identity"]) == key
+        )
+        choices = []
+        for harness in sorted(h for h in candidates if h in HARNESS_LABELS):
+            if provider not in HARNESSES.get(harness, {}).get("providers", ()):
+                continue
+            active = (provider, identity, harness) in configured
+            label = HARNESS_LABELS[harness]
+            if harness in {"opencode", "omp"}:
+                label += " · 已配置" if active else " · 历史"
+            choices.append({"key": harness, "label": label, "configured": active})
+        if choices:
+            output[key] = choices
+    return output
 
 
 def _cached(key: str, force: bool, loader):
@@ -341,9 +376,9 @@ def _result_identity_aliases(results) -> dict[tuple[str, str], str]:
     return aliases
 
 
-def _current_codex_activation(results) -> dict | None:
+def _current_codex_activation(results, credentials: Path | None = None) -> dict | None:
     home = Path(os.environ.get("CODEX_HOME", "").strip()) if os.environ.get("CODEX_HOME", "").strip() else Path.home() / ".codex"
-    path = home / "auth.json"
+    path = credentials or home / "auth.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         modified = int(path.stat().st_mtime)
@@ -352,11 +387,7 @@ def _current_codex_activation(results) -> dict | None:
     tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
     access = str(tokens.get("access_token") or tokens.get("id_token") or "")
     claims = _jwt_claims(access)
-    candidates = (
-        tokens.get("account_id"),
-        claims.get("chatgpt_account_id"),
-        claims.get("account_id"),
-    )
+    candidates = (claims.get("chatgpt_account_id") or claims.get("account_id") or tokens.get("account_id"),)
     aliases = _result_identity_aliases(results)
     identity = next(
         (
@@ -383,12 +414,12 @@ def _current_source_activations(results) -> list[dict]:
     if codex:
         current.append(codex)
     current.extend(_current_opencode_activations(results))
+    current.extend(_current_grok_activations(results))
     kimi_code = _current_kimi_code_activation(results)
     if kimi_code:
         current.append(kimi_code)
     home = Path.home()
     source_targets = {
-        "official-grok": ("grok_cli", home / ".grok" / "auth.json"),
         "cursor-agent-local": ("cursor_agent", home / "AppData" / "Roaming" / "Cursor" / "auth.json"),
         "cursor-local": ("cursor_ide", home / "AppData" / "Roaming" / "Cursor" / "User" / "globalStorage" / "state.vscdb"),
     }
@@ -413,6 +444,26 @@ def _current_source_activations(results) -> list[dict]:
                 "verified": True,
             }
         )
+    return current
+
+
+def _current_grok_activations(results, home: Path | None = None) -> list[dict]:
+    from .discover import _from_official_grok
+
+    home = home or Path.home()
+    path = home / ".grok" / "auth.json"
+    try:
+        modified = int(path.stat().st_mtime)
+        found = []
+        _from_official_grok(home, found.append)
+    except (OSError, ValueError):
+        return []
+    current = []
+    for account in found:
+        identity = _canonical_account_identity(account, results)
+        if identity:
+            current.append({"provider": "grok", "identity": identity, "harness": "grok_cli",
+                            "written_at": modified, "verified": True})
     return current
 
 
@@ -572,6 +623,8 @@ def _credential_identity(provider: str, data: dict, identity_key, results) -> st
         values.append(profile.get("email"))
     values.extend((payload.get("user_id"), payload.get("sub"), payload.get("email")))
     aliases = _result_identity_aliases(results)
+    if provider == "openai" and isinstance(auth, dict) and auth.get("chatgpt_account_id"):
+        return aliases.get((provider, str(auth["chatgpt_account_id"]).strip().lower()))
     for value in values:
         text = str(value or "").strip()
         if text.startswith("account:"):
@@ -593,6 +646,8 @@ def _canonical_account_identity(account, results) -> str | None:
     values = [account.identity, account.user_id, account.email, account.secret.get("account_id")]
     payload = _jwt_payload(str(account.secret.get("access") or ""))
     auth = payload.get("https://api.openai.com/auth")
+    if account.provider == "openai" and isinstance(auth, dict) and auth.get("chatgpt_account_id"):
+        return aliases.get((account.provider, str(auth["chatgpt_account_id"]).strip().lower()))
     profile = payload.get("https://api.openai.com/profile")
     if isinstance(auth, dict):
         values.append(auth.get("chatgpt_account_id"))
@@ -784,7 +839,7 @@ def scan_codex_local_by_account(
         identity: _codex_rows(
             totals,
             lookback_days,
-            "按 Codex 激活时间归属；无法确认账号的历史未计入",
+            "Codex 本机用量",
             attributed=True,
         )
         for identity, totals in grouped.items()
@@ -812,7 +867,7 @@ def scan_codex_periods_by_account(
     return _local_usage_rows(
         events,
         "codex",
-        "按 Codex 激活时间归属；无法确认账号的历史未计入",
+        "Codex 本机用量",
         now=now,
     )
 
@@ -1029,7 +1084,7 @@ def scan_opencode_local(
     return _local_maps_by_provider(
         events,
         "opencode",
-        "OpenCode 会话数据库；按账号激活时间归属",
+        "OpenCode 本机用量",
         now=now,
     )
 
@@ -1117,7 +1172,7 @@ def scan_omp_local(
     return _local_maps_by_provider(
         events,
         "omp",
-        "OMP credential_pin 优先精确归属；无标记时按激活时间归属",
+        "OMP 本机用量",
         now=now,
     )
 
@@ -1195,7 +1250,7 @@ def scan_kimi_code_local(
     return _local_maps_by_provider(
         events,
         "kimi_code",
-        "Kimi Code CLI usage.record；单账号时由当前凭据确认，多账号时按激活时间归属",
+        "Kimi Code 本机用量",
         now=now,
     )
 
@@ -1472,7 +1527,7 @@ def scan_claude_periods_by_account(
     return _local_maps_by_provider(
         list(found.values()),
         "claude_code",
-        "Claude Code 本机会话；按账号激活时间归属",
+        "Claude Code 本机用量",
         now=now,
     )
 
@@ -1522,7 +1577,7 @@ def scan_grok_periods_by_account(
     return _local_maps_by_provider(
         events,
         "grok_cli",
-        "Grok CLI 会话摘要；按账号激活时间归属",
+        "Grok CLI 本机用量",
         now=now,
     )
 

@@ -88,7 +88,6 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
             # local log or provider-specific usage source fails.
             pass
     results = []
-    attached_provider_usage = set()
     for item in visible_results:
         windows = [
             {
@@ -102,13 +101,11 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
             for window in item.windows
         ]
         usage_rows = list(usage_data["accounts"].get((item.account.provider, item.account.identity), []))
-        if item.account.provider not in attached_provider_usage:
-            usage_rows.extend(usage_data["providers"].get(item.account.provider, []))
-            attached_provider_usage.add(item.account.provider)
         results.append(
             {
                 "title": item.title,
                 "provider": item.account.provider,
+                "identity": item.account.identity,
                 "ok": item.ok,
                 "error": item.error,
                 "email": item.email or item.account.email,
@@ -118,6 +115,7 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
                 "sub_status": item.sub_status,
                 "windows": [w for w in windows if w["text"] is not None or w["remaining_percent"] is not None],
                 "usage": usage_rows,
+                "harnesses": usage_data.get("harnesses", {}).get((item.account.provider, item.account.identity), []),
             }
         )
     return {

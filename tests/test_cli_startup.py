@@ -1,4 +1,9 @@
+import io
+import os
+import re
+import sys
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import quota
@@ -34,6 +39,59 @@ class CliStartupTests(unittest.TestCase):
         self.assertIn("\033[", text)
         self.assertIn("╭", text)
         self.assertIn("DUSHAN QUOTA", text)
+
+    def test_default_and_float_launches_both_show_colored_startup_information(self):
+        for args in ([], ["float"]):
+            with self.subTest(args=args), patch.object(sys, "argv", ["quota", *args]), patch.object(
+                quota, "_current_version", return_value="0.2.0"
+            ), patch.object(quota, "_color_enabled", return_value=True), patch.object(
+                quota.config, "apply_config_env"
+            ), patch("lib.web._update_payload", return_value={
+                "ok": True, "latest_version": "0.2.0", "update_available": False,
+            }), patch("lib.float_win.launch_float", return_value=False) as launch, patch.dict(
+                os.environ, {"DUSHAN_QUOTA_WEB_PORT": "18766", "DUSHAN_QUOTA_WINDOW_TITLE": "Quota-T"}
+            ):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    quota.main()
+                text = output.getvalue()
+                self.assertIn("\033[", text)
+                self.assertIn("DUSHAN QUOTA", text)
+                self.assertIn("当前 v0.2.0", text)
+                self.assertIn("最新版本", text)
+                self.assertIn("http://127.0.0.1:18766/", text)
+                self.assertIn(quota.UPGRADE_COMMAND, text)
+                self.assertIn("悬浮窗已在运行", text)
+                launch.assert_called_once()
+
+    def test_failed_release_check_keeps_upgrade_command_and_allows_launch(self):
+        lines = []
+        proceed = quota._startup_update(version="0.2.0", update_result={"ok": False, "error": "网络不可用"},
+                                        output=lines.append, interactive=False)
+        self.assertTrue(proceed)
+        self.assertIn("查询失败", "\n".join(lines))
+        self.assertIn(quota.UPGRADE_COMMAND, "\n".join(lines))
+
+    def test_current_and_latest_versions_are_shown_separately(self):
+        lines = []
+        quota._startup_update(version="0.3.0", update_result={
+            "ok": True, "latest_version": "0.2.0", "update_available": False,
+        }, output=lines.append, interactive=False)
+        text = "\n".join(lines)
+        self.assertIn("当前 v0.3.0", text)
+        self.assertIn("v0.2.0", text)
+        self.assertIn(quota.UPGRADE_COMMAND, text)
+
+    def test_narrow_banner_keeps_borders_aligned_and_does_not_truncate_links(self):
+        lines = []
+        quota._print_banner("0.2.0", lines.append, color=True, width=48)
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines))
+        for line in plain.splitlines():
+            self.assertEqual(48, quota._cell_width(line))
+        address = quota.GITHUB_URL + "/releases"
+        wrapped = quota._panel_row("GitHub", address, 48, False).splitlines()
+        recovered = "".join(line[12:-3].rstrip() for line in wrapped)
+        self.assertEqual(address, recovered)
 
     def test_upgrade_choice_prints_command_and_stops_launch(self):
         lines = []

@@ -52,12 +52,17 @@ class WebUsageTests(unittest.TestCase):
                     }
                 ]
             },
+            "harnesses": {
+                ("openai", "account-1"): [{"key": "codex", "label": "Codex", "configured": True}],
+                ("grok", "other"): [{"key": "grok_cli", "label": "Grok CLI", "configured": True}],
+            },
         }
 
         payload = web._usage_payload("openai", "account-1", force=True)
 
         collect.assert_called_once_with([self.result], force=True)
         self.assertEqual([20], [item["total_tokens"] for item in payload["usage"]])
+        self.assertEqual(["codex"], [h["key"] for h in payload["harnesses"]])
         raw = json.dumps(payload)
         self.assertNotIn("must-not-leak", raw)
         self.assertNotIn("secret", raw)
@@ -90,7 +95,7 @@ class WebUsageTests(unittest.TestCase):
             from_cache=True,
         )
 
-        with patch("lib.usage._local_provider_present", return_value=False):
+        with patch("lib.usage._local_provider_present", return_value=False), patch("lib.usage.activation_statuses", return_value={}):
             payload = web._quota_payload()
 
         supported = {item["provider"]: item["usage_supported"] for item in payload["results"]}

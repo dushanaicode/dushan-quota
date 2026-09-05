@@ -397,7 +397,6 @@
   .ud-value { margin-top:7px; color:var(--text); font-size:20px; line-height:1.25; font-weight:600;
     font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   .ud-value small { margin-left:4px; color:var(--faint); font-size:10px; font-weight:400; }
-  .ud-sub { margin-top:4px; color:var(--faint); font-size:9.5px; line-height:1.45; overflow-wrap:anywhere; }
   .ud-progress { height:4px; margin-top:9px; overflow:hidden; border-radius:99px; background:var(--track); }
   .ud-progress i { display:block; height:100%; border-radius:99px; background:var(--accent); }
   .ud-section { margin-top:16px; border:1px solid var(--line); border-radius:13px; overflow:hidden;
@@ -406,7 +405,6 @@
     border-bottom:1px solid var(--line-soft); }
   .ud-section-title { flex:1; min-width:0; }
   .ud-section-title b { display:block; font-size:12.5px; font-weight:600; overflow-wrap:anywhere; }
-  .ud-section-title span { display:block; margin-top:1px; color:var(--faint); font-size:9.5px; overflow-wrap:anywhere; }
   .ud-section-total { flex:none; color:var(--text); font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
   .ud-breakdown { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:1px;
     border-bottom:1px solid var(--line-soft); background:var(--line-soft); }
@@ -509,7 +507,7 @@
   <div class="panel confirm-panel">
     <h2>关闭这张卡片？</h2>
     <p class="confirm-account" id="closeCardAccount"></p>
-    <p class="confirm-note">关闭后，这张卡片会从首页移到“历史”。账号、登录状态和认证凭证不会被删除，之后可以随时恢复。</p>
+    <p class="confirm-note">卡片移至历史，可随时恢复。账号和登录信息保留。</p>
     <div class="row end">
       <button class="btn" onclick="closeCardConfirm()">取消</button>
       <button class="btn primary" id="closeCardYes" onclick="confirmCloseCard()">确认关闭</button>
@@ -521,7 +519,7 @@
   <div class="panel confirm-panel">
     <h2>永久删除这个账号？</h2>
     <p class="confirm-account" id="forgetCardAccount"></p>
-    <p class="confirm-note">将从历史中移除，并删除本工具保存的该账号凭证。删除后无法从历史恢复。本机其他软件（如 Codex）里的登录不会被改动；若账号仍存在于那些登录里，下次刷新可能会重新出现。</p>
+    <p class="confirm-note">永久删除本工具保存的账号和凭据，无法恢复。本机仍登录的账号可能再次显示。</p>
     <div class="row end">
       <button class="btn" onclick="closeForgetConfirm()">取消</button>
       <button class="btn danger primary" id="forgetCardYes" onclick="confirmForgetCard()">确认删除</button>
@@ -580,7 +578,7 @@
 
 <div id="addModal" class="modal" onclick="if(event.target===this)closeAdd()">
   <div class="panel add-panel">
-    <h2>添加账号</h2>
+    <h2 id="addHeading">添加账号</h2>
     <div class="add-body">
       <div class="add-provs" id="provList"></div>
       <div class="add-conf">
@@ -619,7 +617,7 @@
 
 <div id="syncModal" class="modal" onclick="if(event.target===this)closeSync()">
   <div class="panel">
-    <h2>写入到 harness</h2>
+    <h2>写入客户端</h2>
     <p class="hint" id="syncAcc"></p>
     <div class="targets" id="syncTargets"></div>
     <p id="syncMsg" class="msg"></p>
@@ -637,6 +635,7 @@ let cache = [];
 let historyItems = [];
 let filter = '*';
 let fpTab = 'low';
+let cardsSignature = '', focusSignature = '', historySignature = '';
 
 async function api(path, opt={}) {
   const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opt));
@@ -743,6 +742,7 @@ function fmtActivation(iso){
 }
 
 function compactNumber(value){
+  if (value == null || value === '') return '—';
   const n = Number(value);
   if (!Number.isFinite(n)) return '—';
   const trim = text => text.replace(/\.?0+$/, '');
@@ -752,6 +752,7 @@ function compactNumber(value){
   return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString([], {maximumFractionDigits:2});
 }
 function exactNumber(value){
+  if (value == null || value === '') return '—';
   const n = Number(value);
   return Number.isFinite(n) ? n.toLocaleString([], {maximumFractionDigits:2}) : '—';
 }
@@ -775,7 +776,6 @@ function usageMetricCard(item){
   return `<article class="ud-metric">
     <div class="ud-metric-top">${usageBadge(item.source)}<span class="ud-metric-label">${esc(item.label||'用量')}</span></div>
     ${usageMetricValue(item)}
-    ${item.detail?`<div class="ud-sub">${esc(item.detail)}</div>`:''}
     ${pct==null?'':`<div class="ud-progress" title="已用 ${pct.toFixed(1)}%"><i style="width:${pct}%"></i></div>`}
   </article>`;
 }
@@ -802,7 +802,7 @@ function usageSection(item){
   if (!hasDetails) return '';
   const total = item.total_tokens == null ? '' : `${compactNumber(item.total_tokens)} Token`;
   return `<section class="ud-section">
-    <div class="ud-section-head">${usageBadge(item.source)}<div class="ud-section-title"><b>${esc(item.label||'用量明细')}</b><span>${esc(item.detail||'')}</span></div><div class="ud-section-total">${total}</div></div>
+    <div class="ud-section-head">${usageBadge(item.source)}<div class="ud-section-title"><b>${esc(item.label||'用量明细')}</b></div><div class="ud-section-total">${total}</div></div>
     ${usageBreakdown(item.breakdown)}${usageModelTable(item.models)}
   </section>`;
 }
@@ -812,7 +812,7 @@ let usageRequestToken = 0;
 let usageDetailData = null;
 let usagePeriod = '30d';
 let usageHarness = 'all';
-function usageLoading(text='正在读取本机与远端用量…'){
+function usageLoading(text='加载用量…'){
   document.getElementById('usageBody').innerHTML = `<div class="ud-loading"><i></i><span>${esc(text)}</span></div>`;
 }
 function renderUsageDetail(data){
@@ -820,8 +820,9 @@ function renderUsageDetail(data){
   const rows = Array.isArray(data.usage) ? data.usage : [];
   const account = data.account || {};
   document.getElementById('usageTitle').textContent = `${account.title||'账号'} · 用量详情`;
-  document.getElementById('usageAccount').textContent = [account.email||account.name||account.identity, account.plan, account.source].filter(Boolean).join(' · ');
-  const localHarnesses = [...new Map(rows.filter(row => row.source==='local' && row.harness).map(row => [row.harness,row.harness_label||row.harness])).entries()];
+  document.getElementById('usageAccount').textContent = [account.email||account.name||account.identity, account.plan].filter(Boolean).join(' · ');
+  const localHarnesses = Array.isArray(data.harnesses) ? data.harnesses.map(h=>[h.key,h.label])
+    : [...new Map(rows.filter(row => row.source==='local' && row.harness).map(row => [row.harness,row.harness_label||row.harness])).entries()];
   if (usageHarness!=='all' && usageHarness!=='remote' && !localHarnesses.some(([key]) => key===usageHarness)) usageHarness='all';
   const periodRows = rows.filter(row => (row.period||'30d')===usagePeriod);
   const visible = usageHarness==='all' ? periodRows
@@ -840,8 +841,8 @@ function renderUsageDetail(data){
   const content = visible.length ? `
     <div class="ud-metrics">${metrics.map(usageMetricCard).join('')}</div>
     ${visible.map(usageSection).join('')}
-    <div class="ud-note">“本机”按 Harness 分开统计并可汇总；“远端”是账号级数据，无法可靠拆分到具体 Harness，因此不与本机数值相加。</div>`
-    : '<div class="ud-empty"><b>该筛选范围暂无用量</b><span>没有找到能够可靠归属到该账号、时间段和 Harness 的 Token 记录。</span></div>';
+    <div class="ud-note">本机和远端用量分开显示。</div>`
+    : '<div class="ud-empty"><b>暂无用量</b><span>试试其他时间或客户端。</span></div>';
   document.getElementById('usageBody').innerHTML = filters + content;
   document.querySelectorAll('.ud-periods button').forEach(button => button.onclick=()=>{usagePeriod=button.dataset.period;renderUsageDetail(usageDetailData);});
   document.querySelectorAll('.ud-harnesses button').forEach(button => button.onclick=()=>{usageHarness=button.dataset.harness;renderUsageDetail(usageDetailData);});
@@ -851,18 +852,16 @@ function renderUsageDetail(data){
 function aggregateLocalUsage(rows){
   const breakdown = {};
   for(const [key] of USAGE_FIELDS) breakdown[key]=rows.reduce((sum,row)=>sum+Number((row.breakdown||{})[key]||0),0);
-  const harnesses=[...new Set(rows.map(row=>row.harness_label||row.harness).filter(Boolean))];
   const period=usagePeriod==='all'?'累计':`近 ${usagePeriod.replace('d','')} 天`;
   return {source:'local',label:`本机合计 · ${period}`,
-    total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown,
-    detail:harnesses.join(' + ')};
+    total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown};
 }
 async function loadUsageDetail(force=false){
   if (!usageCtx) return;
   const token = ++usageRequestToken;
   const btn = document.getElementById('usageRefresh');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>读取中';
-  usageLoading(force ? '正在刷新用量数据…' : '正在读取本机与远端用量…');
+    usageLoading(force ? '刷新用量…' : '加载用量…');
   try {
     const query = new URLSearchParams({provider:usageCtx.provider, identity:usageCtx.identity});
     if (force) query.set('force','1');
@@ -915,7 +914,11 @@ function renderCards(){
   const box = document.getElementById('list');
   box.innerHTML = '';
   const items = cache.filter(it => filter === '*' || it.title === filter);
-  if (!items.length) { box.innerHTML = '<p class="hint">该筛选下没有卡片</p>'; return; }
+  if (!items.length) { box.innerHTML = '<p class="hint">该筛选下没有卡片</p>'; cardsSignature = ''; return; }
+  // 卡片集合不变时不重播入场动画，避免自动刷新时整屏闪烁
+  const signature = filter + '|' + items.map(it => `${it.provider}:${it.identity || it.email || it.title}`).join('|');
+  const entrance = signature !== cardsSignature;
+  cardsSignature = signature;
   items.forEach((item, i) => {
     const line1 = [item.email, item.name].filter(Boolean).map(esc).join('<i>·</i>');
     const line2 = [item.user_id && item.user_id !== item.email ? item.user_id : '', [item.auth_mode, item.source].filter(Boolean).join(' / ')].filter(Boolean).map(esc).join('<i>·</i>');
@@ -951,9 +954,12 @@ function renderCards(){
     const usageButton = item.usage_supported
       ? '<button class="btn act-usage">用量详情</button>'
       : '';
+    const reauthButton = item.provider === 'openai' && item.auth_mode === 'oauth'
+      ? '<button class="btn act-reauth">重新授权</button>' : '';
     const sec = document.createElement('section');
     sec.className = 'card';
-    sec.style.animationDelay = (i * 45) + 'ms';
+    if (entrance) sec.style.animationDelay = (i * 45) + 'ms';
+    else sec.style.animation = 'none';
     sec.innerHTML = `
       <button class="x" title="关闭卡片" aria-label="关闭 ${esc(item.title)}">✕</button>
       <div class="card-head"><h2>${esc(item.title)}</h2>${pill}</div>
@@ -965,10 +971,13 @@ function renderCards(){
       <div class="foot">
         ${usageButton}
         <button class="btn act-sync">写入到…</button>
+        ${reauthButton}
         ${resetButton}
       </div>`;
     sec.querySelector('.x').onclick = () => openCloseCardConfirm(item);
     sec.querySelector('.act-sync').onclick = () => openSync(item.provider, encodeURIComponent(item.identity || ''), item.title);
+    const reauth = sec.querySelector('.act-reauth');
+    if (reauth) reauth.onclick = () => openAdd(item);
     const ub = sec.querySelector('.act-usage');
     if (ub) ub.onclick = () => openUsage(item);
     const rb = sec.querySelector('.act-reset');
@@ -1106,11 +1115,15 @@ function renderFocus(){
     hint.textContent = '按剩余额度从低到高排列';
     count.textContent = `${items.length} 项`;
     box.innerHTML = items.length ? '' : '<p class="fp-empty">暂无可比较的用量数据</p>';
+    const signature = 'low|' + items.map(r => `${r.title}|${r.name}|${r.account}`).join('|');
+    const entrance = signature !== focusSignature;
+    focusSignature = signature;
     items.forEach((r, i) => {
       const c = colorOf(r.pct);
       const div = document.createElement('div');
       div.className = 'fp-item';
-      div.style.animationDelay = (i * 25) + 'ms';
+      if (entrance) div.style.animationDelay = (i * 25) + 'ms';
+      else div.style.animation = 'none';
       div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span>${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="r">${esc(r.reset)}</span><span class="p ${c}">${r.pct}%</span>`;
       box.appendChild(div);
     });
@@ -1145,10 +1158,14 @@ function renderFocus(){
   hint.textContent = '查看各账号的生效时间与到期时间';
   count.textContent = `${subscriptions.length} 个账号`;
   box.innerHTML = subscriptions.length ? '' : '<p class="fp-empty">暂无订阅时间数据</p>';
+  const signature = 'subs|' + subscriptions.map(r => `${r.title}|${r.account}|${r.state.cls}`).join('|');
+  const entrance = signature !== focusSignature;
+  focusSignature = signature;
   subscriptions.forEach((r, i) => {
     const div = document.createElement('div');
     div.className = 'fp-item fp-sub-item';
-    div.style.animationDelay = (i * 25) + 'ms';
+    if (entrance) div.style.animationDelay = (i * 25) + 'ms';
+    else div.style.animation = 'none';
     let period = '';
     if (r.start) period += `<span><i>生效</i>${esc(r.start)}</span>`;
     if (r.end) period += `<span><i>到期</i>${esc(r.end)}</span>`;
@@ -1182,16 +1199,21 @@ function renderHistory(){
   summary.textContent = `${historyItems.length} 条历史记录`;
   restoreAll.disabled = historyItems.length === 0;
   if (!historyItems.length) {
-    box.innerHTML = '<div class="history-empty"><b>暂无历史记录</b>关闭过的卡片会保存在这里。关闭不会删除登录、凭证或账号；若不再需要，可在这里永久删除。</div>';
+    box.innerHTML = '<div class="history-empty"><b>暂无历史记录</b>关闭的卡片会保存在这里，可随时恢复。</div>';
+    historySignature = '';
     return;
   }
   box.innerHTML = '';
+  const signature = historyItems.map(it => `${it.provider}:${it.identity || it.email || it.title}:${it.archived_at || ''}`).join('|');
+  const entrance = signature !== historySignature;
+  historySignature = signature;
   historyItems.forEach((item, i) => {
     const div = document.createElement('div');
     const who = [item.email, item.name].filter(Boolean).join(' · ') || item.identity || '';
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}">${esc(item.plan)}</span>` : '';
     div.className = 'history-item';
-    div.style.animationDelay = (i * 25) + 'ms';
+    if (entrance) div.style.animationDelay = (i * 25) + 'ms';
+    else div.style.animation = 'none';
     div.innerHTML = `
       <div class="row1"><b>${esc(item.title || item.provider)}</b>${pill}</div>
       <div class="who">${esc(who)}${item.source ? ` · ${esc(item.source)}` : ''}</div>
@@ -1265,6 +1287,7 @@ async function restoreAllHistory(){
 /* ---------- add account（左提供商 / 右配置） ---------- */
 let addProv = '';
 let addMode = '';
+let reauthCtx = null, oauthLogin = null, oauthGeneration = 0;
 const MODE_META = {
   oauth: ['OAuth 授权', '跳转浏览器完成官方授权'],
   api_key: ['API Key', '粘贴平台的 API Key'],
@@ -1273,12 +1296,18 @@ const MODE_META = {
   env: ['环境变量', '读取已配置的环境变量'],
 };
 
-async function openAdd(){
+async function openAdd(account = null){
+  oauthGeneration++;
+  reauthCtx = account;
+  oauthLogin = null;
+  document.getElementById('addHeading').textContent = account ? '重新授权账号' : '添加账号';
+  document.getElementById('btnAdd').disabled = false;
+  document.getElementById('btnAdd').textContent = '确认';
   const data = await api('/api/rules');
   Object.assign(rules, data.rules);
   const list = document.getElementById('provList');
   list.innerHTML = '';
-  Object.entries(rules).forEach(([key, rule], i) => {
+  Object.entries(rules).filter(([key]) => !account || key === account.provider).forEach(([key, rule], i) => {
     const tile = document.createElement('div');
     tile.className = 'prov-tile';
     tile.dataset.p = key;
@@ -1290,15 +1319,22 @@ async function openAdd(){
   document.getElementById('addMsg').textContent = ''; document.getElementById('addMsg').className = 'msg';
   document.getElementById('addModal').classList.add('show');
 }
-function closeAdd(){ document.getElementById('addModal').classList.remove('show'); }
+function closeAdd(){
+  oauthGeneration++;
+  if (oauthLogin?.provider === 'openai') api('/api/oauth/openai/cancel', {method:'POST', body:JSON.stringify({login_id:oauthLogin.id})}).catch(() => {});
+  oauthLogin = null;
+  document.getElementById('addModal').classList.remove('show');
+}
 function selectProv(key){
   addProv = key;
   document.querySelectorAll('.prov-tile').forEach(t => t.classList.toggle('on', t.dataset.p === key));
   document.getElementById('addTitle').textContent = rules[key].title;
-  document.getElementById('addSub').textContent = '选择认证方式，完成账号接入';
+  document.getElementById('addSub').textContent = reauthCtx
+    ? `请登录 ${reauthCtx.email || reauthCtx.identity}，完成后保留原账号和历史记录`
+    : '选择认证方式，完成账号接入';
   const box = document.getElementById('modeList');
   box.innerHTML = '';
-  rules[key].modes.forEach((m, i) => {
+  rules[key].modes.filter(m => !reauthCtx || m === 'oauth').forEach((m, i) => {
     const meta = MODE_META[m] || [m, ''];
     const chip = document.createElement('div');
     chip.className = 'mode-chip';
@@ -1336,10 +1372,16 @@ async function submitAdd(){
     else if (addMode === 'oauth') { await startOAuth(addProv); return; }
     closeAdd(); refreshQuota(false);
   } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
-  finally { btn.disabled = false; btn.textContent = '确认'; }
+  finally { btn.disabled = !!oauthLogin; btn.textContent = oauthLogin ? '等待授权' : '确认'; }
 }
 async function startOAuth(provider){
-  const data = await api('/api/oauth/' + provider + '/start', {method:'POST', body:'{}'});
+  const generation = ++oauthGeneration;
+  const data = await api('/api/oauth/' + provider + '/start', {method:'POST', body:JSON.stringify({identity:reauthCtx?.identity || ''})});
+  if (generation !== oauthGeneration) {
+    if (provider === 'openai') await api('/api/oauth/openai/cancel', {method:'POST', body:JSON.stringify({login_id:data.login_id})});
+    return;
+  }
+  oauthLogin = {provider, id:data.login_id};
   const url = data.verification_uri_complete;
   const box = document.getElementById('oauthBox');
   box.innerHTML = '';
@@ -1350,11 +1392,22 @@ async function startOAuth(provider){
   pollOAuth(provider, data.login_id);
 }
 async function pollOAuth(provider, id){
-  const data = await api('/api/oauth/' + provider + '/poll?login_id=' + id);
-  if (data.status === 'ok') { closeAdd(); refreshQuota(false); return; }
-  if (data.status === 'pending') { setTimeout(() => pollOAuth(provider, id), 2500); return; }
-  const msg = document.getElementById('addMsg');
-  msg.className = 'msg bad'; msg.textContent = data.error || data.status;
+  if (oauthLogin?.id !== id) return;
+  try {
+    const data = await api('/api/oauth/' + provider + '/poll?login_id=' + encodeURIComponent(id));
+    if (oauthLogin?.id !== id) return;
+    if (data.status === 'ok') { oauthLogin = null; closeAdd(); refreshQuota(false); return; }
+    if (data.status === 'pending') { setTimeout(() => pollOAuth(provider, id), 2500); return; }
+    throw new Error(data.error || data.status);
+  } catch(e) {
+    if (oauthLogin?.id !== id) return;
+    const msg = document.getElementById('addMsg');
+    msg.className = 'msg bad'; msg.textContent = e.message;
+    if (provider === 'openai') api('/api/oauth/openai/cancel', {method:'POST', body:JSON.stringify({login_id:id})}).catch(() => {});
+    oauthLogin = null;
+    document.getElementById('btnAdd').disabled = false;
+    document.getElementById('btnAdd').textContent = '重试';
+  }
 }
 
 /* ---------- sync to harness ---------- */

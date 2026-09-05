@@ -213,7 +213,60 @@ class UsageTests(unittest.TestCase):
             self.assertFalse(usage.supported(result))
         with patch.object(usage, "_local_provider_present", return_value=True):
             self.assertTrue(usage.supported(result))
-        self.assertEqual({"accounts": {}, "providers": {}}, usage.collect([result]))
+        with patch.object(usage, "_current_activations", return_value=[]), patch.object(
+            usage, "_accounts_with_secrets", return_value=[]
+        ), patch.object(usage, "_cached", return_value={}):
+            self.assertEqual({"accounts": {}, "providers": {}, "harnesses": {}}, usage.collect([result]))
+
+    def test_client_choices_match_provider_and_account_configuration_or_history(self):
+        results = [QuotaResult(Account(provider, provider, "test", identity), True, provider)
+                   for provider, identity in [("openai", "a"), ("openai", "b"), ("grok", "x"), ("kimi", "k")]]
+        rows = {
+            ("openai", "a"): [{"source": "local", "harness": "codex"}, {"source": "local", "harness": "kimi_code"}],
+            ("grok", "x"): [{"source": "local", "harness": "grok_cli"}, {"source": "remote", "harness": "codex"}],
+        }
+        current = [
+            {"provider": "openai", "identity": "a", "harness": "opencode", "verified": True},
+            {"provider": "openai", "identity": "b", "harness": "omp", "verified": True},
+            {"provider": "grok", "identity": "x", "harness": "opencode", "verified": True},
+            {"provider": "kimi", "identity": "k", "harness": "kimi_code", "verified": True},
+        ]
+        history = [{"provider": "openai", "identity": "a", "harness": "omp"},
+                   {"provider": "kimi", "identity": "k", "harness": "codex"}]
+        choices = usage._account_harnesses(results, rows, current, history)
+        self.assertEqual(["codex", "omp", "opencode"], [h["key"] for h in choices[("openai", "a")]])
+        self.assertEqual(["omp"], [h["key"] for h in choices[("openai", "b")]])
+        self.assertEqual(["grok_cli", "opencode"], [h["key"] for h in choices[("grok", "x")]])
+        self.assertEqual(["kimi_code"], [h["key"] for h in choices[("kimi", "k")]])
+        self.assertFalse(choices[("openai", "a")][1]["configured"])
+        self.assertTrue(choices[("openai", "a")][2]["configured"])
+
+    def test_compatible_client_without_account_evidence_is_not_offered(self):
+        result = QuotaResult(Account("openai", "OpenAI", "test", "a"), True, "OpenAI")
+        self.assertEqual({}, usage._account_harnesses([result], {}, [], []))
+
+    def test_grok_client_binding_comes_from_current_credentials(self):
+        root = self.root / "home"
+        credentials = root / ".grok" / "auth.json"
+        credentials.parent.mkdir(parents=True)
+        credentials.write_text(json.dumps({"https://auth.x.ai/client": {"key": "mock-token", "principal_id": "grok-b"}}), encoding="utf-8")
+        results = [QuotaResult(Account("grok", "Grok", "official-grok", key), True, "Grok")
+                   for key in ("grok-a", "grok-b")]
+        current = usage._current_grok_activations(results, home=root)
+        self.assertEqual(["grok-b"], [item["identity"] for item in current])
+
+    def test_openai_client_bindings_prefer_token_identity_over_stale_metadata(self):
+        results = [QuotaResult(Account("openai", "OpenAI", "test", identity), True, "OpenAI") for identity in ("a", "b")]
+        payload = base64.urlsafe_b64encode(json.dumps({"https://api.openai.com/auth": {"chatgpt_account_id": "a"}}).encode()).decode().rstrip("=")
+        access = f"e30.{payload}.signature"
+        credentials = self.root / "auth.json"
+        credentials.write_text(json.dumps({"tokens": {"account_id": "b", "access_token": access}}), encoding="utf-8")
+        self.assertEqual("a", usage._current_codex_activation(results, credentials)["identity"])
+        self.assertEqual("a", usage._credential_identity("openai", {"accountId": "b", "access": access}, "account:b", results))
+        mixed = Account("openai", "OpenAI", "opencode", "b", user_id="b", secret={"access": access})
+        self.assertEqual("a", usage._canonical_account_identity(mixed, results))
+        self.assertIsNone(usage._canonical_account_identity(mixed, results[1:]))
+        self.assertIsNone(usage._current_codex_activation(results[1:], credentials))
 
     def test_activation_observation_is_recorded_only_once(self):
         state = self.root / "quota-state"
@@ -313,7 +366,7 @@ class UsageTests(unittest.TestCase):
             user_id="kimi-account",
         )
 
-        mapped = usage.scan_omp_local([result], now=datetime(2026, 9, 3, 13, tzinfo=timezone.utc), root=root, db=db)
+        mapped = usage.scan_omp_local([result], current_activations=[], now=datetime(2026, 9, 3, 13, tzinfo=timezone.utc), root=root, db=db)
 
         row = next(item for item in mapped[("kimi", "kimi-1")] if item["period"] == "1d")
         self.assertEqual(35, row["total_tokens"])

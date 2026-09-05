@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import store
+from .oauth_openai import _jwt_claims
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS provisions (
 """
 
 _OPTIONAL_COLUMNS = {
+    "id_token": "TEXT NOT NULL DEFAULT ''",
     "plan_start": "TEXT NOT NULL DEFAULT ''",
     "plan_end": "TEXT NOT NULL DEFAULT ''",
 }
@@ -53,8 +55,8 @@ _OPTIONAL_COLUMNS = {
 _UPSERT = """
 INSERT INTO accounts
   (provider, identity, email, name, user_id, plan, auth_mode, source,
-   api_key, api_key_masked, access, refresh, expires, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+   api_key, api_key_masked, access, refresh, expires, updated_at, id_token)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(provider, identity) DO UPDATE SET
   email = excluded.email,
   name = excluded.name,
@@ -69,9 +71,13 @@ ON CONFLICT(provider, identity) DO UPDATE SET
     WHEN excluded.expires >= accounts.expires THEN excluded.access
     ELSE accounts.access END,
   refresh = CASE
+    WHEN excluded.provider = 'openai' AND excluded.access <> '' AND excluded.expires >= accounts.expires THEN excluded.refresh
     WHEN excluded.refresh = '' THEN accounts.refresh
     WHEN excluded.expires >= accounts.expires THEN excluded.refresh
     ELSE accounts.refresh END,
+  id_token = CASE
+    WHEN excluded.expires >= accounts.expires THEN excluded.id_token
+    ELSE accounts.id_token END,
   expires = MAX(excluded.expires, accounts.expires),
   updated_at = excluded.updated_at
 """
@@ -111,6 +117,7 @@ def sync_accounts(accounts) -> None:
             str(account.secret.get("refresh") or ""),
             _secret_expiry(account.secret),
             now,
+            str(account.secret.get("id_token") or ""),
         )
         for account in accounts
     ]
@@ -122,20 +129,21 @@ def sync_accounts(accounts) -> None:
         conn.close()
 
 
-def update_tokens(provider: str, identity: str, access: str, refresh: str, expires_in) -> None:
+def update_tokens(provider: str, identity: str, access: str, refresh: str, expires_in, id_token: str = "") -> None:
     """刷新成功后无条件写入最新令牌。"""
-    expires = int(time.time()) + int(expires_in) if isinstance(expires_in, (int, float)) else 0
+    expires = int(time.time()) + int(expires_in) if isinstance(expires_in, (int, float)) else _secret_expiry({"access": access})
     conn = _connect()
     try:
         conn.execute(
-            """INSERT INTO accounts (provider, identity, access, refresh, expires, updated_at)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO accounts (provider, identity, access, refresh, expires, updated_at, id_token)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(provider, identity) DO UPDATE SET
                  access = excluded.access,
                  refresh = excluded.refresh,
+                 id_token = excluded.id_token,
                  expires = CASE WHEN excluded.expires > 0 THEN excluded.expires ELSE accounts.expires END,
                  updated_at = excluded.updated_at""",
-            (provider, identity, access, refresh, expires, int(time.time())),
+            (provider, identity, access, refresh, expires, int(time.time()), id_token),
         )
         conn.commit()
     finally:
@@ -146,7 +154,7 @@ def get_tokens(provider: str, identity: str) -> dict | None:
     conn = _connect()
     try:
         row = conn.execute(
-            """SELECT provider, identity, email, access, refresh, expires, source
+            """SELECT provider, identity, email, access, refresh, expires, source, id_token
                FROM accounts WHERE provider = ? AND identity = ?""",
             (provider, identity),
         ).fetchone()
@@ -162,6 +170,7 @@ def get_tokens(provider: str, identity: str) -> dict | None:
         "refresh": row[4],
         "expires": row[5],
         "source": row[6],
+        "id_token": row[7],
     }
 
 
@@ -270,7 +279,7 @@ def list_accounts() -> list[dict]:
 
 
 def _secret_expiry(secret: dict) -> int:
-    raw = secret.get("expires") or secret.get("expiry")
+    raw = _jwt_claims(secret.get("access") or "").get("exp") or secret.get("expires") or secret.get("expiry")
     if isinstance(raw, str) and raw.isdigit():
         raw = int(raw)
     if isinstance(raw, (int, float)) and raw > 0:

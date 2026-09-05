@@ -7,6 +7,7 @@
 
 import json
 import sqlite3
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -14,7 +15,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import agentdb, store
+from . import agentdb, logbuf, store
+from .oauth_openai import matching_id_token, token_account_id
 
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
@@ -30,6 +32,44 @@ _EXPIRY_SKEW_SECONDS = 60
 
 _OPENCODE_ENTRY_KEY = {"grok": "xai", "openai": "openai", "claude": "anthropic"}
 
+# ponytail: serialize OpenAI refresh/switch/save within this process; per-account locks if contention grows.
+OPENAI_LOCK = threading.RLock()
+
+
+class RefreshError(Exception):
+    def __init__(self, code: str, message: str, *, reauth: bool = False):
+        super().__init__(message)
+        self.code = code
+        self.reauth = reauth
+
+
+def adopt_latest(account) -> None:
+    """Use the newest complete OpenAI token bundle, regardless of its original source."""
+    if account.provider != "openai" or account.auth_mode == "api_key":
+        return
+    cached = agentdb.get_tokens(account.provider, account.identity) or {}
+    access = account.secret.get("access") or ""
+    actual = token_account_id(access)
+    expected = account.secret.get("account_id") or account.user_id or actual
+    if actual and expected and actual != expected:
+        raise RefreshError("account_mismatch", "账号与访问凭据不一致，请重新授权此账号", reauth=True)
+    cached_id = token_account_id(cached.get("access") or "")
+    if cached.get("access") and (not expected or not cached_id or expected == cached_id):
+        current_expiry = agentdb._secret_expiry(account.secret)
+        cached_expiry = agentdb._secret_expiry(cached)
+        if not access or (cached_expiry and cached_expiry >= current_expiry) or cached.get("access") == access:
+            refresh = cached.get("refresh") or (account.secret.get("refresh") if cached["access"] == access else "") or ""
+            account.secret.update(
+                access=cached["access"], refresh=refresh,
+                id_token=cached.get("id_token") or account.secret.get("id_token") or "",
+                expiry=cached_expiry,
+            )
+            account.secret.pop("expires", None)
+    access = account.secret.get("access") or ""
+    account_id = token_account_id(access) or expected or ""
+    account.secret["account_id"] = account_id
+    account.secret["id_token"] = matching_id_token(access, account.secret.get("id_token") or "", account_id)
+
 
 def get_token(provider: str, identity: str) -> dict | None:
     return agentdb.get_tokens(provider, identity)
@@ -37,11 +77,19 @@ def get_token(provider: str, identity: str) -> dict | None:
 
 def record(account, access: str, refresh: str = "", expires_in=None) -> None:
     """刷新成功后写入中央库 agent.db（汇总所有平台最新票据）。"""
-    agentdb.update_tokens(account.provider, account.identity, access, refresh or (account.secret.get("refresh") or ""), expires_in)
+    agentdb.update_tokens(account.provider, account.identity, access, refresh or (account.secret.get("refresh") or ""), expires_in, account.secret.get("id_token") or "")
 
 
 def ensure_fresh(account) -> str:
     """已知过期就先刷新；未知过期时间的返回原票，由 provider 遇到 401 再刷新。"""
+    if account.provider == "openai":
+        with OPENAI_LOCK:
+            adopt_latest(account)
+            access = account.secret.get("access") or ""
+            expiry = _expiry_ts(account)
+            if (not access and account.secret.get("refresh")) or (expiry and time.time() >= expiry - _EXPIRY_SKEW_SECONDS):
+                return refresh_account(account) or ""
+            return access
     access = account.secret.get("access") or ""
     if not access:
         return ""
@@ -52,9 +100,26 @@ def ensure_fresh(account) -> str:
 
 
 def refresh_account(account) -> str | None:
+    if account.provider == "openai":
+        with OPENAI_LOCK:
+            previous = account.secret.get("access")
+            adopt_latest(account)
+            if account.secret.get("access") != previous and _expiry_ts(account) > time.time() + _EXPIRY_SKEW_SECONDS:
+                return account.secret["access"]
+            try:
+                return _refresh_account(account)
+            except RefreshError as error:
+                logbuf.warn("OpenAI 令牌续期失败", identity=account.identity, code=error.code, reauth=error.reauth)
+                raise
+    return _refresh_account(account)
+
+
+def _refresh_account(account) -> str | None:
     """按平台刷新 access token，写中央库并回写来源。返回新 access 或 None。"""
     refresh = (account.secret.get("refresh") or "").strip()
     if not refresh:
+        if account.provider == "openai":
+            raise RefreshError("missing_refresh", "缺少续期凭据，请重新授权此账号", reauth=True)
         return None
     handler = {
         "grok": lambda: _form_post(XAI_TOKEN_URL, {"grant_type": "refresh_token", "client_id": XAI_CLIENT_ID, "refresh_token": refresh}),
@@ -67,45 +132,51 @@ def refresh_account(account) -> str | None:
         return None
     token = handler()
     if not isinstance(token, dict):
+        if account.provider == "openai":
+            raise RefreshError("invalid_response", "续期服务未返回有效凭据，请稍后重试")
         return None
     if token.get("shouldLogout"):
+        if account.provider == "openai":
+            raise RefreshError("session_expired", "登录会话已失效，请重新授权此账号", reauth=True)
         return None
     access = token.get("access_token") or ""
-    if not access:
+    if not access or not isinstance(access, str):
+        if account.provider == "openai":
+            raise RefreshError("invalid_response", "续期服务未返回访问令牌，请稍后重试")
         return None
     new_refresh = token.get("refresh_token") or refresh
     new_id_token = token.get("id_token") or account.secret.get("id_token") or ""
+    if account.provider == "openai":
+        if not isinstance(new_refresh, str):
+            raise RefreshError("invalid_response", "续期服务响应异常，请稍后重试")
+        expected = token_account_id(account.secret.get("access") or "") or account.secret.get("account_id") or account.user_id
+        actual = token_account_id(access)
+        if expected and actual and expected != actual:
+            raise RefreshError("account_mismatch", "续期返回了其他账号的凭据，请重新授权此账号", reauth=True)
+        new_id_token = matching_id_token(access, new_id_token, actual or expected or "")
     expires_in = token.get("expires_in")
     account.secret["access"] = access
     account.secret["refresh"] = new_refresh
-    if new_id_token:
+    if new_id_token or account.provider == "openai":
         account.secret["id_token"] = new_id_token
     if isinstance(expires_in, (int, float)):
         account.secret["expiry"] = int(time.time()) + int(expires_in)
+        account.secret.pop("expires", None)
     record(account, access, new_refresh, expires_in)
     _write_back(account, access, new_refresh, expires_in, new_id_token)
     return access
 
 
 def _refresh_openai(refresh: str):
-    res = _json_post(
+    return _json_post(
         OPENAI_TOKEN_URL,
         {
             "grant_type": "refresh_token",
             "client_id": OPENAI_CLIENT_ID,
             "refresh_token": refresh,
         },
+        strict=True,
     )
-    if not res:
-        res = _form_post(
-            OPENAI_TOKEN_URL,
-            {
-                "grant_type": "refresh_token",
-                "client_id": OPENAI_CLIENT_ID,
-                "refresh_token": refresh,
-            },
-        )
-    return res
 
 
 def _refresh_google(refresh: str):
@@ -141,7 +212,7 @@ def _form_post(url: str, fields: dict):
     return payload if isinstance(payload, dict) else None
 
 
-def _json_post(url: str, payload: dict):
+def _json_post(url: str, payload: dict, *, strict: bool = False):
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         url,
@@ -151,12 +222,39 @@ def _json_post(url: str, payload: dict):
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, json.JSONDecodeError):
+    except urllib.error.HTTPError as error:
+        if strict:
+            try:
+                body = json.loads(error.read().decode("utf-8"))
+                detail = body.get("error") if isinstance(body, dict) else None
+                code = detail.get("code") or detail.get("type") if isinstance(detail, dict) else detail
+            except (ValueError, OSError):
+                code = None
+            # Never expose response bodies: providers can echo credentials in them.
+            reasons = {
+                "invalid_grant": "续期凭据已失效",
+                "refresh_token_reused": "续期凭据已被使用或替换",
+                "refresh_token_expired": "续期凭据已过期",
+                "refresh_token_revoked": "续期凭据已被撤销",
+            }
+            if isinstance(code, str) and code in reasons:
+                raise RefreshError(code, f"{reasons[code]}（{code}），请重新授权此账号", reauth=True) from None
+            raise RefreshError(f"http_{error.code}", f"续期请求失败（HTTP {error.code}），请稍后重试") from None
+        return None
+    except (urllib.error.URLError, OSError):
+        if strict:
+            raise RefreshError("network_error", "续期时网络连接失败，请检查网络后重试") from None
+        return None
+    except (ValueError, UnicodeError):
+        if strict:
+            raise RefreshError("invalid_response", "续期服务响应异常，请稍后重试") from None
         return None
     return data if isinstance(data, dict) else None
 
 
 def _expiry_ts(account) -> float:
+    if account.provider == "openai":
+        return float(agentdb._secret_expiry(account.secret))
     raw = account.secret.get("expires") or account.secret.get("expiry")
     if isinstance(raw, str) and raw.isdigit():
         raw = int(raw)
@@ -172,6 +270,11 @@ def _expiry_ts(account) -> float:
 
 def _write_back(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
     """把新票据写回来源工具，保证 OpenCode / Grok CLI / Cursor IDE / Codex 也用新票。"""
+    if account.provider == "openai":
+        _write_quota_store(account, access, refresh, expires_in, id_token)
+        _write_codex_auth(account, access, refresh, expires_in, id_token)
+        _write_opencode(account, access, refresh, expires_in, id_token)
+        return
     writers = {
         "opencode": _write_opencode,
         "official-grok": _write_grok_cli,
@@ -197,10 +300,12 @@ def _write_back(account, access: str, refresh: str, expires_in, id_token: str = 
 
 
 def _write_opencode(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+    from .provision import _opencode_path
+
     entry_key = _OPENCODE_ENTRY_KEY.get(account.provider)
     if not entry_key:
         return
-    path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    path = _opencode_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -208,12 +313,21 @@ def _write_opencode(account, access: str, refresh: str, expires_in, id_token: st
     entry = data.get(entry_key)
     if not isinstance(entry, dict) or entry.get("type") != "oauth":
         return
+    if account.provider == "openai":
+        expected = token_account_id(access) or account.secret.get("account_id") or account.user_id
+        current = token_account_id(entry.get("access") or "") or entry.get("accountId")
+        if not expected or current != expected:
+            return
+        entry["accountId"] = expected
+        entry.pop("id_token", None)
     entry["access"] = access
     entry["refresh"] = refresh
     if id_token:
         entry["id_token"] = id_token
     if isinstance(expires_in, (int, float)):
         entry["expires"] = int(time.time() * 1000) + int(expires_in) * 1000
+    elif account.provider == "openai":
+        entry["expires"] = agentdb._secret_expiry({"access": access}) * 1000
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -238,33 +352,25 @@ def _write_grok_cli(account, access: str, refresh: str, expires_in) -> None:
 
 
 def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
-    import base64 as _b64
-    path = Path.home() / ".codex" / "auth.json"
+    from .provision import _codex_auth_path
+
+    path = _codex_auth_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        data = {}
+        return
     if not isinstance(data, dict):
-        data = {}
-
-    from .discover import _openai_account_id
-    account_id = _openai_account_id(access) or account.secret.get("account_id") or account.user_id or ""
-
-    # Pick the best id_token: use provided or stored, but ONLY if it's a real signed JWT
-    resolved_id_token = id_token or account.secret.get("id_token") or ""
-    if resolved_id_token:
-        try:
-            hdr_part = resolved_id_token.split(".")[0]
-            hdr_part += "=" * ((4 - len(hdr_part) % 4) % 4)
-            hdr = json.loads(_b64.urlsafe_b64decode(hdr_part))
-        except Exception:
-            hdr = {}
-        if hdr.get("alg") == "none" or not hdr.get("kid"):
-            resolved_id_token = ""
-
-    # No real id_token → use access_token directly (cockpit-tools approach)
-    if not resolved_id_token:
-        resolved_id_token = access
+        return
+    if data.get("OPENAI_API_KEY") or data.get("personal_access_token") or data.get("auth_mode") not in (None, "chatgpt"):
+        return
+    tokens = data.get("tokens")
+    if not isinstance(tokens, dict):
+        return
+    account_id = token_account_id(access) or account.secret.get("account_id") or account.user_id or ""
+    current_id = token_account_id(tokens.get("access_token") or "") or tokens.get("account_id")
+    if not account_id or current_id != account_id:
+        return
+    resolved_id_token = matching_id_token(access, id_token or account.secret.get("id_token") or "", account_id) or access
 
     data["auth_mode"] = None
     data["OPENAI_API_KEY"] = None
@@ -286,10 +392,12 @@ def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: 
 
 def _write_quota_store(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
     fields = {"access": access, "refresh": refresh}
-    if id_token:
+    if id_token or account.provider == "openai":
         fields["id_token"] = id_token
     if isinstance(expires_in, (int, float)):
         fields["expiry"] = int(time.time()) + int(expires_in)
+    elif account.provider == "openai":
+        fields["expiry"] = agentdb._secret_expiry({"access": access})
     store.update_fields(account.provider, account.identity, fields)
 
 

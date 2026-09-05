@@ -70,6 +70,8 @@ def upsert_account(record: dict) -> dict:
             and item.get("identity") == record.get("identity")
         )
         if same_id or same_identity:
+            record["id"] = item.get("id") or account_id
+            record["created_at"] = item.get("created_at") or record["created_at"]
             merged = dict(item)
             merged.update(record)
             next_accounts.append(merged)

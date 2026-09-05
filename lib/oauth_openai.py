@@ -23,7 +23,7 @@ class OAuthError(Exception):
         self.code = code
 
 
-def start_login() -> dict:
+def start_login(*, account_id: str = "", identity: str = "") -> dict:
     body = json.dumps({"client_id": CLIENT_ID}).encode("utf-8")
     device = _json_request(
         DEVICE_USER_CODE_ENDPOINT,
@@ -45,6 +45,8 @@ def start_login() -> dict:
         "expires_at": time.time() + expires_in,
         "interval": max(2, interval),
         "cancelled": False,
+        "account_id": account_id,
+        "identity": identity,
     }
 
     return {
@@ -125,12 +127,16 @@ def poll_login(login_id: str) -> dict:
         _PENDING.pop(login_id, None)
         return {"status": "error", "error": "响应中缺少 access_token"}
 
-    id_token = str(tokens.get("id_token") or "").strip()
+    id_token = matching_id_token(access, str(tokens.get("id_token") or "").strip())
     refresh = str(tokens.get("refresh_token") or "").strip()
     expires_in = tokens.get("expires_in")
     profile = _profile(access, id_token)
 
     _PENDING.pop(login_id, None)
+    if state.get("cancelled"):
+        return {"status": "cancelled"}
+    if state.get("account_id") and profile.get("account_id") != state["account_id"]:
+        return {"status": "error", "error": "登录的账号与待重新授权的账号不一致，原账号未修改"}
     return {
         "status": "ok",
         "access": access,
@@ -138,6 +144,7 @@ def poll_login(login_id: str) -> dict:
         "id_token": id_token,
         "expires_in": expires_in,
         "profile": profile,
+        "identity": state.get("identity") or "",
     }
 
 
@@ -146,6 +153,32 @@ def cancel_login(login_id: str) -> None:
     if state:
         state["cancelled"] = True
         _PENDING.pop(login_id, None)
+
+
+def token_account_id(token: str) -> str:
+    auth = _jwt_claims(token).get("https://api.openai.com/auth")
+    return str(auth.get("chatgpt_account_id") or "") if isinstance(auth, dict) else ""
+
+
+def matching_id_token(access: str, id_token: str, account_id: str = "") -> str:
+    """Check token ownership and header format; this does not verify signatures."""
+    import base64
+
+    expected = token_account_id(access) or account_id
+    if not expected or token_account_id(id_token) != expected:
+        return ""
+    access_sub = _jwt_claims(access).get("sub")
+    id_sub = _jwt_claims(id_token).get("sub")
+    if access_sub and id_sub and access_sub != id_sub:
+        return ""
+    try:
+        part = id_token.split(".")[0]
+        header = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except (ValueError, IndexError):
+        return ""
+    if not isinstance(header, dict) or not isinstance(header.get("alg"), str) or header["alg"].lower() in {"", "none"} or not header.get("kid"):
+        return ""
+    return id_token
 
 
 def _profile(access: str, id_token: str) -> dict:

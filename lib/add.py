@@ -1,10 +1,12 @@
 import json
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
-from . import store
+from . import agentdb, store, tokenstore
 from .discover import collect_accounts, load_json
-from .models import AUTH_RULES
+from .models import AUTH_RULES, Account
+from .oauth_openai import matching_id_token, token_account_id
 from .store import upsert_account
 
 PROVIDERS = list(AUTH_RULES.keys())
@@ -109,6 +111,11 @@ def add_interactive() -> None:
 
 
 def _save_oauth_account(provider: str, label: str, result: dict):
+    with tokenstore.OPENAI_LOCK if provider == "openai" else nullcontext():
+        return _store_oauth_account(provider, label, result)
+
+
+def _store_oauth_account(provider: str, label: str, result: dict):
     profile = result.get("profile") or {}
     record = {
         "provider": provider,
@@ -121,11 +128,31 @@ def _save_oauth_account(provider: str, label: str, result: dict):
         "access": result.get("access") or "",
         "refresh": result.get("refresh") or "",
     }
-    if result.get("id_token"):
+    if provider == "openai":
+        account_id = token_account_id(record["access"]) or profile.get("account_id") or profile.get("user_id")
+        if not account_id or not record["access"] or not record["refresh"]:
+            raise ValueError("授权未返回完整账号凭据，请重试")
+        identity = result.get("identity") or account_id
+        existing = next((item for item in store.list_stored() if item.get("provider") == "openai" and
+                         (item.get("identity") == identity or item.get("user_id") == account_id)), {})
+        record.update(identity=existing.get("identity") or identity, user_id=account_id,
+                      source=existing.get("source") or "dushan-quota")
+        record["id_token"] = matching_id_token(record["access"], result.get("id_token") or "", account_id)
+        lifetime = result.get("expires_in")
+        record["expiry"] = int(time.time()) + int(lifetime) if isinstance(lifetime, (int, float)) else agentdb._secret_expiry(record)
+    if result.get("id_token") and provider != "openai":
         record["id_token"] = result["id_token"]
     if profile.get("plan_type"):
         record["plan"] = profile["plan_type"]
-    upsert_account(record)
+    store.upsert_account(record)
+    if provider == "openai":
+        account = Account(provider=provider, label=label, source=record["source"], identity=record["identity"],
+                          auth_mode="oauth", email=record["email"], name=record["name"], user_id=record["user_id"],
+                          plan=record.get("plan") or "", secret={**record, "account_id": record["user_id"]})
+        agentdb.sync_accounts([account])
+        tokenstore.record(account, record["access"], record["refresh"], result.get("expires_in"))
+        tokenstore._write_back(account, record["access"], record["refresh"], result.get("expires_in"), record["id_token"])
+    return record
 
 
 def add_api_key(provider: str, api_key: str, variant: str = "") -> None:
