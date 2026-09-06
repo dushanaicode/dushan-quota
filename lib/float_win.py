@@ -35,8 +35,17 @@ _SWP_NOZORDER = 0x0004
 _SWP_NOACTIVATE = 0x0010
 _SWP_FRAMECHANGED = 0x0020
 _WM_NCLBUTTONDOWN = 0x00A1
+_WM_DPICHANGED = 0x02E0
 _HTCAPTION = 2
 _HT_BOTTOMRIGHT = 17
+_DPI_SUBCLASS_ID = 0x4451
+
+# Win10 圆角回退（SetWindowRgn）按物理像素裁剪窗口，DPI 变化改变尺寸后必须重算
+_REGION_CORNERS: dict = {}
+# 窗口当前 DPI（自己跟踪：PMv1 下 WM_DPICHANGED 的建议矩形以 96 为基准，不可靠）
+_WINDOW_DPI: dict = {}
+_dpi_proc_callback = None
+_def_subclass_proc = None
 
 
 def _is_windows() -> bool:
@@ -268,6 +277,7 @@ def _dwm_round_corners(hwnd: int, rounded: bool) -> bool:
         )
         if hr != 0:
             return False
+        _REGION_CORNERS.pop(hwnd, None)
         ctypes.windll.user32.SetWindowPos(
             hwnd,
             0,
@@ -285,6 +295,7 @@ def _region_round_corners(hwnd: int, rounded: bool) -> None:
         user32 = ctypes.windll.user32
         if not rounded:
             user32.SetWindowRgn(hwnd, None, True)
+            _REGION_CORNERS.pop(hwnd, None)
             return
         rect = wintypes.RECT()
         if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
@@ -303,6 +314,7 @@ def _region_round_corners(hwnd: int, rounded: bool) -> None:
             return
         # SetWindowRgn 成功后系统接管 rgn 句柄，不能再 DeleteObject
         user32.SetWindowRgn(hwnd, rgn, True)
+        _REGION_CORNERS[hwnd] = True
     except Exception:
         pass
 
@@ -335,6 +347,81 @@ def _set_topmost(window, on_top: bool) -> None:
         pass
     try:
         window.on_top = on_top
+    except Exception:
+        pass
+
+
+_SUBCLASSPROC = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t,
+    wintypes.HWND,
+    ctypes.c_uint,
+    ctypes.c_size_t,
+    ctypes.c_ssize_t,
+    ctypes.c_size_t,
+    ctypes.c_size_t,
+)
+
+
+def _dpi_subclass_proc(hwnd, msg, wparam, lparam, _uid, _ref):
+    if msg == _WM_DPICHANGED:
+        # 拖到缩放比例不同的屏幕：按真实旧 DPI 等比调整窗口物理尺寸，保持逻辑（CSS）
+        # 尺寸跨屏不变。必须吞掉这条消息（不调 DefSubclassProc）：WinForms(.NET 4.8)
+        # 在 PMv1 下会把窗口缩放回物理尺寸不变，而 WebView2 会自行更新光栅化比例，
+        # 两者叠加就是跨屏后内容被裁切/异常放大的根因。OS 给的建议矩形在 PMv1 下
+        # 以 96 为基准（不可靠），所以自己跟踪窗口 DPI。
+        try:
+            new_dpi = wparam & 0xFFFF
+            old_dpi = _WINDOW_DPI.get(hwnd) or new_dpi
+            if new_dpi and new_dpi != old_dpi:
+                _WINDOW_DPI[hwnd] = new_dpi
+                rect = wintypes.RECT()
+                if ctypes.windll.user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(rect)):
+                    width = round((rect.right - rect.left) * new_dpi / old_dpi)
+                    height = round((rect.bottom - rect.top) * new_dpi / old_dpi)
+                    ctypes.windll.user32.SetWindowPos(
+                        wintypes.HWND(hwnd),
+                        0,
+                        0, 0,
+                        max(150, width),
+                        max(200, height),
+                        _SWP_NOMOVE | _SWP_NOZORDER | _SWP_NOACTIVATE,
+                    )
+                    if hwnd in _REGION_CORNERS:
+                        _region_round_corners(hwnd, True)
+        except Exception:
+            pass
+        return 0
+    return _def_subclass_proc(hwnd, msg, wparam, lparam)
+
+
+def _install_dpi_handler(window) -> None:
+    """挂钩 WM_DPICHANGED；同一窗口重复调用只替换，安全。"""
+    global _dpi_proc_callback, _def_subclass_proc
+    if not _is_windows():
+        return
+    hwnd = _hwnd(window)
+    if not hwnd:
+        return
+    try:
+        comctl32 = ctypes.windll.comctl32
+        comctl32.DefSubclassProc.restype = ctypes.c_ssize_t
+        comctl32.DefSubclassProc.argtypes = [
+            wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t,
+        ]
+        comctl32.SetWindowSubclass.restype = wintypes.BOOL
+        comctl32.SetWindowSubclass.argtypes = [
+            wintypes.HWND, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t,
+        ]
+        _def_subclass_proc = comctl32.DefSubclassProc
+        if _dpi_proc_callback is None:
+            _dpi_proc_callback = _SUBCLASSPROC(_dpi_subclass_proc)
+        comctl32.SetWindowSubclass(
+            wintypes.HWND(hwnd), ctypes.cast(_dpi_proc_callback, ctypes.c_void_p), _DPI_SUBCLASS_ID, 0
+        )
+        try:
+            _WINDOW_DPI[hwnd] = ctypes.windll.user32.GetDpiForWindow(wintypes.HWND(hwnd))
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -849,10 +936,12 @@ def serve_float():
         _set_round_corners(window, api._rounded)
         _set_alpha(window, int(saved.get("alpha", 82)))
         _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
+        _invoke_on_ui(window, lambda: _install_dpi_handler(window))
         _set_topmost(window, api._on_top)
 
     def _on_shown():
         _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
+        _invoke_on_ui(window, lambda: _install_dpi_handler(window))
         _set_round_corners(window, api._rounded)
 
     try:
