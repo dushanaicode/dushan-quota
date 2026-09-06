@@ -196,6 +196,21 @@
   .wrow.warn .txt { color:var(--warn); }
   .wrow.money .txt { color:var(--muted); font-variant-numeric:tabular-nums; }
   .wrow.money.neg .txt { color:var(--bad); }
+  .wrow .rst[title] { cursor:help; }
+  .credits { margin:8px 0 2px; padding:6px 9px; border:1px solid var(--line-soft); border-radius:9px; }
+  .credits-head { font-size:10px; color:var(--faint); margin-bottom:2px; }
+  .credit-row { display:flex; align-items:baseline; gap:7px; padding:2px 0; font-size:10.5px; }
+  .credit-row .c-state { flex:none; font-size:9px; padding:0 6px; border-radius:99px; background:var(--accent-soft); color:var(--faint); }
+  .credit-row .c-state.available { color:var(--ok); }
+  .credit-row .c-state.used { color:var(--warn); }
+  .credit-row .c-state.expired { color:var(--bad); }
+  .credit-row .c-title { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .credit-row .c-exp { flex:1; text-align:right; color:var(--faint); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .credit-row .c-use { flex:none; border:1px solid var(--line); background:transparent; color:var(--muted);
+    font-size:9.5px; padding:1px 8px; border-radius:99px; cursor:pointer; }
+  .credit-row .c-use:hover { color:var(--text); }
+  .credit-row .c-use.arm { color:var(--warn); border-color:rgba(207,154,46,.4); }
+  .credit-row .c-use:disabled { opacity:.5; cursor:default; }
   .err { color:var(--bad); font-size:12px; padding:6px 0 2px; }
   .foot { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
   .foot .btn { padding:4px 11px; font-size:11px; color:var(--muted); border-radius:8px; }
@@ -726,6 +741,52 @@ function subscriptionLine(item){
   return '';
 }
 
+function fmtResetAt(ts){
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  if (isNaN(d)) return '';
+  const p2 = n => String(n).padStart(2,'0');
+  return `${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+function resetCountdown(targetMs){
+  const s = Math.floor((targetMs - Date.now()) / 1000);
+  if (s <= 0) return '已过期';
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))} 分钟后`;
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return m ? `${h} 小时 ${m} 分后` : `${h} 小时后`;
+  }
+  const d = Math.floor(s / 86400);
+  if (d === 1) {
+    const h = Math.floor((s % 86400) / 3600);
+    return h ? `1 天 ${h} 小时后` : '1 天后';
+  }
+  return `${d} 天后`;
+}
+function creditBlock(item){
+  const rc = item.reset_credits;
+  const credits = rc && Array.isArray(rc.credits) ? rc.credits : [];
+  if (!credits.length) return '';
+  const states = {available:['可用','available'], redeemed:['已使用','used'], expired:['已过期','expired']};
+  const sorted = [...credits].sort((a, b) =>
+    (a.status === 'available' ? 0 : 1) - (b.status === 'available' ? 0 : 1)
+    || String(a.expires_at || '').localeCompare(String(b.expires_at || '')));
+  const rows = sorted.map(c => {
+    const [label, cls] = states[c.status] || [c.status || '未知', 'other'];
+    const exp = c.expires_at ? new Date(c.expires_at) : null;
+    const valid = exp && !isNaN(exp);
+    const when = valid ? `${fmtResetAt(exp.getTime() / 1000)} 到期` : '';
+    const left = valid && c.status === 'available' ? resetCountdown(exp.getTime()) : '';
+    const full = valid ? `过期时间 ${exp.toLocaleString('zh-CN', {hour12:false})}` : '';
+    const usable = c.status === 'available' && c.id
+      ? `<button class="c-use" data-id="${esc(c.id)}" data-label="使用" title="仅消费这一张重置卡${full ? '，' + esc(full) : ''}">使用</button>`
+      : '';
+    return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span>${usable}</div>`;
+  }).join('');
+  const avail = credits.filter(c => c.status === 'available').length;
+  return `<div class="credits"><div class="credits-head">重置卡 · 可用 ${avail} / 共 ${credits.length} 张</div>${rows}</div>`;
+}
+
 /* 两行式额度行（同悬浮窗）：名称+重置+百分比一行，细条整行 */
 function winRow(w){
   if (w.text != null) {
@@ -733,7 +794,10 @@ function winRow(w){
   }
   const p = Math.max(0, Math.min(100, Math.round(w.remaining_percent || 0)));
   const c = colorOf(p);
-  return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${esc(w.reset || '')}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
+  const exact = fmtResetAt(w.reset_ts);
+  const rst = [w.reset, exact].filter(Boolean).join(' · ');
+  const tip = w.reset_ts ? `重置时间 ${new Date(w.reset_ts * 1000).toLocaleString('zh-CN', {hour12:false})}` : '';
+  return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rst)}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
 }
 function fmtActivation(iso){
   const d = new Date(iso);
@@ -948,7 +1012,10 @@ function renderCards(){
     const resetTitle = creditAvailable
       ? (creditNow > 0 ? '将消费一次重置次数，需要再次确认' : '点击后实时校验当前是否可用；不可用时不会消费次数')
       : '当前没有可用的重置次数';
-    const resetButton = item.provider === 'openai'
+    // 已拿到逐张重置卡列表时由卡片行内的"使用"按钮接管；底部按钮仅在
+    // 列表缺失（拉取失败）但确认仍有剩余次数时兜底显示，走服务端分配。
+    const hasCardList = Array.isArray(credit.credits) && credit.credits.length > 0;
+    const resetButton = item.provider === 'openai' && !hasCardList
       ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditAvailable ? '' : 'disabled'} title="${esc(resetTitle)}">${esc(resetLabel)}</button>`
       : '';
     const usageButton = item.usage_supported
@@ -968,6 +1035,7 @@ function renderCards(){
       ${activationLine?`<div class="activation-row">${activationLine}</div>`:''}
       ${subLine}
       ${item.ok ? `<div class="wins">${wins}</div>` : `<div class="err">${esc(item.error || '获取失败')}</div>`}
+      ${creditBlock(item)}
       <div class="foot">
         ${usageButton}
         <button class="btn act-sync">写入到…</button>
@@ -982,6 +1050,9 @@ function renderCards(){
     if (ub) ub.onclick = () => openUsage(item);
     const rb = sec.querySelector('.act-reset');
     if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
+    sec.querySelectorAll('.c-use').forEach(btn => {
+      btn.onclick = e => { e.stopPropagation(); resetOpenAI(item, e.currentTarget, btn.dataset.id); };
+    });
     box.appendChild(sec);
   });
 }
@@ -1032,7 +1103,7 @@ async function confirmCloseCard(){
   }
 }
 
-async function resetOpenAI(item, btn){
+async function resetOpenAI(item, btn, creditId){
   if (!btn.dataset.arm) {
     btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认使用 1 次';
     setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = btn.dataset.label || '使用重置次数'; }, 2600);
@@ -1042,7 +1113,7 @@ async function resetOpenAI(item, btn){
   btn.classList.remove('arm');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>重置中';
   try {
-    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity, confirmed:true})});
+    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity, credit_id:creditId || undefined, confirmed:true})});
     toast(r.ok ? (r.message || '已重置') : (r.error || '重置失败'), !r.ok);
   } catch(e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.textContent = btn.dataset.label || '使用重置次数'; refreshQuota(false); }
@@ -1124,7 +1195,7 @@ function renderFocus(){
       div.className = 'fp-item';
       if (entrance) div.style.animationDelay = (i * 25) + 'ms';
       else div.style.animation = 'none';
-      div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span>${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="r">${esc(r.reset)}</span><span class="p ${c}">${r.pct}%</span>`;
+      div.innerHTML = `<span class="t"><b>${esc(r.title)}</b><span>${esc(r.name)}</span>${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="r">${esc([r.reset, fmtResetAt(r.ts)].filter(Boolean).join(' · '))}</span><span class="p ${c}">${r.pct}%</span>`;
       box.appendChild(div);
     });
     return;

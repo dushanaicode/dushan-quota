@@ -121,7 +121,7 @@ quota --version
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
 | 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 额度、Token 用量、1/7/30 天/累计、Harness 筛选、置顶、透明度、背景与主题；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
-| Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号、额度与用量的完整管理 | Provider/账号/模型/Harness 用量详情、激活健康状态、添加账号、OAuth、历史恢复、凭据写入、OpenAI 重置额度、日志 | 默认仅 `127.0.0.1:18765` |
+| Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号、额度与用量的完整管理 | Provider/账号/模型/Harness 用量详情、激活健康状态、添加账号、OAuth、历史恢复、凭据写入、OpenAI 重置额度与重置卡到期时间、日志 | 默认仅 `127.0.0.1:18765` |
 
 Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
 
@@ -138,7 +138,7 @@ Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之�
 | Provider | Provider ID | 可查看内容 | 查询凭据 | 可写目标 |
 | --- | --- | --- | --- | --- |
 | Grok / xAI | `grok` | 周额度、高频/普通任务、套餐、订阅周期 | Grok OAuth | OpenCode、OMP、Grok CLI |
-| OpenAI / ChatGPT / Codex | `openai` | 5h/周/月窗口、消费额度、重置次数、套餐、订阅周期 | ChatGPT / Codex OAuth | OpenCode（OAuth）、OMP（OAuth 或 Platform API Key）、Codex CLI / App（OAuth） |
+| OpenAI / ChatGPT / Codex | `openai` | 5h/周/月窗口、消费额度、重置次数（含每张重置卡到期时间）、套餐、订阅周期 | ChatGPT / Codex OAuth | OpenCode（OAuth）、OMP（OAuth 或 Platform API Key）、Codex CLI / App（OAuth） |
 | Claude Code | `claude` | 5h、周、7d OAuth 用量窗口 | Claude OAuth | OpenCode、OMP、Claude Code |
 | Zhipu / Z.ai | `zai` | 5h、周、通用额度窗口 | API Key | OpenCode、OMP、GLM → Claude Code |
 | Kimi Code | `kimi` | 周额度与服务端返回的动态限制窗口 | API Key | OpenCode、OMP、Kimi Code CLI |
@@ -223,6 +223,7 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 - `quota ui` 默认只绑定 `127.0.0.1:18765`。Web 后端没有登录认证和 TLS，**不要直接暴露到局域网或公网**。
 - 界面只展示脱敏后的 Key；共享快照不会写入 access token、refresh token 或 API Key。
 - OpenAI“重置额度”会消耗一次 reset credit，只有在界面明确确认且服务端状态完整时才会执行。
+- Web 端重置卡列表中可单独选择某一张卡使用（按 `credit_id` 消费，消费前会重新验证该卡仍为可用状态）；不指定时由服务端分配。
 
 ## 升级与开发
 

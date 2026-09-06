@@ -25,7 +25,7 @@ from .store import store_dir
 # Version display-only cache records whenever normalized result fields change.
 # A mismatch forces a fresh provider read instead of decoding an old record as
 # if newly added fields were explicitly unavailable.
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _LOCK_STALE_SECONDS = 75.0
 _LOCK_WAIT_SECONDS = 45.0
 _LOCK_POLL_SECONDS = 0.1

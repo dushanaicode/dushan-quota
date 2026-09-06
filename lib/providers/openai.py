@@ -12,6 +12,7 @@ ACCOUNT_CHECK_PATH = "/backend-api/accounts/check/v4-2023-04-27"
 ACCOUNT_CHECK_URL = f"https://chatgpt.com{ACCOUNT_CHECK_PATH}"
 SUBSCRIPTIONS_PATH = "/backend-api/subscriptions"
 SUBSCRIPTIONS_URL = f"https://chatgpt.com{SUBSCRIPTIONS_PATH}"
+RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 WINDOW_KIND = {18000: "5h quota", 604800: "Week quota", 2592000: "Month quota", 2628000: "Month quota"}
 OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 
@@ -87,7 +88,10 @@ def _fetch(account: Account) -> QuotaResult:
     remaining = _parse_remaining(spend.get("individual_limit"), "Quota")
     if remaining:
         windows.append(remaining)
-    windows.extend(_reset_credits(data))
+    credits_detail = None
+    if isinstance(data.get("rate_limit_reset_credits"), dict):
+        credits_detail = _reset_credit_list(account, access)
+    windows.extend(_reset_credits(data, credits_detail))
     if not windows:
         email = _email(access) or account.email
         return QuotaResult(
@@ -134,14 +138,19 @@ def _usage(account: Account, access: str):
     return request_json(USAGE_URL, headers=headers)
 
 
-def reset_credits(account: Account, *, confirmed: bool = False) -> dict:
+def reset_credits(account: Account, *, confirmed: bool = False, credit_id: str | None = None) -> dict:
     try:
-        return _reset_account_credits(account, confirmed=confirmed)
+        return _reset_account_credits(account, confirmed=confirmed, credit_id=credit_id)
     except tokenstore.RefreshError as error:
         return {"ok": False, "error": str(error), "reauth_required": error.reauth}
 
 
-def _reset_account_credits(account: Account, *, confirmed: bool = False) -> dict:
+def _reset_account_credits(
+    account: Account,
+    *,
+    confirmed: bool = False,
+    credit_id: str | None = None,
+) -> dict:
     """Consume one reset credit only after explicit confirmation and eligibility checks."""
     import uuid
 
@@ -168,18 +177,27 @@ def _reset_account_credits(account: Account, *, confirmed: bool = False) -> dict
             "ok": False,
             "error": f"仍剩余 {available} 次，但当前暂不可用；未使用任何次数",
         }
+    if credit_id:
+        chosen = next(
+            (c for c in _reset_credit_list(account, access) if c["id"] == credit_id),
+            None,
+        )
+        if chosen is None:
+            return {"ok": False, "error": "未找到这张重置卡（可能已被使用或过期），未使用任何次数"}
+        if chosen["status"] != "available":
+            return {"ok": False, "error": "这张重置卡当前不可用（可能已被使用或过期），未使用任何次数"}
 
     redeem_id = uuid.uuid4().hex
-    status, text, data = _consume(account, access, redeem_id)
+    status, text, data = _consume(account, access, redeem_id, credit_id=credit_id)
     if status == 401:
         refreshed = tokenstore.refresh_account(account)
         if refreshed:
             access = refreshed
-            status, text, data = _consume(account, access, redeem_id)
+            status, text, data = _consume(account, access, redeem_id, credit_id=credit_id)
     if 200 <= status < 300:
         return {
             "ok": True,
-            "message": "已使用一次重置",
+            "message": "已使用选定的重置卡" if credit_id else "已使用一次重置",
             "data": data if isinstance(data, dict) else {},
         }
     if status == 0:
@@ -191,7 +209,7 @@ def _reset_account_credits(account: Account, *, confirmed: bool = False) -> dict
     return {"ok": False, "error": f"{status} {text[:120]}"}
 
 
-def _consume(account: Account, access: str, redeem_id: str):
+def _consume(account: Account, access: str, redeem_id: str, credit_id: str | None = None):
     headers = {
         "Authorization": f"Bearer {access}",
         "Content-Type": "application/json",
@@ -200,31 +218,71 @@ def _consume(account: Account, access: str, redeem_id: str):
     account_id = account.secret.get("account_id") or _account_id(access)
     if account_id:
         headers["ChatGPT-Account-ID"] = account_id
+    body = {"redeem_request_id": redeem_id}
+    if credit_id:
+        body["credit_id"] = credit_id
     return request_json(
         "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
         method="POST",
         headers=headers,
-        body={"redeem_request_id": redeem_id},
+        body=body,
     )
 
 
-def _reset_credits(data: dict) -> list[Window]:
+def _reset_credits(data: dict, credits: list[dict] | None = None) -> list[Window]:
     available, applicable = _credit_counts(data)
     if available is None and applicable is None:
         return []
     remaining = available if available is not None else applicable
     text = f"剩余 {remaining} 次"
+    meta = {
+        "kind": "reset_credits",
+        "available_count": available,
+        "applicable_available_count": applicable,
+    }
+    if credits:
+        meta["credits"] = credits
     return [
         Window(
             name="重置次数",
             text=text,
-            meta={
-                "kind": "reset_credits",
-                "available_count": available,
-                "applicable_available_count": applicable,
-            },
+            meta=meta,
         )
     ]
+
+
+def _reset_credit_list(account: Account, access: str) -> list[dict]:
+    """List individual reset credit grants; display data only, never fatal."""
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "User-Agent": "OpenCode-Quota-Toast/1.0",
+    }
+    account_id = account.secret.get("account_id") or _account_id(access)
+    if account_id:
+        headers["ChatGPT-Account-Id"] = account_id
+    try:
+        status, _, data = request_json(RESET_CREDITS_URL, headers=headers)
+    except Exception:
+        return []
+    if status != 200 or not isinstance(data, dict):
+        return []
+    raw = data.get("credits")
+    if not isinstance(raw, list):
+        return []
+    credits = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        credits.append(
+            {
+                "id": _scalar(item.get("id")),
+                "title": _scalar(item.get("title")) or "Full reset",
+                "status": _scalar(item.get("status")),
+                "granted_at": _subscription_iso(item.get("granted_at")),
+                "expires_at": _subscription_iso(item.get("expires_at")),
+            }
+        )
+    return credits
 
 
 def _credit_counts(data: dict) -> tuple[int | None, int | None]:

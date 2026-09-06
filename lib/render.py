@@ -21,4 +21,7 @@ def _reset_text(value: str | None, now: datetime) -> str:
         minutes = (seconds % 3600) // 60
         return f"{hours}h" if minutes == 0 else f"{hours}h{minutes}m"
     days = seconds // 86400
+    if days == 1:
+        hours = (seconds % 86400) // 3600
+        return f"1d{hours}h" if hours else "1d"
     return f"{days}d"
