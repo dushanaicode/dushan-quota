@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 from lib import config, float_win
 from lib.models import Account, QuotaResult, Window
+from lib.render import _reset_ts
 from lib.snapshot import Snapshot
 
 
@@ -24,7 +25,7 @@ class FloatRefreshTests(unittest.TestCase):
             account=account,
             ok=True,
             title="OpenAI",
-            windows=[Window(name="Week quota", remaining_percent=75)],
+            windows=[Window(name="Week quota", remaining_percent=75, reset_iso="2030-01-02T03:04:05+00:00")],
             sub_start="2030-01-02T03:04:05+00:00",
             sub_end="2030-02-03T04:05:06+00:00",
             sub_status="known",
@@ -62,6 +63,8 @@ class FloatRefreshTests(unittest.TestCase):
         self.assertEqual("OpenAI", payload["results"][0]["title"])
         self.assertEqual("2030-02-03T04:05:06+00:00", payload["results"][0]["sub_end"])
         self.assertEqual("known", payload["results"][0]["sub_status"])
+        self.assertEqual(_reset_ts("2030-01-02T03:04:05+00:00"), payload["results"][0]["windows"][0]["reset_ts"])
+        self.assertEqual("周额度", payload["results"][0]["windows"][0]["name"])
 
     @patch("lib.usage.collect")
     @patch.object(float_win, "get_snapshot")

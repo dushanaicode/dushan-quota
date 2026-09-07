@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.3.0-C3B191" alt="Release v0.3.0">
+  <img src="https://img.shields.io/badge/Release-v0.6.0-C3B191" alt="Release v0.6.0">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -20,6 +20,13 @@
 </p>
 
 Dushan Quota 是一个本地优先的 AI 账号额度与 Token 用量看板。它会发现本机已有登录账号和手动添加的 API Key，把各平台的额度、套餐、重置时间、本机客户端用量与远端账号用量放到一起，同时明确区分账号和 Harness，避免把一台机器的总量重复算到多个账号。
+
+## v0.6.0：准确额度与中文时间显示
+
+- **Antigravity**：修正额度接口选择，解决部分账号始终显示 100% 的问题；保留真实的 0%、100% 和小数百分比。
+- **中文额度名称**：Web 与悬浮窗统一显示周额度、日额度、月额度、5 小时额度等，已有缓存也会使用中文名称。
+- **时间切换**：点击悬浮窗每条额度右侧的时间，可在 `6d05h09m` 倒计时与“重置于 YYYY-MM-DD HH:mm”之间切换，并记住各条额度的选择。
+- **清晰显示**：去掉重复的重置时间行和“本地”字样；倒计时独立更新，不触发卡片闪烁。
 
 ## v0.3.0：修复自动刷新闪烁
 

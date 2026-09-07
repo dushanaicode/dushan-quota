@@ -5,8 +5,12 @@ from ..models import Account, QuotaResult, Window
 
 BASE_URL = "https://cloudcode-pa.googleapis.com"
 LOAD_CODE_ASSIST_URL = f"{BASE_URL}/v1internal:loadCodeAssist"
-QUOTA_SUMMARY_URL = f"{BASE_URL}/v1internal:retrieveUserQuotaSummary"
-MODELS_URL = f"{BASE_URL}/v1internal:fetchAvailableModels"
+# The production host can return unused/default quotas for this same account.
+# Antigravity usage is served by the daily backends; do not fall back to prod.
+QUOTA_BASE_URLS = (
+    "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "https://daily-cloudcode-pa.googleapis.com",
+)
 
 USER_AGENT = "antigravity/1.104.0 (Windows NT 10.0; Win64; x64)"
 
@@ -49,30 +53,29 @@ def _query(account: Account, access: str) -> QuotaResult | None:
 
     # Step 1: Query loadCodeAssist to discover user's project and subscription tier
     project_id, subscription_tier = _load_project_and_tier(headers)
+    if not project_id:
+        return None
 
     # Step 2: Query retrieveUserQuotaSummary with project context (matches Cockpit Tools)
-    body = {"project": project_id} if project_id else {}
-    status, _, data = request_json(
-        QUOTA_SUMMARY_URL,
-        method="POST",
-        headers=headers,
-        body=body,
-    )
-
+    body = {"project": project_id}
     windows: list[Window] = []
-    if status == 200 and isinstance(data, dict):
-        windows = _parse_summary_buckets(data)
-
-    # Step 3: Fallback to fetchAvailableModels if summary returned no buckets
-    if not windows:
-        status_m, _, data_m = request_json(
-            MODELS_URL,
-            method="POST",
-            headers=headers,
-            body=body,
-        )
-        if status_m == 200 and isinstance(data_m, dict):
-            windows = _parse_models_quota(data_m)
+    for method, parse in (
+        ("retrieveUserQuotaSummary", _parse_summary_buckets),
+        ("fetchAvailableModels", _parse_models_quota),
+    ):
+        for base in QUOTA_BASE_URLS:
+            status, _, data = request_json(
+                f"{base}/v1internal:{method}",
+                method="POST",
+                headers=headers,
+                body=body,
+            )
+            if status == 200 and isinstance(data, dict):
+                windows = parse(data)
+                if windows:
+                    break
+        if windows:
+            break
 
     if not windows:
         return None
@@ -99,7 +102,7 @@ def _load_project_and_tier(headers: dict) -> tuple[str | None, str | None]:
         LOAD_CODE_ASSIST_URL,
         method="POST",
         headers=headers,
-        body={"mode": "FULL_ELIGIBILITY_CHECK"},
+        body={"mode": "FULL_ELIGIBILITY_CHECK", "metadata": {"ideType": "ANTIGRAVITY"}},
     )
     if status != 200 or not isinstance(data, dict):
         return None, None

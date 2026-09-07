@@ -16,7 +16,7 @@ from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json, _
 from .discover import collect_accounts
 from .httputil import request_json
 from .models import AUTH_RULES
-from .render import _reset_text
+from .render import _reset_text, _reset_ts, _window_name
 
 WEB_DIR = Path(__file__).resolve().parent / "assets"
 RELEASE_API = "https://api.github.com/repos/dushanaicode/dushan-quota/releases/latest"
@@ -528,15 +528,6 @@ def _clear_hidden() -> None:
     _clear_archived()
 
 
-def _reset_ts(reset_iso) -> int | None:
-    if not reset_iso:
-        return None
-    try:
-        return int(datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00")).timestamp())
-    except (TypeError, ValueError):
-        return None
-
-
 def _quota_payload(force: bool = False):
     from .usage import activation_statuses, supported as usage_supported
 
@@ -563,7 +554,7 @@ def _quota_payload(force: bool = False):
                 }
             windows.append(
                 {
-                    "name": window.name,
+                    "name": _window_name(window.name),
                     "remaining_percent": window.remaining_percent,
                     "used": window.used,
                     "total": window.total,

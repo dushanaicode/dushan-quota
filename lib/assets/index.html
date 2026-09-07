@@ -792,7 +792,7 @@ function winRow(w){
   if (w.text != null) {
     return `<div class="wrow ${textRowClass(w.text)}"><span class="lbl">${esc(w.name)}</span><span class="txt">${esc(w.text)}</span></div>`;
   }
-  const p = Math.max(0, Math.min(100, Math.round(w.remaining_percent || 0)));
+  const p = Math.max(0, Math.min(100, Math.round((w.remaining_percent || 0) * 10) / 10));
   const c = colorOf(p);
   const exact = fmtResetAt(w.reset_ts);
   const rst = [w.reset, exact].filter(Boolean).join(' · ');

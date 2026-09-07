@@ -108,10 +108,12 @@
   .name span { font-size:11px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row { margin:6px 0 2px; }
-  .row .top { display:flex; align-items:baseline; gap:7px; margin-bottom:4px; }
+  .row .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; margin-bottom:4px; }
   .row .lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
   .row .rst { flex:1; text-align:right; font-size:10.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .pct { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .row .rst-toggle { background:none; border:0; padding:0; cursor:pointer; flex:1 0 auto; overflow:visible; font-variant-numeric:tabular-nums; }
+  .row .rst-toggle:hover { color:var(--text); text-decoration:underline dotted; }
   .bar { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
   .bar i { display:block; height:100%; border-radius:99px; }
   .txt { font-size:11px; color:var(--muted); }
@@ -215,7 +217,7 @@
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{} };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{}, reset_modes:{} };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
 let api = null;
@@ -226,12 +228,45 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const color = p => p>=40?'g':p>=15?'y':'r';
 
+function quotaCountdown(ts, now=Date.now()){
+  const s = Math.floor(ts - now / 1000);
+  if(s <= 0) return '待重置';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const pad = n => String(n).padStart(2,'0');
+  if(d) return `${d}d${pad(h)}h${pad(m)}m`;
+  if(h) return `${h}h${pad(m)}m`;
+  return m ? `${m}m` : '<1m';
+}
+function updateCountdowns(){
+  document.querySelectorAll('[data-reset-ts]').forEach(el=>{
+    if(S.reset_modes?.[el.dataset.resetKey] !== true) el.textContent = quotaCountdown(Number(el.dataset.resetTs));
+  });
+}
+function quotaResetAt(ts){
+  const date = new Date(ts * 1000), pad = n => String(n).padStart(2,'0');
+  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function toggleResetTime(button){
+  const key = button.dataset.resetKey;
+  S.reset_modes = S.reset_modes || {};
+  S.reset_modes[key] = S.reset_modes[key] !== true;
+  const absolute = S.reset_modes[key];
+  button.textContent = absolute ? `重置于 ${quotaResetAt(Number(button.dataset.resetTs))}` : quotaCountdown(Number(button.dataset.resetTs));
+  button.setAttribute('aria-pressed', String(absolute));
+  button.title = `额度重置时间：${quotaResetAt(Number(button.dataset.resetTs))}；点击切换${absolute ? '倒计时' : '重置时间'}`;
+  save();
+}
 function row(w, account=''){
   if(w.text!=null) return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"></span><span class="txt">${esc(w.text)}</span></div></div>`;
   if(w.remaining_percent==null) return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"></span><span class="txt">暂无数据</span></div></div>`;
-  const p = Math.round(w.remaining_percent), c = color(p);
-  const rst = w.reset ? esc(w.reset) : '';
-  return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst">${rst}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i data-bar="${esc(account+'|'+w.name)}" class="${c}" style="width:${p}%"></i></div></div>`;
+  const p = Math.max(0, Math.min(100, Math.round(w.remaining_percent * 10) / 10)), c = color(p);
+  const date = Number.isFinite(w.reset_ts) ? new Date(w.reset_ts * 1000) : null;
+  const valid = date && !isNaN(date);
+  const key = JSON.stringify([account, w.name]), absolute = S.reset_modes?.[key] === true;
+  const tip = valid ? `额度重置时间：${quotaResetAt(w.reset_ts)}；点击切换${absolute ? '倒计时' : '重置时间'}` : '';
+  const rst = valid ? (absolute ? `重置于 ${quotaResetAt(w.reset_ts)}` : quotaCountdown(w.reset_ts)) : (w.reset || '');
+  const time = valid ? `<button type="button" class="rst rst-toggle" data-reset-ts="${w.reset_ts}" data-reset-key="${esc(key)}" aria-pressed="${absolute}" title="${esc(tip)}" onclick="toggleResetTime(this)">${esc(rst)}</button>` : `<span class="rst">${esc(rst)}</span>`;
+  return `<div class="row"><div class="top"><span class="lbl">${esc(w.name)}</span>${time}<span class="pct ${c}">${p}%</span></div><div class="bar"><i data-bar="${esc(account+'|'+w.name)}" class="${c}" style="width:${p}%"></i></div></div>`;
 }
 
 function usageOn(){ return S.show['#usage']===true; }
@@ -549,6 +584,7 @@ async function init(){
 
   await refresh();
   setInterval(()=>refresh(false), 60000);
+  setInterval(updateCountdowns, 1000);
 }
 
 if(window.pywebview && window.pywebview.api) init();

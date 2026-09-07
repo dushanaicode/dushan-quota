@@ -14,7 +14,7 @@ from pathlib import Path
 import webview
 
 from . import config, logbuf
-from .render import _reset_text
+from .render import _reset_text, _reset_ts, _window_name
 from .snapshot import get_snapshot
 from .store import store_dir
 
@@ -100,12 +100,13 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
     for item in visible_results:
         windows = [
             {
-                "name": window.name,
+                "name": _window_name(window.name),
                 "remaining_percent": window.remaining_percent,
                 "used": window.used,
                 "total": window.total,
                 "text": window.text,
                 "reset": _reset_text(window.reset_iso, now),
+                "reset_ts": _reset_ts(window.reset_iso),
             }
             for window in item.windows
         ]
