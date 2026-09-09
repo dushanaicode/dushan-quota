@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
 
 permissions:
   id-token: write
@@ -19,6 +25,8 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Prepare temporary build directory
         run: mkdir -p Temp/release/source
@@ -44,9 +52,11 @@ jobs:
           PIP_CACHE_DIR: /github/workspace/Temp/release/pip-cache
         with:
           user: __token__
+          password: ""
           repository-url: https://upload.pypi.org/legacy/
           packages-dir: Temp/release/dist
           verify-metadata: "true"
           skip-existing: "false"
+          verbose: "false"
           print-hash: "true"
           attestations: "true"
