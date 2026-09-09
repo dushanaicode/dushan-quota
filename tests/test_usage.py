@@ -282,13 +282,13 @@ class UsageTests(unittest.TestCase):
         now = datetime(2026, 9, 3, 12, tzinfo=timezone.utc)
         events = [
             {"identity": "account-a", "timestamp": now.timestamp() - age, "model": "m", "total_tokens": value}
-            for age, value in ((3600, 1), (2 * 86400, 10), (10 * 86400, 100), (40 * 86400, 1000))
+            for age, value in ((3600, 1), (3 * 86400, 10), (3 * 86400 + 1, 20), (10 * 86400, 100), (40 * 86400, 1000))
         ]
 
         rows = usage._local_usage_rows(events, "test", "fixture", now=now)["account-a"]
 
         self.assertEqual(
-            {"1d": 1, "7d": 11, "30d": 111, "all": 1111},
+            {"1d": 1, "3d": 11, "7d": 31, "30d": 131, "all": 1131},
             {row["period"]: row["total_tokens"] for row in rows},
         )
 
@@ -473,7 +473,14 @@ class UsageTests(unittest.TestCase):
         codex = usage._codex_remote_rows(
             {
                 "summary": {"lifetimeTokens": 1234},
-                "dailyUsageBuckets": [{"startDate": "2026-09-03", "tokens": 56}],
+                "dailyUsageBuckets": [
+                    {"startDate": "2026-09-03", "tokens": 56},
+                    {"startDate": "2026-09-01", "tokens": 7},
+                    {"startDate": "2026-08-31", "tokens": 11},
+                    {"startDate": "2026-08-20", "tokens": 13},
+                    {"startDate": "2026-07-01", "tokens": 17},
+                    {"startDate": "2026-09-04", "tokens": 999},
+                ],
             },
             now=datetime(2026, 9, 3, tzinfo=timezone.utc),
         )
@@ -488,8 +495,8 @@ class UsageTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual([56, 56, 56, 1234], [item["total_tokens"] for item in codex])
-        self.assertEqual(["1d", "7d", "30d", "all"], [item["period"] for item in codex])
+        self.assertEqual([56, 63, 74, 87, 1234], [item["total_tokens"] for item in codex])
+        self.assertEqual(["1d", "3d", "7d", "30d", "all"], [item["period"] for item in codex])
         self.assertEqual(
             [{"name": "glm-a", "total_tokens": 30}, {"name": "glm-b", "total_tokens": 5}],
             zai,
@@ -523,7 +530,7 @@ class UsageTests(unittest.TestCase):
         with patch.object(usage, "request_json", return_value=(200, "", payload)):
             rows = usage._claude_remote_usage(account)
 
-        self.assertEqual(["1d", "7d", "30d"], [row["period"] for row in rows])
+        self.assertEqual(["1d", "3d", "7d", "30d"], [row["period"] for row in rows])
         self.assertTrue(all(row["source"] == "remote" for row in rows))
         self.assertEqual(65, rows[0]["total_tokens"])
 

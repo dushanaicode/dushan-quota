@@ -29,7 +29,7 @@ from .store import store_dir
 
 
 LOOKBACK_DAYS = 30
-LOCAL_PERIODS = (("1d", 1, "近 1 天"), ("7d", 7, "近 7 天"), ("30d", 30, "近 30 天"), ("all", None, "累计"))
+LOCAL_PERIODS = (("1d", 1, "近 1 天"), ("3d", 3, "近 3 天"), ("7d", 7, "近 7 天"), ("30d", 30, "近 30 天"), ("all", None, "累计"))
 HARNESS_LABELS = {
     "codex": "Codex",
     "opencode": "OpenCode",
@@ -221,7 +221,7 @@ def collect(results, *, force: bool = False) -> dict:
                 target = provider_rows if scope == "provider" else account_rows
                 target.setdefault(key, []).extend(rows)
 
-    period_order = {"1d": 0, "7d": 1, "30d": 2, "all": 3}
+    period_order = {period: index for index, (period, _, _) in enumerate(LOCAL_PERIODS)}
     for rows in account_rows.values():
         rows.sort(
             key=lambda row: (
@@ -1732,7 +1732,9 @@ def _codex_remote_rows(payload, *, now: datetime | None = None) -> list[dict]:
         value = _nonnegative_optional_int(item.get("tokens"))
         if value is not None:
             daily[day] = value
-    for period, days, label in LOCAL_PERIODS[:3]:
+    for period, days, label in LOCAL_PERIODS:
+        if days is None:
+            continue
         start = today_date - timedelta(days=days - 1)
         values = [value for day, value in daily.items() if start <= day <= today_date]
         if values:

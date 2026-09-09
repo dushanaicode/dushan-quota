@@ -11,8 +11,17 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      TEMP: ${{ github.workspace }}/Temp/release
+      TMP: ${{ github.workspace }}/Temp/release
+      TMPDIR: ${{ github.workspace }}/Temp/release
+      PIP_CACHE_DIR: ${{ github.workspace }}/Temp/release/pip-cache
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare temporary build directory
+        run: mkdir -p Temp/release/source
 
       - uses: actions/setup-python@v5
         with:
@@ -20,8 +29,24 @@ jobs:
 
       - name: Build sdist and wheel
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
+          python -m venv Temp/release/build-env
+          Temp/release/build-env/bin/python -m pip install build
+          git archive HEAD | tar -x -C Temp/release/source
+          Temp/release/build-env/bin/python -m build Temp/release/source --outdir Temp/release/dist
 
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # Use the official image directly to keep generated action files out of .github/.tmp.
+        uses: docker://ghcr.io/pypa/gh-action-pypi-publish:release-v1
+        env:
+          TEMP: /github/workspace/Temp/release
+          TMP: /github/workspace/Temp/release
+          TMPDIR: /github/workspace/Temp/release
+          PIP_CACHE_DIR: /github/workspace/Temp/release/pip-cache
+        with:
+          user: __token__
+          repository-url: https://upload.pypi.org/legacy/
+          packages-dir: Temp/release/dist
+          verify-metadata: "true"
+          skip-existing: "false"
+          print-hash: "true"
+          attestations: "true"

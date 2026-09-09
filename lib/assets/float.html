@@ -119,11 +119,8 @@
   .txt { font-size:11px; color:var(--muted); }
   .usage { margin:8px 0 2px; padding:6px 8px; border-radius:8px; background:var(--card); border:1px solid var(--line); }
   .usage-title { font-size:10px; color:var(--dim); margin-bottom:4px; }
-  .usage-filter { display:flex; align-items:center; gap:4px; margin:0 0 5px; overflow:hidden; }
-  .usage-periods { display:flex; gap:2px; min-width:0; }
-  .usage-periods button { border:0; border-radius:5px; padding:2px 5px; background:var(--track); color:var(--dim); font-size:8.5px; }
-  .usage-periods button.on { background:var(--accent-soft); color:var(--accent); }
-  .usage-filter select { min-width:0; flex:1; height:20px; border:1px solid var(--line); border-radius:5px;
+  .usage-filter { display:flex; align-items:center; gap:6px; margin:0 0 5px; }
+  .usage-filter select { min-width:0; flex:1 1 0; height:22px; border:1px solid var(--line); border-radius:5px;
     padding:0 3px; background:var(--track); color:var(--muted); font-size:8.5px; outline:none; }
   .usage-filter option { background:var(--option-bg); color:var(--text); }
   .usage-line, .usage-model-main { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:baseline; gap:7px; padding:2px 0; }
@@ -164,8 +161,7 @@
   .bgbtn:hover { color:var(--text); }
   .bgbtn:active { transform:scale(.96); }
   body.motion, body.motion #panel, body.motion .card, body.motion .usage,
-  body.motion #cfg, body.motion .pill, body.motion .usage-filter select,
-  body.motion .usage-periods button {
+  body.motion #cfg, body.motion .pill, body.motion .usage-filter select {
     transition:background-color .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), box-shadow .2s var(--ease);
   }
   body.motion #bg { transition:filter .18s var(--ease), transform .18s var(--ease); }
@@ -320,8 +316,10 @@ function usageBlock(item){
   const remote=periodRows.filter(row=>row.source==='remote');
   const visible=harness==='all'?[...(local.length===1?local:local.length?[usageAggregate(local)]:[]),...remote]
     :harness==='remote'?remote:local.filter(row=>row.harness===harness);
-  const periods=[['1d','1天'],['7d','7天'],['30d','30天'],['all','累计']];
-  let html = `<div class="usage"><div class="usage-title">用量信息</div><div class="usage-filter"><div class="usage-periods">${periods.map(([key,label])=>`<button class="${key===period?'on':''}" onclick="setUsagePeriod('${key}')">${label}</button>`).join('')}</div><select data-account="${esc(key)}" onchange="setUsageHarness(this.dataset.account,this.value)"><option value="all" ${harness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${harness==='remote'?'selected':''}>远端</option>`:''}${harnesses.map(([id,label])=>`<option value="${esc(id)}" ${harness===id?'selected':''}>${esc(label)}</option>`).join('')}</select></div>`;
+  const periods=[['1d','近 1 天'],['3d','近 3 天'],['7d','近 7 天'],['30d','近 30 天'],['all','累计']];
+  let html = `<div class="usage"><div class="usage-title">用量信息</div><div class="usage-filter">
+    <select id="usage-period-${esc(key)}" aria-label="时间范围" title="时间范围" onchange="setUsagePeriod(this.value);document.getElementById(this.id)?.focus()">${periods.map(([id,label])=>`<option value="${id}" ${id===period?'selected':''}>${label}</option>`).join('')}</select>
+    <select id="usage-harness-${esc(key)}" aria-label="客户端" title="客户端" data-account="${esc(key)}" onchange="setUsageHarness(this.dataset.account,this.value);document.getElementById(this.id)?.focus()"><option value="all" ${harness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${harness==='remote'?'selected':''}>远端</option>`:''}${harnesses.map(([id,label])=>`<option value="${esc(id)}" ${harness===id?'selected':''}>${esc(label)}</option>`).join('')}</select></div>`;
   if(!visible.length) return html+'<div class="txt">暂无用量</div></div>';
   for(const u of visible){
     const src = u.source==='local'?'本机':'远端';
@@ -503,7 +501,7 @@ async function init(){
   api = window.pywebview.api;
 
   try{ S = Object.assign(S, await api.settings()); }catch(e){}
-  if(!['1d','7d','30d','all'].includes(S.usage_period)) S.usage_period='30d';
+  if(!['1d','3d','7d','30d','all'].includes(S.usage_period)) S.usage_period='30d';
   if(!S.usage_harnesses || typeof S.usage_harnesses!=='object' || Array.isArray(S.usage_harnesses)) S.usage_harnesses={};
   delete S.usage_harness;
   S.animations=S.animations===true;

@@ -394,13 +394,13 @@
   .ud-loading i { width:22px; height:22px; border:2px solid var(--line); border-top-color:var(--accent);
     border-radius:50%; animation:rot .8s linear infinite; }
   .ud-empty b { color:var(--text); font-size:14px; }
-  .ud-filters { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:9px;
+  .ud-filters { display:flex; flex-wrap:wrap; align-items:center; gap:12px;
     margin-bottom:14px; padding:8px; border:1px solid var(--line); border-radius:11px; background:var(--surface-2); }
-  .ud-filter-group { display:flex; flex-wrap:wrap; gap:4px; }
-  .ud-filter-group button { border:0; border-radius:7px; padding:5px 10px; background:transparent;
-    color:var(--muted); font-size:10px; transition:background .2s,color .2s; }
-  .ud-filter-group button:hover { color:var(--text); }
-  .ud-filter-group button.on { background:var(--accent-soft); color:var(--accent); }
+  .ud-filters .ud-filter { display:flex; align-items:center; gap:8px; flex:1 1 180px; min-width:0; margin:0; }
+  .ud-filter span { flex:none; }
+  .ud-filter select { flex:1; min-width:0; height:32px; padding:0 8px; border:1px solid var(--line);
+    border-radius:7px; background:var(--input-bg); color:var(--text); font:inherit; cursor:pointer; }
+  .ud-filter select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .ud-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(165px,1fr)); gap:10px; }
   .ud-metric { min-width:0; padding:13px 14px; border:1px solid var(--line); border-radius:12px;
     background:var(--surface-2); }
@@ -871,11 +871,27 @@ function usageSection(item){
   </section>`;
 }
 
+const USAGE_PERIODS = [['1d','近 1 天'],['3d','近 3 天'],['7d','近 7 天'],['30d','近 30 天'],['all','累计']];
 let usageCtx = null;
 let usageRequestToken = 0;
 let usageDetailData = null;
 let usagePeriod = '30d';
 let usageHarness = 'all';
+try {
+  const saved = localStorage.getItem('quota-usage-period');
+  if (USAGE_PERIODS.some(([key]) => key===saved)) usagePeriod = saved;
+} catch(e) {}
+function changeUsageFilters(event){
+  usagePeriod = document.getElementById('usagePeriod').value;
+  usageHarness = document.getElementById('usageHarness').value;
+  try {
+    localStorage.setItem('quota-usage-period', usagePeriod);
+    const account = usageDetailData.account || {};
+    localStorage.setItem(`quota-usage-harness:${account.provider}:${account.identity}`, usageHarness);
+  } catch(e) {}
+  renderUsageDetail(usageDetailData);
+  document.getElementById(event.target.id).focus();
+}
 function usageLoading(text='加载用量…'){
   document.getElementById('usageBody').innerHTML = `<div class="ud-loading"><i></i><span>${esc(text)}</span></div>`;
 }
@@ -887,7 +903,8 @@ function renderUsageDetail(data){
   document.getElementById('usageAccount').textContent = [account.email||account.name||account.identity, account.plan].filter(Boolean).join(' · ');
   const localHarnesses = Array.isArray(data.harnesses) ? data.harnesses.map(h=>[h.key,h.label])
     : [...new Map(rows.filter(row => row.source==='local' && row.harness).map(row => [row.harness,row.harness_label||row.harness])).entries()];
-  if (usageHarness!=='all' && usageHarness!=='remote' && !localHarnesses.some(([key]) => key===usageHarness)) usageHarness='all';
+  const hasRemote = rows.some(row => row.source==='remote');
+  if (usageHarness!=='all' && !(usageHarness==='remote' && hasRemote) && !localHarnesses.some(([key]) => key===usageHarness)) usageHarness='all';
   const periodRows = rows.filter(row => (row.period||'30d')===usagePeriod);
   const visible = usageHarness==='all' ? periodRows
     : usageHarness==='remote' ? periodRows.filter(row => row.source==='remote')
@@ -897,10 +914,9 @@ function renderUsageDetail(data){
   const metrics = [...remote];
   if (local.length===1) metrics.unshift(local[0]);
   else if (local.length>1) metrics.unshift(aggregateLocalUsage(local));
-  const periods = [['1d','1 天'],['7d','7 天'],['30d','30 天'],['all','累计']];
   const filters = `<div class="ud-filters">
-    <div class="ud-filter-group ud-periods">${periods.map(([key,label])=>`<button data-period="${key}" class="${key===usagePeriod?'on':''}">${label}</button>`).join('')}</div>
-    <div class="ud-filter-group ud-harnesses"><button data-harness="all" class="${usageHarness==='all'?'on':''}">全部</button>${rows.some(row=>row.source==='remote')?`<button data-harness="remote" class="${usageHarness==='remote'?'on':''}">远端</button>`:''}${localHarnesses.map(([key,label])=>`<button data-harness="${esc(key)}" class="${key===usageHarness?'on':''}">${esc(label)}</button>`).join('')}</div>
+    <label class="ud-filter"><span>时间范围</span><select id="usagePeriod">${USAGE_PERIODS.map(([key,label])=>`<option value="${key}" ${key===usagePeriod?'selected':''}>${label}</option>`).join('')}</select></label>
+    <label class="ud-filter"><span>客户端</span><select id="usageHarness"><option value="all" ${usageHarness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${usageHarness==='remote'?'selected':''}>远端</option>`:''}${localHarnesses.map(([key,label])=>`<option value="${esc(key)}" ${key===usageHarness?'selected':''}>${esc(label)}</option>`).join('')}</select></label>
   </div>`;
   const content = visible.length ? `
     <div class="ud-metrics">${metrics.map(usageMetricCard).join('')}</div>
@@ -908,8 +924,8 @@ function renderUsageDetail(data){
     <div class="ud-note">本机和远端用量分开显示。</div>`
     : '<div class="ud-empty"><b>暂无用量</b><span>试试其他时间或客户端。</span></div>';
   document.getElementById('usageBody').innerHTML = filters + content;
-  document.querySelectorAll('.ud-periods button').forEach(button => button.onclick=()=>{usagePeriod=button.dataset.period;renderUsageDetail(usageDetailData);});
-  document.querySelectorAll('.ud-harnesses button').forEach(button => button.onclick=()=>{usageHarness=button.dataset.harness;renderUsageDetail(usageDetailData);});
+  document.getElementById('usagePeriod').onchange = changeUsageFilters;
+  document.getElementById('usageHarness').onchange = changeUsageFilters;
   const stamp = new Date(data.fetched_at || Date.now());
   document.getElementById('usageFetched').textContent = `用量读取 ${stamp.toLocaleString('zh-CN',{hour12:false})}`;
 }
@@ -942,8 +958,8 @@ async function loadUsageDetail(force=false){
 function openUsage(item){
   usageCtx = item;
   usageDetailData = null;
-  usagePeriod = '30d';
   usageHarness = 'all';
+  try { usageHarness = localStorage.getItem(`quota-usage-harness:${item.provider}:${item.identity}`) || 'all'; } catch(e) {}
   document.getElementById('usageTitle').textContent = `${item.title} · 用量详情`;
   document.getElementById('usageAccount').textContent = [item.email||item.name||item.identity, item.plan].filter(Boolean).join(' · ');
   document.getElementById('usageFetched').textContent = '';

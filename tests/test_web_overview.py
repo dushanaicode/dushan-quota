@@ -63,8 +63,8 @@ class WebOverviewTests(unittest.TestCase):
         self.assertIn("已激活 · 不可续期", self.html)
 
     def test_usage_detail_filters_period_and_harness(self):
-        self.assertIn("data-period=", self.html)
-        self.assertIn("data-harness=", self.html)
+        self.assertIn('<select id="usagePeriod">', self.html)
+        self.assertIn('<select id="usageHarness">', self.html)
         self.assertIn("aggregateLocalUsage", self.html)
 
 

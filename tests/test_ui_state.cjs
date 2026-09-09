@@ -10,12 +10,13 @@ function script(name) {
   return source;
 }
 
-function context() {
+function context(storage = new Map()) {
   const nodes = new Map();
   const node = () => {
     const classes = new Set(), attributes = {}, animations = [];
     return {
       innerHTML: '', style: {}, dataset: {}, textContent: '', animations,
+      focus() {this.focused = true;},
       classList: {
         add(value) {classes.add(value);}, remove(value) {classes.delete(value);}, contains(value) {return classes.has(value);},
         toggle(value, on = !classes.has(value)) {if (on) classes.add(value); else classes.delete(value); return on;},
@@ -27,13 +28,14 @@ function context() {
     };
   };
   const get = id => {
-    if (!nodes.has(id)) nodes.set(id, node());
+    if (!nodes.has(id)) nodes.set(id, {...node(), id});
     return nodes.get(id);
   };
   return vm.createContext({
     window: {}, document: {body: get('document-body'), getElementById: get, querySelectorAll() {return [];}, addEventListener() {},
       getAnimations() {return [...nodes.values()].flatMap(item => item.getAnimations());}},
     setTimeout() {}, setInterval() {}, esc: String, get,
+    localStorage: {getItem(key) {return storage.get(key) ?? null;}, setItem(key, value) {storage.set(key, String(value));}},
   });
 }
 
@@ -90,6 +92,16 @@ async function main() {
   assert.equal(saved.at(-1).reset_modes[resetKey], true, 'The reset display preference is saved');
   const usage = floating.usageBlock(fixture);
   assert(usage.includes('123 Token'));
+  assert.equal((usage.match(/<select /g) || []).length, 2);
+  assert(usage.includes('aria-label="时间范围"') && usage.includes('aria-label="客户端"'));
+  assert(usage.includes('value="3d"') && !usage.includes('usage-periods'));
+  floating.setUsagePeriod('3d');
+  const threeDayFixture = {...fixture, usage: [row, {...row, period: '3d', total_tokens: 45}]};
+  assert(floating.usageBlock(threeDayFixture).includes('45 Token'));
+  assert(!floating.usageBlock(threeDayFixture).includes('123 Token'));
+  assert(floating.usageBlock(threeDayFixture).includes('value="3d" selected'));
+  assert.equal(saved.at(-1).usage_period, '3d');
+  floating.setUsagePeriod('30d');
   assert(!usage.includes(row.detail));
   assert.deepEqual(Array.from(floating.usageHarnesses(fixture), h => h[0]), ['codex']);
   assert(!usage.includes('grok_cli'));
@@ -137,21 +149,64 @@ async function main() {
   assert.equal(floating.get('list').animations.length, listAnimations + 1,
     'Adding a card replays the entrance animation');
 
-  const web = context();
+  const storage = new Map();
+  const web = context(storage);
   const source = script('index.html');
-  vm.runInContext(source.slice(source.indexOf('function compactNumber'), source.indexOf('async function loadUsageDetail')), web);
+  const usageSource = source.slice(source.indexOf('function compactNumber'), source.indexOf('function renderSide'));
+  vm.runInContext(usageSource, web);
   assert.equal(web.exactNumber(null), '\u2014');
   assert.equal(web.exactNumber(undefined), '\u2014');
   assert.equal(web.exactNumber(0), '0');
   assert.equal(web.compactNumber(null), '\u2014');
   web.renderUsageDetail({account: {title: 'OpenAI'}, usage: [row], harnesses: fixture.harnesses});
   const rendered = web.get('usageBody').innerHTML;
+  assert.equal((rendered.match(/<select /g) || []).length, 2);
+  assert(rendered.includes('id="usagePeriod"') && rendered.includes('id="usageHarness"'));
+  assert(rendered.includes('value="3d"') && !rendered.includes('data-period='));
+  const detail = {account: fixture, usage: threeDayFixture.usage, harnesses: fixture.harnesses};
+  web.renderUsageDetail(detail);
+  web.get('usagePeriod').value = '3d';
+  web.get('usageHarness').value = 'codex';
+  web.get('usagePeriod').onchange({target: web.get('usagePeriod')});
+  assert(web.get('usageBody').innerHTML.includes('45 Token'));
+  assert(!web.get('usageBody').innerHTML.includes('123 Token'));
+  assert(web.get('usagePeriod').focused, 'Changing the dropdown must retain keyboard focus');
+  assert.equal(storage.get('quota-usage-period'), '3d');
+  assert.equal(storage.get('quota-usage-harness:openai:a'), 'codex');
+
+  const reloaded = context(storage);
+  vm.runInContext(usageSource, reloaded);
+  reloaded.loadUsageDetail = () => {};
+  reloaded.openUsage(fixture);
+  reloaded.renderUsageDetail(detail);
+  assert(reloaded.get('usageBody').innerHTML.includes('value="3d" selected'));
+  assert(reloaded.get('usageBody').innerHTML.includes('value="codex" selected'));
+  reloaded.openUsage(grok);
+  assert.equal(vm.runInContext('usageHarness', reloaded), 'all', 'Client selections must not leak to other accounts');
+  reloaded.openUsage(fixture);
+  assert.equal(vm.runInContext('usageHarness', reloaded), 'codex', 'Reopening an account retains its client');
+  vm.runInContext("usageHarness = 'remote'", reloaded);
+  reloaded.renderUsageDetail(detail);
+  assert.equal(vm.runInContext('usageHarness', reloaded), 'all', 'Unavailable saved clients fall back to all');
+
+  const invalidSaved = context(new Map([['quota-usage-period', 'invalid']]));
+  vm.runInContext(usageSource, invalidSaved);
+  assert.equal(vm.runInContext('usagePeriod', invalidSaved), '30d');
+  const noStorage = context();
+  noStorage.localStorage = {getItem() {throw Error('Storage unavailable');}, setItem() {throw Error('Storage unavailable');}};
+  vm.runInContext(usageSource, noStorage);
+  noStorage.renderUsageDetail(detail);
+  noStorage.get('usagePeriod').value = '3d';
+  noStorage.get('usageHarness').value = 'all';
+  noStorage.get('usagePeriod').onchange({target: noStorage.get('usagePeriod')});
+  assert(noStorage.get('usageBody').innerHTML.includes('45 Token'), 'Filtering still works without storage');
+  vm.runInContext("usagePeriod = '30d'", web);
   assert(!rendered.includes(row.detail));
   assert(rendered.match(/class="ud-note">([^<]*)/)[1].length <= 20);
-  assert(!rendered.includes('data-harness="grok_cli"'));
+  assert(!rendered.includes('value="grok_cli"'));
   web.renderUsageDetail({account: {title: 'OpenAI'}, usage: [], harnesses: [{key: 'opencode', label: 'OpenCode', configured: true}]});
-  assert(web.get('usageBody').innerHTML.includes('data-harness="opencode"'));
-  console.log('UI checks passed: account-scoped clients, independent filters, animations, settings, empty states, and metrics.');
+  assert(web.get('usageBody').innerHTML.includes('value="opencode"'));
+  console.log('UI checks passed: dropdowns, saved filters, account-scoped clients, keyboard focus, animations, empty states, and metrics.');
 }
 
 main().catch(error => {console.error(error); process.exitCode = 1;});

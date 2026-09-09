@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.6.0-C3B191" alt="Release v0.6.0">
+  <img src="https://img.shields.io/badge/Release-v0.6.1-C3B191" alt="Release v0.6.1">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -21,34 +21,13 @@
 
 Dushan Quota 是一个本地优先的 AI 账号额度与 Token 用量看板。它会发现本机已有登录账号和手动添加的 API Key，把各平台的额度、套餐、重置时间、本机客户端用量与远端账号用量放到一起，同时明确区分账号和 Harness，避免把一台机器的总量重复算到多个账号。
 
-## v0.6.0：准确额度与中文时间显示
-
-- **Antigravity**：修正额度接口选择，解决部分账号始终显示 100% 的问题；保留真实的 0%、100% 和小数百分比。
-- **中文额度名称**：Web 与悬浮窗统一显示周额度、日额度、月额度、5 小时额度等，已有缓存也会使用中文名称。
-- **时间切换**：点击悬浮窗每条额度右侧的时间，可在 `6d05h09m` 倒计时与“重置于 YYYY-MM-DD HH:mm”之间切换，并记住各条额度的选择。
-- **清晰显示**：去掉重复的重置时间行和“本地”字样；倒计时独立更新，不触发卡片闪烁。
-
-## v0.3.0：修复自动刷新闪烁
-
-- **悬浮窗**：开启“动画效果”后，周期自动刷新不再整列表淡入闪烁；入场动画只在卡片结构变化（新增、移除、切换显示）时播放，数值与进度条仍然以动画平滑过渡。
-- **Web UI**：卡片、额度对比与历史列表的入场动画同样只在内容集合变化时播放，后台自动刷新静默更新数值。
-
-## v0.2.0：账号级用量看板
-
-- **按账号归属**：同一个 `(Provider, Harness)` 只显示一个当前激活账号；Codex、OpenCode、OMP 可以同时激活不同的 OpenAI 账号。
-- **按时间查看**：本机 Token 支持近 1 天、7 天、30 天与累计；远端数据按 Provider 实际提供的统计周期展示。
-- **按客户端筛选**：每个账号独立选择客户端。列表依据该账号的配置和使用记录生成，OpenCode / OMP 区分“已配置”和“历史”。
-- **按模型拆分**：展示总 Token、输入、输出、缓存读取、缓存写入和推理 Token；来源没有某项时不伪造数据。
-- **激活健康状态**：区分“已激活”“不可续期”“已激活但过期”“已激活但失效”和“已激活但受限”，悬停可查看有效期与写入时间。
-- **本机与远端分离**：远端账号统计无法可靠归属到某个 Harness，因此不会与本机用量强行相加。
-
-### Token 数据源
+## Token 数据源
 
 | Provider | 远端 Token | 本机 Token | 账号归属方式 |
 | --- | --- | --- | --- |
-| OpenAI / ChatGPT / Codex | 今日、7 天、30 天、累计 | Codex、OpenCode、OMP | 远端按账号；Codex/OpenCode 按激活时间线；OMP 优先使用 `credential_pin` |
+| OpenAI / ChatGPT / Codex | 今日、3 天、7 天、30 天、累计 | Codex、OpenCode、OMP | 远端按账号；Codex/OpenCode 按激活时间线；OMP 优先使用 `credential_pin` |
 | Grok / xAI | 当前版本仅查询额度窗口；API Team 历史用量需要 Management Key | Grok CLI、OpenCode、OMP | 当前凭据或激活时间线 |
-| Claude | Anthropic Admin Key 可查询 1/7/30 天模型 Token | Claude Code、OpenCode、OMP | 当前凭据或激活时间线 |
+| Claude | Anthropic Admin Key 可查询 1/3/7/30 天模型 Token | Claude Code、OpenCode、OMP | 当前凭据或激活时间线 |
 | Kimi Code | 服务端周/5h 百分比仅作为额度，不伪装成 Token | Kimi Code CLI、OpenCode、OMP | 当前 Kimi 凭据；多账号时使用激活时间线 |
 | Zhipu / Z.ai | 近 30 天模型 Token | OpenCode、OMP | API Key 与激活时间线 |
 | DeepSeek | 官方 API 暂无历史用量查询 | OpenCode、OMP | API Key 与激活时间线 |
