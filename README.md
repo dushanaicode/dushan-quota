@@ -5,12 +5,12 @@
 <h1 align="center">Dushan Quota</h1>
 
 <p align="center">
-  在 Web 和 Windows 桌面悬浮窗里，统一查看多个 AI Provider 的账号额度，并按需写入 IDE 与 Agent Harness。
+  在 Web 和 Windows / macOS 桌面悬浮窗里，统一查看多个 AI Provider 的账号额度，并按需写入 IDE 与 Agent Harness。
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.6.1-C3B191" alt="Release v0.6.1">
+  <img src="https://img.shields.io/badge/Release-v0.6.2-C3B191" alt="Release v0.6.2">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -106,10 +106,12 @@ quota --version
 
 | 入口 | 启动方式 | 适合场景 | 主要能力 | 平台边界 |
 | --- | --- | --- | --- | --- |
-| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 额度、Token 用量、1/7/30 天/累计、Harness 筛选、置顶、透明度、背景与主题；**内嵌 Web 服务** | Windows 全功能；macOS 已实现拖动/缩放/置顶/透明度/透明圆角（未经实机验证） |
+| 悬浮窗 | `quota` 或 `quota float` | 桌面常驻、随时扫一眼 | 额度、Token 用量、1/7/30 天/累计、Harness 筛选、置顶、透明度、背景与主题；**内嵌 Web 服务** | Windows 全功能；macOS 支持菜单栏托盘、拖动/缩放/置顶/透明度/透明圆角 |
 | Web | `quota ui`，或点悬浮窗标题栏 🌐 | 账号、额度与用量的完整管理 | Provider/账号/模型/Harness 用量详情、激活健康状态、添加账号、OAuth、历史恢复、凭据写入、OpenAI 重置额度与重置卡到期时间、日志 | 默认仅 `127.0.0.1:18765` |
 
 Web 服务内嵌在悬浮窗进程里：关闭悬浮窗，Web UI 与 API 随之停止，没有任何后台残留。无显示器的 headless 服务器可运行 `quota ui-run` 单独启动 Web 服务。
+
+macOS 15（Intel）已完成悬浮窗启动、内嵌 Web、菜单栏托盘、显示/隐藏、拖动/缩放、置顶和透明度的本机验证。其他 macOS 版本与 Apple Silicon 的窗口交互仍需实机验证。
 
 两个界面连接的是同一份本地额度快照：一个界面完成刷新后，另一个界面会复用结果，避免同一周期重复请求 Provider。
 
@@ -223,6 +225,18 @@ cd dushan-quota
 python -m pip install -e .
 python -m unittest discover -s tests -q
 ```
+
+macOS 使用项目虚拟环境调试；已有 `uv` 时，在源码目录执行：
+
+```bash
+uv venv --python 3.12
+uv pip install -e .
+.venv/bin/python quota.py
+```
+
+若希望终端的 `quota` 直接运行这份源码，可以执行 `uv tool install --force --editable .`。此后源码修改会立即影响本机命令；这一步只安装到本机，不会推送 GitHub 或发布 PyPI。
+
+Python 回归测试使用 `.venv/bin/python -m unittest discover -s tests -q`，前端状态测试使用 `node tests/test_ui_state.cjs`（仅测试需要 Node）。GitHub Actions 的测试工作流覆盖 Windows 和 macOS，包括非 Windows 模块导入、Windows DPI 回调和 macOS 主线程调度。
 
 已有源码目录可直接更新：
 

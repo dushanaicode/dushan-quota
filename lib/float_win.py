@@ -172,10 +172,8 @@ def _user32():
 def _set_alpha(window, alpha_percent: int) -> None:
     """整窗透明度（含文字），百分比 0-100。"""
     if _is_macos():
-        try:
-            window.native.setAlphaValue_(max(0.3, min(1.0, int(alpha_percent) / 100)))
-        except Exception:
-            pass
+        alpha = max(0.3, min(1.0, int(alpha_percent) / 100))
+        _invoke_on_ui(window, lambda: window.native.setAlphaValue_(alpha))
         return
     if not _is_windows():
         return
@@ -323,10 +321,7 @@ def _region_round_corners(hwnd: int, rounded: bool) -> None:
 def _set_topmost(window, on_top: bool) -> None:
     if _is_macos():
         # NSFloatingWindowLevel=3 置顶，NSNormalWindowLevel=0 普通
-        try:
-            window.native.setLevel_(3 if on_top else 0)
-        except Exception:
-            pass
+        _invoke_on_ui(window, lambda: window.native.setLevel_(3 if on_top else 0))
         return
     if not _is_windows():
         return
@@ -350,17 +345,6 @@ def _set_topmost(window, on_top: bool) -> None:
         window.on_top = on_top
     except Exception:
         pass
-
-
-_SUBCLASSPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_ssize_t,
-    wintypes.HWND,
-    ctypes.c_uint,
-    ctypes.c_size_t,
-    ctypes.c_ssize_t,
-    ctypes.c_size_t,
-    ctypes.c_size_t,
-)
 
 
 def _dpi_subclass_proc(hwnd, msg, wparam, lparam, _uid, _ref):
@@ -415,7 +399,18 @@ def _install_dpi_handler(window) -> None:
         ]
         _def_subclass_proc = comctl32.DefSubclassProc
         if _dpi_proc_callback is None:
-            _dpi_proc_callback = _SUBCLASSPROC(_dpi_subclass_proc)
+            # WINFUNCTYPE only exists on Windows. Create the callback after the
+            # platform guard so importing the floating window also works on macOS.
+            subclass_proc = ctypes.WINFUNCTYPE(
+                ctypes.c_ssize_t,
+                wintypes.HWND,
+                ctypes.c_uint,
+                ctypes.c_size_t,
+                ctypes.c_ssize_t,
+                ctypes.c_size_t,
+                ctypes.c_size_t,
+            )
+            _dpi_proc_callback = subclass_proc(_dpi_subclass_proc)
         comctl32.SetWindowSubclass(
             wintypes.HWND(hwnd), ctypes.cast(_dpi_proc_callback, ctypes.c_void_p), _DPI_SUBCLASS_ID, 0
         )
@@ -650,9 +645,11 @@ class Api:
                 if resize:
                     new_w = max(220, width + dx)
                     new_h = max(260, height - dy)
-                    nswindow.setFrame_display_(((origin_x, top - new_h), (new_w, new_h)), True)
+                    frame = ((origin_x, top - new_h), (new_w, new_h))
+                    _invoke_on_ui(self._window, lambda frame=frame: nswindow.setFrame_display_(frame, True))
                 else:
-                    nswindow.setFrameOrigin_((origin_x + dx, origin_y + dy))
+                    origin = (origin_x + dx, origin_y + dy)
+                    _invoke_on_ui(self._window, lambda origin=origin: nswindow.setFrameOrigin_(origin))
                 time.sleep(0.016)
         except Exception:
             return {"ok": False}
@@ -694,7 +691,16 @@ class Api:
 
 
 def _invoke_on_ui(window, func) -> None:
-    """WinForms 属性必须在 UI 线程设置，否则可能无效或跨线程报错。"""
+    """原生窗口属性必须在 UI 线程设置；Cocoa 跨线程调用甚至会终止进程。"""
+    if _is_macos():
+        from Foundation import NSThread
+        from PyObjCTools import AppHelper
+
+        if NSThread.isMainThread():
+            func()
+        else:
+            AppHelper.callAfter(func)
+        return
     try:
         from System import Action
 
@@ -758,8 +764,18 @@ class _Tray:
                 pystray.MenuItem("刷新", self._refresh),
                 pystray.MenuItem("退出", self._quit),
             )
-            self._icon = pystray.Icon("dushan-quota", _tray_image(), "Quota 悬浮窗", menu)
-            threading.Thread(target=self._icon.run, daemon=True).start()
+            options = {}
+            if _is_macos():
+                from AppKit import NSApplication
+
+                options["darwin_nsapplication"] = NSApplication.sharedApplication()
+            self._icon = pystray.Icon("dushan-quota", _tray_image(), "Quota 悬浮窗", menu, **options)
+            if _is_macos():
+                # Cocoa has one main event loop, owned by pywebview. A second
+                # NSApplication.run() on a background thread crashes the process.
+                self._icon.run_detached()
+            else:
+                threading.Thread(target=self._icon.run, daemon=True).start()
         except Exception:
             self._icon = None
 
@@ -941,6 +957,10 @@ def serve_float():
         _set_topmost(window, api._on_top)
 
     def _on_shown():
+        if _is_macos():
+            # pywebview initializes Cocoa with a regular Dock icon, so apply
+            # the accessory policy after its native window has been created.
+            _invoke_on_ui(window, _mac_hide_dock_icon)
         _invoke_on_ui(window, lambda: _apply_no_taskbar(window))
         _invoke_on_ui(window, lambda: _install_dpi_handler(window))
         _set_round_corners(window, api._rounded)
