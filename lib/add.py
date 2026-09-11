@@ -108,7 +108,8 @@ def add_interactive() -> None:
         raw = input("粘贴 access/refresh JSON，或回车取消: ").strip()
         if raw:
             try:
-                add_raw_json(provider, raw)
+                result = add_raw_json(provider, raw)
+                print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {result['updated']}）")
             except ValueError as error:
                 print(error)
         return
@@ -183,7 +184,8 @@ def add_json(path: str) -> None:
         print("无法读取 JSON")
         return
     try:
-        add_raw_json("", json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data)
+        result = add_raw_json("", json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data)
+        print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {result['updated']}）")
     except ValueError as error:
         print(error)
 
@@ -270,9 +272,7 @@ def add_raw_json(provider: str, raw: str) -> dict:
     existing = {(item.get("provider"), item.get("identity")) for item in store.list_stored()}
     updated = len(seen & existing)
     store.upsert_accounts(records)
-    result = {"count": len(records), "added": len(records) - updated, "updated": updated}
-    print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {updated}）")
-    return result
+    return {"count": len(records), "added": len(records) - updated, "updated": updated}
 
 
 def export_accounts(selection: list) -> list[dict]:

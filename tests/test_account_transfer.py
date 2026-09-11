@@ -1,5 +1,6 @@
 import base64
 import http.client
+import io
 import json
 import os
 import tempfile
@@ -156,6 +157,14 @@ class AccountTransferTests(unittest.TestCase):
             status, _, result = self.request("GET", "/api/accounts/export")
         self.assertEqual(status, 500)
         self.assertEqual(result, {"error": "账号列表读取失败，请稍后重试"})
+
+    def test_web_import_does_not_depend_on_console_encoding(self):
+        record = {"provider": "deepseek", "api_key": "test-console-key"}
+        with io.TextIOWrapper(io.BytesIO(), encoding="cp1252") as console, patch("sys.stdout", console):
+            status, _, result = self.request("POST", "/api/accounts/json", {"text": json.dumps([record])})
+            self.assertEqual(status, 200)
+            self.assertEqual(result["added"], 1)
+            self.assertEqual(console.tell(), 0)
 
     def test_existing_json_entrypoints_share_validation(self):
         record = {"provider": "cursor", "identity": "cursor-user", "access_token": "cursor-access", "refresh_token": "cursor-refresh"}
