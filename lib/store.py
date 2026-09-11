@@ -55,7 +55,17 @@ def save_store(data: dict) -> None:
 
 
 def upsert_account(record: dict) -> dict:
+    return upsert_accounts([record])[0]
+
+
+def upsert_accounts(records: list[dict]) -> list[dict]:
     data = load_store()
+    saved = [_upsert_account(data, record) for record in records]
+    save_store(data)
+    return saved
+
+
+def _upsert_account(data: dict, record: dict) -> dict:
     account_id = record.get("id") or str(uuid.uuid4())
     record["id"] = account_id
     record["updated_at"] = int(time.time())
@@ -82,7 +92,6 @@ def upsert_account(record: dict) -> dict:
     if not replaced:
         next_accounts.append(record)
     data["accounts"] = next_accounts
-    save_store(data)
     return record
 
 

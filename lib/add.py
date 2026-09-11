@@ -1,3 +1,4 @@
+import hashlib
 import json
 import time
 from contextlib import nullcontext
@@ -106,7 +107,10 @@ def add_interactive() -> None:
         print("当前也支持把已有 token/JSON 导入。")
         raw = input("粘贴 access/refresh JSON，或回车取消: ").strip()
         if raw:
-            add_raw_json(provider, raw)
+            try:
+                add_raw_json(provider, raw)
+            except ValueError as error:
+                print(error)
         return
 
 
@@ -178,49 +182,129 @@ def add_json(path: str) -> None:
     if data is None:
         print("无法读取 JSON")
         return
-    add_raw_json("", json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data)
-
-
-def add_raw_json(provider: str, raw: str) -> None:
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        print("JSON 无效")
-        return
+        add_raw_json("", json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data)
+    except ValueError as error:
+        print(error)
+
+
+def add_raw_json(provider: str, raw: str) -> dict:
+    if not isinstance(provider, str):
+        raise ValueError("provider 必须是字符串")
+    if not isinstance(raw, str):
+        raise ValueError("JSON 内容必须是文本")
+    try:
+        data = json.loads(raw.lstrip("\ufeff"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"JSON 无效：第 {error.lineno} 行，第 {error.colno} 列") from error
     items = data if isinstance(data, list) else [data]
     if isinstance(data, dict) and isinstance(data.get("accounts"), list):
         items = data["accounts"]
-    count = 0
-    for item in items:
+    if not items:
+        raise ValueError("账号数组不能为空")
+    records = []
+    seen = set()
+    text_fields = (
+        "provider", "identity", "label", "auth_mode", "email", "name", "user_id", "plan",
+        "api_key", "key", "access", "access_token", "refresh", "refresh_token", "id_token",
+        "idToken", "variant", "id", "principal_id", "first_name",
+    )
+    for index, item in enumerate(items, start=1):
+        prefix = f"第 {index} 个账号"
         if not isinstance(item, dict):
-            continue
-        current_provider = provider or str(item.get("provider") or "").strip()
+            raise ValueError(f"{prefix}必须是 JSON 对象")
+        for field in text_fields:
+            if field in item and not isinstance(item[field], str):
+                raise ValueError(f"{prefix}的 {field} 必须是字符串")
+        current_provider = item.get("provider", provider).strip()
         if current_provider not in AUTH_RULES:
-            continue
-        api_key = (
-            item.get("api_key")
-            or item.get("key")
-            or item.get("access_token")
-            or item.get("access")
-            or ""
-        )
+            raise ValueError(f"{prefix}的 provider 缺失或不支持")
+        api_key = (item.get("api_key") or item.get("key") or "").strip()
+        access = (item.get("access") or item.get("access_token") or "").strip()
+        refresh = (item.get("refresh") or item.get("refresh_token") or "").strip()
+        id_token = (item.get("id_token") or item.get("idToken") or "").strip()
+        credential = api_key or access or refresh or id_token
+        if not credential:
+            raise ValueError(f"{prefix}缺少凭据：请提供 api_key、access、refresh 或 id_token")
+        auth_mode = item.get("auth_mode") or ("api_key" if api_key else "oauth" if refresh else "json")
+        if auth_mode not in {"api_key", "oauth", "json", "local", "env"}:
+            raise ValueError(f"{prefix}的 auth_mode 不支持")
+        if auth_mode == "api_key" and not api_key:
+            raise ValueError(f"{prefix}的 api_key 不能为空")
+        expiry = item.get("expiry", 0)
+        if type(expiry) is not int or expiry < 0:
+            raise ValueError(f"{prefix}的 expiry 必须是非负整数（Unix 秒）")
+        user_id = item.get("user_id") or item.get("principal_id") or ""
+        if current_provider == "openai" and auth_mode != "api_key":
+            account_id = token_account_id(access) or token_account_id(id_token)
+            if account_id and user_id and account_id != user_id:
+                raise ValueError(f"{prefix}的 user_id 与访问凭据不一致")
+            user_id = account_id or user_id
+            if id_token and not matching_id_token(access, id_token, user_id):
+                raise ValueError(f"{prefix}的 id_token 格式无效或与账号不一致")
+        identity = (item.get("identity") or user_id or item.get("email") or item.get("id") or "").strip()
+        if not identity:
+            identity = f"{current_provider}:json:{hashlib.sha256(credential.encode()).hexdigest()[:16]}"
+        account_key = (current_provider, identity)
+        if account_key in seen:
+            raise ValueError(f"{prefix}与前面的账号重复（provider + identity），请合并后导入")
+        seen.add(account_key)
         record = {
             "provider": current_provider,
-            "auth_mode": item.get("auth_mode") or ("oauth" if item.get("refresh") or item.get("refresh_token") else "json"),
-            "label": AUTH_RULES[current_provider]["title"],
-            "identity": str(item.get("email") or item.get("id") or item.get("principal_id") or f"{current_provider}:json"),
+            "auth_mode": auth_mode,
+            "label": item.get("label") or AUTH_RULES[current_provider]["title"],
+            "identity": identity,
             "email": item.get("email") or "",
             "name": item.get("name") or item.get("first_name") or "",
-            "user_id": item.get("user_id") or item.get("principal_id") or "",
+            "user_id": user_id,
+            "plan": item.get("plan") or "",
+            "source": "dushan-quota",
             "api_key": api_key,
-            "access": item.get("access") or item.get("access_token") or api_key,
-            "refresh": item.get("refresh") or item.get("refresh_token") or "",
-            "id_token": item.get("id_token") or item.get("idToken") or "",
+            "access": access,
+            "refresh": refresh,
+            "id_token": id_token,
+            "expiry": expiry,
             "variant": item.get("variant") or current_provider,
         }
-        upsert_account(record)
-        count += 1
-    print(f"已导入 {count} 个账号")
+        records.append(record)
+    existing = {(item.get("provider"), item.get("identity")) for item in store.list_stored()}
+    updated = len(seen & existing)
+    store.upsert_accounts(records)
+    result = {"count": len(records), "added": len(records) - updated, "updated": updated}
+    print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {updated}）")
+    return result
+
+
+def export_accounts(selection: list) -> list[dict]:
+    if not isinstance(selection, list) or not selection:
+        raise ValueError("请至少选择一个账号")
+    keys = []
+    for index, item in enumerate(selection, start=1):
+        if not isinstance(item, dict) or any(
+            not isinstance(item.get(field), str) or not item[field].strip()
+            for field in ("provider", "identity")
+        ):
+            raise ValueError(f"第 {index} 个选择缺少 provider 或 identity")
+        keys.append((item["provider"], item["identity"]))
+    accounts = {(account.provider, account.identity): account for account in collect_accounts()}
+    if any(key not in accounts for key in keys):
+        raise ValueError("所选账号已不存在，请重新打开导出列表")
+    records = []
+    for key in dict.fromkeys(keys):
+        account = accounts[key]
+        record = {
+            field: getattr(account, field)
+            for field in ("provider", "identity", "label", "auth_mode", "email", "name", "user_id", "plan")
+        }
+        record.update({
+            field: account.secret.get(field) or ""
+            for field in ("api_key", "refresh", "id_token")
+        })
+        record["access"] = account.secret.get("access") or record["api_key"]
+        record["variant"] = account.secret.get("variant") or account.provider
+        record["expiry"] = agentdb._secret_expiry(account.secret)
+        records.append(record)
+    return records
 
 
 def add_from_env(provider: str) -> None:

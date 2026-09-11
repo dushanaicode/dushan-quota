@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -12,11 +13,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import config, logbuf, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
-from .add import add_api_key, add_from_env, add_json, add_local, add_raw_json, _save_oauth_account
+from .add import _save_oauth_account, add_api_key, add_from_env, add_local, add_raw_json, export_accounts
 from .discover import collect_accounts
 from .httputil import request_json
 from .models import AUTH_RULES
 from .render import _reset_text, _reset_ts, _window_name
+from .tokenstore import RefreshError
 
 WEB_DIR = Path(__file__).resolve().parent / "assets"
 RELEASE_API = "https://api.github.com/repos/dushanaicode/dushan-quota/releases/latest"
@@ -56,6 +58,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/accounts":
             self._json({"accounts": store.list_stored()})
+            return
+        if parsed.path == "/api/accounts/export":
+            try:
+                accounts = collect_accounts()
+                self._json({"accounts": [
+                    {
+                        "title": AUTH_RULES[account.provider]["title"],
+                        **{field: getattr(account, field) for field in (
+                            "provider", "identity", "label", "email", "name", "plan", "auth_mode"
+                        )},
+                    }
+                    for account in accounts
+                ]})
+            except (OSError, sqlite3.Error, RefreshError):
+                self._json({"error": "账号列表读取失败，请稍后重试"}, 500)
             return
         if parsed.path == "/api/quota":
             force = parse_qs(parsed.query).get("force", [""])[0].lower() in {"1", "true", "yes"}
@@ -157,8 +174,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
                 return
             if path == "/api/accounts/json":
-                add_raw_json("", payload.get("text") or "")
-                self._json({"ok": True})
+                result = add_raw_json(payload.get("provider") or "", payload.get("text") or "")
+                self._json({"ok": True, **result})
+                return
+            if path == "/api/accounts/export":
+                self._json(export_accounts(payload.get("accounts")), download="dushan-quota-accounts.json")
                 return
             if path == "/api/accounts/env":
                 add_from_env(payload.get("provider") or "")
@@ -344,11 +364,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _json(self, payload, status=200):
+    def _json(self, payload, status=200, download=""):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if download:
+            self.send_header("Content-Disposition", f'attachment; filename="{download}"')
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 

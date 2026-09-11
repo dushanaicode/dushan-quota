@@ -62,7 +62,7 @@
   /* ---------- header ---------- */
   header {
     position:sticky; top:0; z-index:20;
-    display:flex; align-items:center; justify-content:space-between;
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;
     padding:18px 28px 14px;
     background:var(--header-bg);
     backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
@@ -71,7 +71,7 @@
   .brand { display:flex; align-items:baseline; gap:14px; }
   .brand h1 { font-size:15px; font-weight:600; letter-spacing:.34em; text-transform:uppercase; }
   .brand small { color:var(--faint); font-size:11px; letter-spacing:.12em; }
-  .actions { display:flex; gap:8px; align-items:center; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .tick { position:absolute; left:0; bottom:-1px; height:1px; width:0;
     background:linear-gradient(90deg, transparent, var(--accent), transparent);
     transition:width 1s linear; opacity:.8; }
@@ -358,6 +358,19 @@
   .hint { color:var(--muted); font-size:12px; line-height:1.7; }
   .msg { margin-top:12px; font-size:12px; color:var(--accent); min-height:18px; }
   .msg.bad { color:var(--bad); }
+  dialog.transfer-panel { position:fixed; inset:0; margin:auto; width:min(640px,calc(100% - 24px));
+    max-height:calc(100dvh - 24px); overflow-y:auto; color:var(--text); overscroll-behavior:contain; }
+  dialog.transfer-panel::backdrop { background:rgba(8,9,11,.65); backdrop-filter:blur(8px); }
+  .transfer-panel textarea { min-height:190px; max-height:40vh; font-family:Consolas,monospace; }
+  .transfer-panel .check-row { display:flex; align-items:center; gap:10px; margin:0; padding:10px 0;
+    color:var(--text); font-size:12px; letter-spacing:0; cursor:pointer; }
+  .transfer-panel input[type="checkbox"] { flex:none; width:16px; height:16px; padding:0; accent-color:var(--accent); }
+  .export-list { max-height:45vh; overflow-y:auto; margin-top:8px; }
+  .export-group { margin-bottom:10px; padding:4px 12px; border:1px solid var(--line); border-radius:10px; }
+  .export-group .export-account { border-top:1px solid var(--line-soft); }
+  .export-account span { min-width:0; overflow-wrap:anywhere; }
+  .export-account small { display:block; color:var(--muted); font-size:11px; }
+  .transfer-panel .row { flex-wrap:wrap; }
   .oauth-box { display:flex; gap:8px; margin-top:10px; }
   .oauth-box input { flex:1; font-size:11.5px; color:var(--muted); }
   .waiting { display:flex; align-items:center; gap:9px; margin-top:12px; color:var(--muted); font-size:12px; }
@@ -473,6 +486,8 @@
     <button class="btn" id="btnRefresh" onclick="refreshQuota(true)">刷新</button>
     <button class="btn" onclick="openLogs()">日志</button>
     <button class="btn" onclick="openSet()">设置</button>
+    <button class="btn" id="btnImportOpen" onclick="openImport()">导入</button>
+    <button class="btn" id="btnExportOpen" onclick="openExport()">导出</button>
     <button class="btn primary" onclick="openAdd()">添加账号</button>
   </div>
   <div class="tick" id="tick"></div>
@@ -590,6 +605,32 @@
 </div>
 
 <div id="toast"></div>
+
+<dialog id="importModal" class="panel transfer-panel" aria-labelledby="importTitle" onclose="clearImport()">
+  <h2 id="importTitle">导入账号</h2>
+  <p class="hint">选择导出的 JSON 文件，或粘贴账号 JSON 数组。每项需包含 provider 和凭据；相同 provider + identity 会更新本地账号。整批校验通过后才会保存。</p>
+  <label for="importFile">JSON 文件</label>
+  <input id="importFile" type="file" accept=".json,application/json" onchange="readImportFile(this)" />
+  <label for="importText">账号 JSON 数组</label>
+  <textarea id="importText" spellcheck="false" autocomplete="off" oninput="updateImportButton()" placeholder='[{"provider":"deepseek","identity":"my-account","api_key":"sk-…"}]'></textarea>
+  <p id="importMsg" class="msg" role="status" aria-live="polite"></p>
+  <div class="row end">
+    <button class="btn" onclick="document.getElementById('importModal').close()">关闭</button>
+    <button class="btn primary" id="btnImport" onclick="submitImport()" disabled>导入账号</button>
+  </div>
+</dialog>
+
+<dialog id="exportModal" class="panel transfer-panel" aria-labelledby="exportTitle">
+  <h2 id="exportTitle">导出账号</h2>
+  <p class="hint">按平台或单个账号勾选，可跨平台导出。下载的 JSON 数组包含完整 Key / Token，可用于重新导入，请妥善保存。</p>
+  <label class="check-row"><input id="exportAll" type="checkbox" onchange="selectAllExports(this.checked)" />全部账号 <span id="exportCount" role="status"></span></label>
+  <div id="exportList" class="export-list" onchange="changeExportGroup(event)"></div>
+  <p id="exportMsg" class="msg" role="status" aria-live="polite"></p>
+  <div class="row end">
+    <button class="btn" onclick="document.getElementById('exportModal').close()">关闭</button>
+    <button class="btn primary" id="btnExport" onclick="submitExport()" disabled>下载 JSON</button>
+  </div>
+</dialog>
 
 <div id="addModal" class="modal" onclick="if(event.target===this)closeAdd()">
   <div class="panel add-panel">
@@ -1371,6 +1412,129 @@ async function restoreAllHistory(){
   }
 }
 
+/* ---------- account import / export ---------- */
+let exportItems = [], exporting = false, importing = false;
+
+function clearImport(){
+  document.getElementById('importFile').value = '';
+  document.getElementById('importText').value = '';
+  document.getElementById('importMsg').textContent = '';
+  updateImportButton();
+}
+function updateImportButton(){
+  document.getElementById('btnImport').disabled = importing || !document.getElementById('importText').value.trim();
+}
+function openImport(){
+  clearImport();
+  document.getElementById('importModal').showModal();
+}
+async function readImportFile(input){
+  const file = input.files[0];
+  if (!file) return;
+  const msg = document.getElementById('importMsg');
+  msg.className = 'msg'; msg.textContent = '';
+  try {
+    const text = await file.text();
+    if (document.getElementById('importModal').open) document.getElementById('importText').value = text;
+  } catch(e) { msg.className = 'msg bad'; msg.textContent = '文件读取失败，请重新选择文件'; }
+  updateImportButton();
+}
+async function submitImport(){
+  const msg = document.getElementById('importMsg');
+  const btn = document.getElementById('btnImport');
+  importing = true; updateImportButton(); btn.textContent = '导入中…';
+  document.getElementById('importFile').disabled = true;
+  document.getElementById('importText').disabled = true;
+  msg.className = 'msg'; msg.textContent = '';
+  try {
+    const result = await api('/api/accounts/json', {method:'POST', body:JSON.stringify({text:document.getElementById('importText').value})});
+    clearImport();
+    msg.textContent = `已导入 ${result.count} 个账号：新增 ${result.added}，更新 ${result.updated}`;
+    refreshQuota(false);
+  } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
+  finally {
+    importing = false; updateImportButton(); btn.textContent = '导入账号';
+    document.getElementById('importFile').disabled = false;
+    document.getElementById('importText').disabled = false;
+  }
+}
+async function openExport(){
+  exportItems = [];
+  const msg = document.getElementById('exportMsg');
+  msg.className = 'msg'; msg.textContent = '';
+  document.getElementById('exportList').innerHTML = '<p class="hint">加载账号中…</p>';
+  updateExportSelection();
+  document.getElementById('exportModal').showModal();
+  try {
+    const result = await api('/api/accounts/export');
+    exportItems = result.accounts;
+    renderExportList();
+  } catch(e) {
+    document.getElementById('exportList').innerHTML = '';
+    msg.className = 'msg bad'; msg.textContent = e.message;
+  }
+}
+function renderExportList(){
+  const providers = [...new Set(exportItems.map(item => item.provider))];
+  document.getElementById('exportList').innerHTML = providers.map(provider => {
+    const items = exportItems.map((item, index) => ({...item, index})).filter(item => item.provider === provider);
+    return `<section class="export-group">
+      <label class="check-row"><input type="checkbox" class="export-provider" /><b>${esc(items[0].title)}</b><span class="hint">${items.length} 个账号</span></label>
+      ${items.map(item => `<label class="check-row export-account"><input type="checkbox" data-index="${item.index}" />
+        <span>${esc(item.email || item.name || item.label)}<small>${esc(item.identity)}</small><small>${esc([item.auth_mode, item.plan].filter(Boolean).join(' · '))}</small></span></label>`).join('')}
+    </section>`;
+  }).join('') || '<p class="hint">暂无可导出的账号，请先添加账号。</p>';
+  updateExportSelection();
+}
+function selectAllExports(checked){
+  document.querySelectorAll('#exportList input[data-index]').forEach(box => box.checked = checked);
+  updateExportSelection();
+}
+function changeExportGroup(event){
+  if (event.target.classList.contains('export-provider')) {
+    event.target.closest('.export-group').querySelectorAll('input[data-index]').forEach(box => box.checked = event.target.checked);
+  }
+  updateExportSelection();
+}
+function updateExportSelection(){
+  const boxes = [...document.querySelectorAll('#exportList input[data-index]')];
+  const selected = boxes.filter(box => box.checked).length;
+  const all = document.getElementById('exportAll');
+  all.checked = boxes.length > 0 && selected === boxes.length;
+  all.indeterminate = selected > 0 && selected < boxes.length;
+  all.disabled = exporting || boxes.length === 0;
+  document.querySelectorAll('#exportList .export-group').forEach(group => {
+    const children = [...group.querySelectorAll('input[data-index]')];
+    const count = children.filter(box => box.checked).length;
+    const parent = group.querySelector('.export-provider');
+    parent.checked = count === children.length;
+    parent.indeterminate = count > 0 && count < children.length;
+  });
+  document.getElementById('exportCount').textContent = `已选 ${selected} / ${boxes.length}`;
+  document.getElementById('btnExport').disabled = exporting || selected === 0;
+}
+async function submitExport(){
+  const selection = [...document.querySelectorAll('#exportList input[data-index]:checked')].map(box => {
+    const item = exportItems[Number(box.dataset.index)];
+    return {provider:item.provider, identity:item.identity};
+  });
+  const msg = document.getElementById('exportMsg');
+  const btn = document.getElementById('btnExport');
+  exporting = true; updateExportSelection(); btn.textContent = '导出中…';
+  msg.className = 'msg'; msg.textContent = '';
+  try {
+    const accounts = await api('/api/accounts/export', {method:'POST', body:JSON.stringify({accounts:selection})});
+    const url = URL.createObjectURL(new Blob([JSON.stringify(accounts, null, 2) + '\n'], {type:'application/json;charset=utf-8'}));
+    const link = document.createElement('a');
+    link.href = url; link.download = `dushan-quota-accounts-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    document.getElementById('exportModal').close();
+    toast(`已导出 ${accounts.length} 个账号`);
+  } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
+  finally { exporting = false; updateExportSelection(); btn.textContent = '下载 JSON'; }
+}
+
 /* ---------- add account（左提供商 / 右配置） ---------- */
 let addProv = '';
 let addMode = '';
@@ -1453,7 +1617,10 @@ async function submitAdd(){
   msg.className = 'msg'; msg.textContent = '';
   try {
     if (addMode === 'api_key') await api('/api/accounts/key', {method:'POST', body:JSON.stringify({provider:addProv, key:document.getElementById('apiKey').value})});
-    else if (addMode === 'json') await api('/api/accounts/json', {method:'POST', body:JSON.stringify({text:document.getElementById('jsonText').value})});
+    else if (addMode === 'json') {
+      const result = await api('/api/accounts/json', {method:'POST', body:JSON.stringify({provider:addProv, text:document.getElementById('jsonText').value})});
+      toast(`已导入 ${result.count} 个账号：新增 ${result.added}，更新 ${result.updated}`);
+    }
     else if (addMode === 'env') await api('/api/accounts/env', {method:'POST', body:JSON.stringify({provider:addProv})});
     else if (addMode === 'local') await api('/api/accounts/local', {method:'POST', body:JSON.stringify({provider:addProv})});
     else if (addMode === 'oauth') { await startOAuth(addProv); return; }

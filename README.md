@@ -141,6 +141,25 @@ macOS 15（Intel）已完成悬浮窗启动、内嵌 Web、菜单栏托盘、显
 
 Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_agent` 使用 `crsr_` Key 换取短期令牌。
 
+## 导入与导出账号
+
+Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个勾选不同平台的账号，下载 JSON 数组。列表包含当前可发现的本机、环境变量和本地库账号，包括已归档但仍有凭据的账号。
+
+点击「导入」，选择 JSON 文件或粘贴 JSON 数组，例如：
+
+```json
+[
+  {"provider": "deepseek", "identity": "personal", "label": "个人账号", "api_key": "sk-example"},
+  {"provider": "openai", "identity": "account-id", "auth_mode": "oauth", "access": "access-token", "refresh": "refresh-token"}
+]
+```
+
+每项需要 `provider` 和至少一种凭据（`api_key`、`access`、`refresh`、`id_token`）。建议明确填写 `identity`；省略时由账号 ID、邮箱或凭据指纹生成。可同时保存 `label`、`email`、`name`、`user_id`、`plan`、`auth_mode`、`variant` 和 `expiry`（Unix 秒）。导出的文件可以直接重新导入。
+
+导入前会校验整批数据，错误会指出账号序号；有错误时整批不写入。相同 `provider + identity` 更新本地记录，其余新增，完成后显示数量。同一数组内重复的账号需要先合并。导入不携带原机器路径、数据库 ID、用量或界面设置。
+
+导出的 JSON 包含完整 Key / Token，请按凭据文件妥善保存。
+
 ## 写入 IDE 与 Agent Harness
 
 这里的 Harness 指 OpenCode、OMP、各官方 CLI / IDE 等认证目标。Dushan Quota 不负责安装这些软件，只负责在目标已经存在时写入兼容的凭证。
