@@ -7,6 +7,21 @@ SUBSCRIPTIONS_URL = "https://grok.com/rest/subscriptions"
 TASK_USAGE_URL = "https://grok.com/rest/tasks/usage"
 USER_URL = "https://cli-chat-proxy.grok.com/v1/user?include=subscription"
 HEAVY_OFFER_RE = r"^heavy-p\d+m-\d{1,2}-[a-z]{3}\d{4}$"
+# subscriptions[].tier is xAI's own answer; providerOfferId is a discount
+# campaign id that merely happens to be named after a plan.
+_TIERS = {
+    "SUBSCRIPTION_TIER_SUPER_GROK_HEAVY": "xAI Heavy",
+    "SUBSCRIPTION_TIER_SUPER_GROK_PRO": "xAI SuperGrok Pro",
+    "SUBSCRIPTION_TIER_SUPER_GROK_LITE": "xAI Lite",
+    "SUBSCRIPTION_TIER_SUPER_GROK": "xAI SuperGrok",
+}
+# /v1/user reports the same plan in its own spelling.
+_USER_TIERS = {
+    "supergrokheavy": "xAI Heavy",
+    "supergrokpro": "xAI SuperGrok Pro",
+    "supergroklite": "xAI Lite",
+    "supergrok": "xAI SuperGrok",
+}
 
 
 def fetch(account: Account) -> QuotaResult:
@@ -68,8 +83,8 @@ def fetch(account: Account) -> QuotaResult:
                 )
             )
 
-    plan = _plan_label(access, _headers(access))
     profile = _user_profile(_headers(access))
+    plan, plan_detail = _plan_info(access, _headers(access), profile.get("plan"))
     email = profile.get("email") or account.email or account.secret.get("email") or ""
     if email == "unknown@grok.local":
         email = ""
@@ -84,6 +99,7 @@ def fetch(account: Account) -> QuotaResult:
         name=name,
         user_id=user_id,
         plan=plan,
+        plan_detail=plan_detail,
         auth_mode=account.auth_mode or "oauth",
         sub_start=str(period.get("start") or config.get("billingPeriodStart") or ""),
         sub_end=str(period.get("end") or config.get("billingPeriodEnd") or ""),
@@ -115,27 +131,49 @@ def _user_profile(headers: dict) -> dict:
     }
 
 
-def _plan_label(access: str, headers: dict) -> str:
+def _plan_info(access: str, headers: dict, reported: str | None = None) -> tuple[str, str]:
+    """Name the plan, and report the raw fields it was read from.
+
+    Order matters: the subscription tier is xAI's own answer, /v1/user repeats
+    it, and providerOfferId is only a discount campaign that happens to be
+    named after a plan -- it is trusted last, never over a reported tier.
+    """
     import re
 
+    fallback = _user_tier(reported) or "xAI SuperGrok"
+    detail = _detail_text([("subscriptionTier", reported)])
     status, _, payload = request_json(SUBSCRIPTIONS_URL, headers=headers)
-    if status != 200 or not isinstance(payload, dict):
-        return "xAI SuperGrok"
-    items = payload.get("subscriptions")
-    if not isinstance(items, list):
-        return "xAI SuperGrok"
+    items = payload.get("subscriptions") if isinstance(payload, dict) else None
+    if status != 200 or not isinstance(items, list):
+        return fallback, detail
     active = next((item for item in items if isinstance(item, dict) and item.get("status") == "SUBSCRIPTION_STATUS_ACTIVE"), None)
     if not isinstance(active, dict):
-        return "xAI SuperGrok"
+        return fallback, detail
+    tier = str(active.get("tier") or "")
     offer = active.get("activeOffer") if isinstance(active.get("activeOffer"), dict) else {}
     offer_id = str(offer.get("providerOfferId") or "")
-    if re.match(HEAVY_OFFER_RE, offer_id, re.I) or active.get("tier") == "SUBSCRIPTION_TIER_SUPER_GROK_HEAVY":
-        return "xAI Heavy"
-    if active.get("tier") == "SUBSCRIPTION_TIER_SUPER_GROK_LITE":
-        return "xAI Lite"
-    if active.get("tier") == "SUBSCRIPTION_TIER_SUPER_GROK_PRO":
-        return "xAI SuperGrok Pro"
-    return "xAI SuperGrok"
+    detail = _detail_text([
+        ("tier", tier),
+        ("subscriptionTier", reported),
+        ("billingInterval", active.get("billingInterval")),
+        ("offerId", offer_id),
+    ])
+    if tier in _TIERS:
+        return _TIERS[tier], detail
+    if not tier and re.match(HEAVY_OFFER_RE, offer_id, re.I):
+        return "xAI Heavy", detail
+    return fallback, detail
+
+
+def _detail_text(fields) -> str:
+    return " · ".join(f"{key}={value}" for key, value in fields if value)
+
+
+def _user_tier(reported) -> str:
+    text = str(reported or "").strip()
+    if not text:
+        return ""
+    return _USER_TIERS.get(text.replace(" ", "").replace("_", "").lower(), f"xAI {text}")
 
 
 def _num(value):

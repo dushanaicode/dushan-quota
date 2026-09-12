@@ -28,6 +28,8 @@ class SnapshotTests(unittest.TestCase):
             account=self.account,
             ok=True,
             title="OpenAI",
+            plan="OpenAI (Pro 5x)",
+            plan_detail="plan_type=pro · account.plan=prolite",
             windows=[Window(name="Week quota", remaining_percent=99)],
             sub_start="2030-01-02T03:04:05+00:00",
             sub_end="2030-02-03T04:05:06+00:00",
@@ -56,6 +58,8 @@ class SnapshotTests(unittest.TestCase):
         self.assertNotIn('"secret"', raw)
         self.assertEqual("2030-02-03T04:05:06+00:00", second.results[0].sub_end)
         self.assertEqual("known", second.results[0].sub_status)
+        self.assertEqual(self.result.plan, second.results[0].plan)
+        self.assertEqual(self.result.plan_detail, second.results[0].plan_detail)
 
     def test_force_creates_a_new_snapshot(self):
         with patch.object(snapshot, "collect_accounts", return_value=[self.account]), patch.object(

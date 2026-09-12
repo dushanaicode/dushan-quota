@@ -120,6 +120,7 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
                 "error": item.error,
                 "email": item.email or item.account.email,
                 "plan": item.plan or item.account.plan,
+                "plan_detail": item.plan_detail,
                 "sub_start": item.sub_start,
                 "sub_end": item.sub_end,
                 "sub_status": item.sub_status,

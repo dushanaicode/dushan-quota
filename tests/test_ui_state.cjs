@@ -149,6 +149,35 @@ async function main() {
   assert.equal(floating.get('list').animations.length, listAnimations + 1,
     'Adding a card replays the entrance animation');
 
+  // Float window: cards can be dragged into an order that outlives a refresh.
+  vm.runInContext("S.card_order = ['openai:a']", floating);
+  assert.equal(floating.orderedItems([grok, fixture]).map(it => it.title).join('|'), 'OpenAI|xAI',
+    'A saved order wins over the payload order');
+  vm.runInContext("S.card_order = []", floating);
+  assert.equal(floating.orderedItems([grok, fixture]).map(it => it.title).join('|'), 'xAI|OpenAI',
+    'Without a saved order the payload order stands');
+  const dragged = {dataset: {key: 'openai:a'}, classList: {add() {}, remove() {}}, releasePointerCapture() {}};
+  floating.get('list').children = [{dataset: {key: 'grok:x'}}, dragged];
+  vm.runInContext("S.card_order = ['openai:a', 'kimi:hidden']", floating);
+  vm.runInContext("cardDrag = {card: get('list').children[1], moved: true, pointerId: 1}", floating);
+  floating.cardDragEnd();
+  assert.equal(vm.runInContext("S.card_order.join('|')", floating), 'grok:x|openai:a|kimi:hidden',
+    'Dropping saves the visible order and keeps hidden cards queued behind it');
+  assert.equal(saved.at(-1).card_order.join('|'), 'grok:x|openai:a|kimi:hidden', 'The order is persisted');
+  vm.runInContext("cardDrag = {card: get('list').children[1], moved: false, pointerId: 1}", floating);
+  floating.cardDragEnd();
+  assert.equal(vm.runInContext("S.card_order.join('|')", floating), 'grok:x|openai:a|kimi:hidden',
+    'A click that never moved must not rewrite the order');
+  floating.resetCardOrder();
+  assert.equal(vm.runInContext("S.card_order.length", floating), 0, 'Reset restores the payload order');
+
+  vm.runInContext("S.show['#plan'] = true", floating);
+  for (const plan of ['OpenAI (Pro 5x)', 'OpenAI (Pro 20x)', 'Claude Max 5x', 'Claude Max 20x']) {
+    floating.render([{...fixture, plan}]);
+    assert(floating.get('list').innerHTML.includes(`>${plan}</span>`),
+      `The float card must show ${plan} in its visible badge`);
+  }
+
   const storage = new Map();
   const web = context(storage);
   const source = script('index.html');
@@ -173,6 +202,40 @@ async function main() {
   assert(web.get('usagePeriod').focused, 'Changing the dropdown must retain keyboard focus');
   assert.equal(storage.get('quota-usage-period'), '3d');
   assert.equal(storage.get('quota-usage-harness:openai:a'), 'codex');
+
+  // Reset time in the web UI: the same countdown/absolute toggle the float window has.
+  const clockStorage = new Map();
+  const rowSource = source.slice(source.indexOf('function textRowClass'), source.indexOf('function fmtActivation'));
+  const bootClock = store => {
+    const ctx = context(store);
+    vm.runInContext("const colorOf = p => p >= 40 ? 'g' : p >= 15 ? 'y' : 'r';", ctx);
+    vm.runInContext(rowSource, ctx);
+    return ctx;
+  };
+  const clock = bootClock(clockStorage);
+  const webRow = clock.winRow({name: '周额度', remaining_percent: 95, reset_ts: resetTs}, 'openai:a');
+  assert(webRow.includes('<button type="button" class="rst rst-toggle"'), 'Reset time is a button, not a bare help cursor');
+  assert(webRow.includes('onclick="toggleResetTime(this)"') && webRow.includes('点击切换重置时间'));
+  assert(!clock.winRow({name: '周额度', remaining_percent: 95, reset_ts: null}, 'openai:a').includes('rst-toggle'),
+    'Windows without a reset time stay plain text');
+  const webAttributes = {};
+  const webNode = {dataset: {resetTs: String(resetTs), resetKey: 'openai:a|周额度'}, textContent: '',
+    setAttribute(key, value) {webAttributes[key] = value;}};
+  clock.toggleResetTime(webNode);
+  assert(webNode.textContent.startsWith('重置于 2030-01-'));
+  assert.equal(webAttributes['aria-pressed'], 'true');
+  clock.document.querySelectorAll = () => [webNode];
+  clock.updateCountdowns();
+  assert(webNode.textContent.startsWith('重置于 2030-01-'), 'The ticker leaves a row pinned to absolute time alone');
+  assert(clock.winRow({name: '周额度', remaining_percent: 95, reset_ts: resetTs}, 'openai:a').includes('>重置于 2030-01-'),
+    'A refresh keeps the row selection');
+  assert(!clock.winRow({name: '周额度', remaining_percent: 95, reset_ts: resetTs}, 'openai:b').includes('>重置于'),
+    'Other accounts keep their own selection');
+  clock.toggleResetTime(webNode);
+  assert.equal(webAttributes['aria-pressed'], 'false');
+  assert(webNode.textContent.includes(' · '), 'The countdown view keeps the exact time beside it');
+  assert.equal(vm.runInContext("resetModes['openai:a|周额度']", bootClock(clockStorage)), false,
+    'The reset display preference survives a reload');
 
   const reloaded = context(storage);
   vm.runInContext(usageSource, reloaded);

@@ -15,6 +15,23 @@ SUBSCRIPTIONS_URL = f"https://chatgpt.com{SUBSCRIPTIONS_PATH}"
 RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 WINDOW_KIND = {18000: "5h quota", 604800: "Week quota", 2592000: "Month quota", 2628000: "Month quota"}
 OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
+# Follow Cockpit's display convention: generic Pro is 20x, explicit Pro Lite is 5x.
+_PLAN_TIERS = {
+    "free": "Free",
+    "go": "Go",
+    "plus": "Plus",
+    "pro": "Pro 20x",
+    "prolite": "Pro 5x",
+    "pro5x": "Pro 5x",
+    "codexpro5x": "Pro 5x",
+    "promax": "Pro 20x",
+    "pro20x": "Pro 20x",
+    "codexpro20x": "Pro 20x",
+    "team": "Team",
+    "business": "Business",
+    "enterprise": "Enterprise",
+    "edu": "Edu",
+}
 
 
 def fetch(account: Account) -> QuotaResult:
@@ -23,8 +40,9 @@ def fetch(account: Account) -> QuotaResult:
     except tokenstore.RefreshError as error:
         id_token = account.secret.get("id_token") or ""
         start, end, status = _token_subscription(id_token, account.plan)
+        plan = _plan(_auth_claims(id_token).get("chatgpt_plan_type") or account.plan, account.plan)
         return QuotaResult(account=account, ok=False, title="OpenAI", error=str(error),
-                           plan=account.plan, sub_start=start, sub_end=end, sub_status=status)
+                           plan=plan, sub_start=start, sub_end=end, sub_status=status)
 
 
 def _fetch(account: Account) -> QuotaResult:
@@ -38,7 +56,7 @@ def _fetch(account: Account) -> QuotaResult:
             ok=False,
             title="OpenAI",
             error="缺少 access token",
-            plan=_plan(token_plan_type) if token_plan_type else account.plan,
+            plan=_plan(token_plan_type or account.plan, account.plan),
             sub_start=sub_start,
             sub_end=sub_end,
             sub_status=sub_status,
@@ -65,18 +83,15 @@ def _fetch(account: Account) -> QuotaResult:
             ok=False,
             title="OpenAI",
             error="登录验证失败（HTTP 401），请重新授权此账号" if status == 401 else f"{status} {text[:80]}",
-            plan=(
-                _plan(token_plan_type or subscription_plan)
-                if (token_plan_type or subscription_plan)
-                else account.plan
-            ),
+            plan=_plan(subscription_plan or token_plan_type or account.plan, token_plan_type, account.plan),
             sub_start=sub_start,
             sub_end=sub_end,
             sub_status=sub_status,
         )
 
     plan_type = data.get("plan_type") or subscription_plan or token_plan_type or account.plan
-    plan = _plan(plan_type)
+    plan = _plan(plan_type, subscription_plan, token_plan_type, account.plan)
+    plan_detail = _plan_detail(data.get("plan_type"), subscription_plan, token_plan_type, account.plan)
 
     windows: list[Window] = []
     rate = data.get("rate_limit") if isinstance(data.get("rate_limit"), dict) else {}
@@ -103,6 +118,7 @@ def _fetch(account: Account) -> QuotaResult:
             name=_name(access) or account.name,
             user_id=account.secret.get("account_id") or _account_id(access) or account.user_id,
             plan=plan,
+            plan_detail=plan_detail,
             auth_mode=account.auth_mode or "oauth",
             sub_start=sub_start,
             sub_end=sub_end,
@@ -120,6 +136,7 @@ def _fetch(account: Account) -> QuotaResult:
         name=name or "",
         user_id=user_id or "",
         plan=plan,
+        plan_detail=plan_detail,
         auth_mode=account.auth_mode or "oauth",
         sub_start=sub_start,
         sub_end=sub_end,
@@ -640,16 +657,41 @@ def _subscription_expired(value: str) -> bool:
     return parsed.astimezone(timezone.utc) <= datetime.now(timezone.utc)
 
 
-def _plan(plan_type) -> str:
-    text = str(plan_type or "").lower()
-    if "pro" in text:
-        return "OpenAI (Pro)"
-    if "plus" in text:
-        return "OpenAI (Plus)"
-    if "free" in text:
-        return "OpenAI (Free)"
-    if "team" in text or "business" in text:
-        return "OpenAI (Business)"
-    if plan_type:
-        return f"OpenAI ({plan_type})"
-    return "OpenAI"
+def _plan_detail(usage_plan, subscription_plan, token_plan, account_plan) -> str:
+    """Keep the raw tier ids separate from Cockpit's multiplier convention."""
+    fields = (
+        ("plan_type", usage_plan),
+        ("subscription_plan", subscription_plan),
+        ("id_token.chatgpt_plan_type", token_plan),
+        ("account.plan", account_plan),
+    )
+    seen, parts = set(), []
+    for key, value in fields:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            parts.append(f"{key}={text}")
+    return " · ".join(parts)
+
+
+def _plan_key(plan_type) -> str:
+    text = str(plan_type or "").strip().lower()
+    core = text.removeprefix("openai (").removesuffix(")")
+    core = core.removeprefix("chatgpt").removesuffix("plan")
+    return core.replace("_", "").replace("-", "").replace(" ", "")
+
+
+def _plan(plan_type, *tier_hints) -> str:
+    """Resolve explicit Pro subtiers before applying Cockpit's default Pro 20x."""
+    key = _plan_key(plan_type)
+    label = _PLAN_TIERS.get(key)
+    if key == "pro":
+        for hint in tier_hints:
+            hint_key = _plan_key(hint)
+            tier = _PLAN_TIERS.get(hint_key)
+            if hint_key != "pro" and tier in {"Pro 5x", "Pro 20x"}:
+                label = tier
+                break
+    if label:
+        return f"OpenAI ({label})"
+    return f"OpenAI ({plan_type})" if plan_type else "OpenAI"

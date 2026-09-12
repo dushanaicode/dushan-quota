@@ -102,7 +102,13 @@
   #body::-webkit-scrollbar-thumb, #cfg::-webkit-scrollbar-thumb { background:var(--track); border-radius:99px; }
   .card { padding:9px 0 8px; border-top:1px solid var(--line); }
   .card:first-child { border-top:0; }
-  .name { display:flex; align-items:center; gap:7px; margin-bottom:5px; }
+  .name { display:flex; align-items:center; gap:7px; margin-bottom:5px; cursor:grab; touch-action:none; }
+  .name .grip { flex:none; width:7px; height:11px; margin-left:-3px; color:var(--dim); opacity:0;
+    background-image:radial-gradient(currentColor 1px, transparent 1px); background-size:4px 4px;
+    transition:opacity .15s; }
+  .card:hover .grip { opacity:.7; }
+  .card.dragging { opacity:.55; }
+  .card.dragging .name, .card.dragging .grip { cursor:grabbing; opacity:1; }
   .name b { font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; }
   .pill { font-size:10px; padding:1px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; flex:none; }
   .name span { font-size:11px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -148,7 +154,7 @@
   #panel.settings-open #body { display:none; }
   #panel.settings-open #cfg { display:block; }
   #cfg .sec { font-size:11px; color:var(--dim); margin:6px 0 3px; }
-  #pick, #themes, #meta, #winOpts { display:flex; flex-wrap:wrap; gap:5px; padding:3px 0 1px; }
+  #pick, #themes, #meta, #winOpts, #orderRow { display:flex; flex-wrap:wrap; gap:5px; padding:3px 0 1px; }
   .chip { border:0; font-size:11px; padding:3px 10px; border-radius:99px; background:var(--track); color:var(--faint); cursor:pointer; transition:background .15s, color .15s, transform .1s; }
   button:focus-visible, .usage-filter select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .chip:hover { color:var(--text); }
@@ -207,13 +213,14 @@
     <div id="themes"></div>
     <div class="sec">显示内容</div>
     <div id="pick"></div>
+    <div id="orderRow"><button type="button" class="chip" id="orderReset" title="清除手动排序，恢复接口返回的顺序">恢复默认顺序</button></div>
     <div class="sec">卡片信息</div>
     <div id="meta"></div>
   </div>
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{}, reset_modes:{} };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{}, reset_modes:{}, card_order:[] };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
 let api = null;
@@ -344,14 +351,71 @@ function subscriptionText(it){
   return end ? `${it.sub_status === 'expired' ? '已到期' : '到期'} ${end}` : '';
 }
 
+/* 卡片排序：按住卡片标题上下拖，顺序存进设置，随窗口一起持久化 */
+function cardOrder(){ return Array.isArray(S.card_order) ? S.card_order : []; }
+function orderedItems(items){
+  const order = cardOrder();
+  const rank = key => { const at = order.indexOf(key); return at < 0 ? order.length : at; };
+  return items.map((it, index) => ({it, index}))
+    .sort((a, b) => (rank(accountKey(a.it)) - rank(accountKey(b.it))) || (a.index - b.index))
+    .map(entry => entry.it);
+}
+let cardDrag = null;
+function cardDragStart(event){
+  const card = event.target.closest?.('.name')?.closest('.card');
+  if(!card || event.button !== 0 || $('list').querySelectorAll('.card').length < 2) return;
+  cardDrag = { card, pointerId: event.pointerId, y: event.clientY, moved: false };
+  card.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+function cardDragMove(event){
+  if(!cardDrag) return;
+  if(!cardDrag.moved){
+    if(Math.abs(event.clientY - cardDrag.y) < 4) return;
+    cardDrag.moved = true;
+    cardDrag.card.classList.add('dragging');
+  }
+  // 越过相邻卡片中线就换位，松手前所见即所得
+  const list = $('list'), card = cardDrag.card;
+  const before = [...list.children].find(el => {
+    if(el === card) return false;
+    const box = el.getBoundingClientRect();
+    return event.clientY < box.top + box.height / 2;
+  });
+  if(before){ if(card.nextElementSibling !== before) list.insertBefore(card, before); }
+  else if(list.lastElementChild !== card) list.appendChild(card);
+}
+function cardDragEnd(){
+  if(!cardDrag) return;
+  const { card, moved, pointerId } = cardDrag;
+  cardDrag = null;
+  try{ card.releasePointerCapture?.(pointerId); }catch(e){}
+  card.classList.remove('dragging');
+  if(!moved) return;
+  // 隐藏的卡片不在 DOM 里，把它们的位置续在后面，重新显示时不会丢
+  const visible = [...$('list').children].map(el => el.dataset.key).filter(Boolean);
+  S.card_order = visible.concat(cardOrder().filter(key => !visible.includes(key)));
+  renderedContent = '';
+  save();
+  render(cache);
+}
+function resetCardOrder(){
+  S.card_order = [];
+  renderedContent = '';
+  save();
+  render(cache);
+}
+
 function render(items){
+  if(cardDrag) return;
   let html = '';
-  for(const it of items){
+  for(const it of orderedItems(items)){
     if(S.show[it.title]===false) continue;
     const meta = [];
     if(S.show['#email']!==false && it.email) meta.push(`<span>${esc(it.email)}</span>`);
-    const pill = (S.show['#plan']!==false && it.plan) ? `<span class="pill">${esc(it.plan)}</span>` : '';
-    html += `<div class="card"><div class="name"><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
+    const planTip = it.plan_detail ? `${it.plan} · 接口原值 ${it.plan_detail}` : (it.plan || '');
+    const pill = (S.show['#plan']!==false && it.plan) ? `<span class="pill" title="${esc(planTip)}">${esc(it.plan)}</span>` : '';
+    html += `<div class="card" data-key="${esc(accountKey(it))}"><div class="name" title="按住上下拖动可调整顺序"><span class="grip" aria-hidden="true"></span><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
     const sub = S.show['#plan']!==false ? subscriptionText(it) : '';
     if(sub) html += `<div class="sub">${esc(sub)}</div>`;
     html += it.ok ? it.windows.map(w=>row(w,accountKey(it))).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
@@ -360,7 +424,7 @@ function render(items){
   }
   const list=$('list'), content=html || '<div class="txt" style="padding:6px 0">没有账号</div>';
   if(renderedContent===content) return;
-  const structure=items.filter(it=>S.show[it.title]!==false).map(accountKey).join('|');
+  const structure=orderedItems(items).filter(it=>S.show[it.title]!==false).map(accountKey).join('|');
   const widths=new Map(S.animations?[...list.querySelectorAll('[data-bar]')].map(bar=>[bar.dataset.bar,bar.style.width]):[]);
   list.innerHTML=content;
   renderedContent=content;
@@ -564,6 +628,13 @@ async function init(){
 
   // 按下标题栏 → 系统原生接管拖动（可跨屏）；必须把按下时的坐标传过去，
   // 桥有延迟，Python 侧再用当前光标会算错抓取点
+  const list = $('list');
+  list.addEventListener('pointerdown', cardDragStart);
+  list.addEventListener('pointermove', cardDragMove);
+  list.addEventListener('pointerup', cardDragEnd);
+  list.addEventListener('pointercancel', cardDragEnd);
+  $('orderReset').onclick = resetCardOrder;
+
   const hdr = $('hdr');
   hdr.addEventListener('pointerdown', e=>{
     if(e.target.closest('.ico')) return;

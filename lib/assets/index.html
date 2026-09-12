@@ -196,7 +196,11 @@
   .wrow.warn .txt { color:var(--warn); }
   .wrow.money .txt { color:var(--muted); font-variant-numeric:tabular-nums; }
   .wrow.money.neg .txt { color:var(--bad); }
-  .wrow .rst[title] { cursor:help; }
+  .wrow .rst-toggle { flex:1; text-align:right; background:none; border:0; padding:0;
+    font:inherit; font-size:9.5px; color:var(--faint); white-space:nowrap; cursor:pointer;
+    font-variant-numeric:tabular-nums; }
+  .wrow .rst-toggle:hover { color:var(--text); text-decoration:underline dotted; }
+  .wrow .rst-toggle:focus-visible { outline:1px dotted var(--muted); outline-offset:2px; }
   .credits { margin:8px 0 2px; padding:6px 9px; border:1px solid var(--line-soft); border-radius:9px; }
   .credits-head { font-size:10px; color:var(--faint); margin-bottom:2px; }
   .credit-row { display:flex; align-items:baseline; gap:7px; padding:2px 0; font-size:10.5px; }
@@ -755,6 +759,9 @@ function textRowClass(text){
   if (/¥|\$|balance/i.test(text)) return 'money' + (/-/.test(text) ? ' neg' : '');
   return 'info';
 }
+function planTip(item){
+  return item.plan_detail ? `${item.plan} · 接口原值 ${item.plan_detail}` : (item.plan || '');
+}
 function pillClass(plan){
   if (/不可用|欠费|过期|失效/.test(plan || '')) return 'bad';
   if (/free|免费/i.test(plan || '')) return 'warn';
@@ -828,17 +835,59 @@ function creditBlock(item){
   return `<div class="credits"><div class="credits-head">重置卡 · 可用 ${avail} / 共 ${credits.length} 张</div>${rows}</div>`;
 }
 
+/* 重置时间的倒计时/绝对时间切换，与悬浮窗共用一套状态模型 */
+let resetModes = {};
+try { resetModes = JSON.parse(localStorage.getItem('quota-reset-modes') || '{}') || {}; } catch(e) { resetModes = {}; }
+function quotaCountdown(ts){
+  const s = Math.floor(ts - Date.now() / 1000);
+  if (s <= 0) return '待重置';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  const pad = n => String(n).padStart(2, '0');
+  if (d) return `${d}d${pad(h)}h${pad(m)}m`;
+  if (h) return `${h}h${pad(m)}m`;
+  return m ? `${m}m` : '<1m';
+}
+function quotaResetAt(ts){
+  const d = new Date(ts * 1000), p2 = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+function resetLabel(ts, absolute){
+  return absolute ? `重置于 ${quotaResetAt(ts)}` : `${quotaCountdown(ts)} · ${fmtResetAt(ts)}`;
+}
+function resetTip(ts, absolute){
+  return `额度重置时间：${new Date(ts * 1000).toLocaleString('zh-CN', {hour12:false})}；点击切换${absolute ? '倒计时' : '重置时间'}`;
+}
+function toggleResetTime(button){
+  const key = button.dataset.resetKey, ts = Number(button.dataset.resetTs);
+  const absolute = resetModes[key] !== true;
+  resetModes[key] = absolute;
+  button.textContent = resetLabel(ts, absolute);
+  button.title = resetTip(ts, absolute);
+  button.setAttribute('aria-pressed', String(absolute));
+  try { localStorage.setItem('quota-reset-modes', JSON.stringify(resetModes)); } catch(e) {}
+}
+// Only the countdown half moves; rows pinned to absolute time are left alone.
+function updateCountdowns(){
+  document.querySelectorAll('.rst-toggle[data-reset-ts]').forEach(el => {
+    if (resetModes[el.dataset.resetKey] !== true) el.textContent = resetLabel(Number(el.dataset.resetTs), false);
+  });
+}
+
 /* 两行式额度行（同悬浮窗）：名称+重置+百分比一行，细条整行 */
-function winRow(w){
+function winRow(w, account){
   if (w.text != null) {
     return `<div class="wrow ${textRowClass(w.text)}"><span class="lbl">${esc(w.name)}</span><span class="txt">${esc(w.text)}</span></div>`;
   }
   const p = Math.max(0, Math.min(100, Math.round((w.remaining_percent || 0) * 10) / 10));
   const c = colorOf(p);
-  const exact = fmtResetAt(w.reset_ts);
-  const rst = [w.reset, exact].filter(Boolean).join(' · ');
-  const tip = w.reset_ts ? `重置时间 ${new Date(w.reset_ts * 1000).toLocaleString('zh-CN', {hour12:false})}` : '';
-  return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span><span class="rst"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rst)}</span><span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
+  const ts = Number(w.reset_ts);
+  const valid = Number.isFinite(ts) && ts > 0;
+  let time = `<span class="rst">${esc([w.reset, fmtResetAt(w.reset_ts)].filter(Boolean).join(' · '))}</span>`;
+  if (valid) {
+    const key = `${account || ''}|${w.name}`, absolute = resetModes[key] === true;
+    time = `<button type="button" class="rst rst-toggle" data-reset-ts="${ts}" data-reset-key="${esc(key)}" aria-pressed="${absolute}" title="${esc(resetTip(ts, absolute))}" onclick="toggleResetTime(this)">${esc(resetLabel(ts, absolute))}</button>`;
+  }
+  return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span>${time}<span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
 }
 function fmtActivation(iso){
   const d = new Date(iso);
@@ -1053,8 +1102,9 @@ function renderCards(){
       return `<span class="activation-badge ${esc(status)}" title="${esc(title)}">${esc(active.label)} ${state}${written?` · ${esc(written)}`:''}</span>`;
     }).join('');
     const subLine = subscriptionLine(item);
-    const wins = (item.windows || []).map(winRow).join('');
-    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(item.plan)}">${esc(item.plan)}</span>` : '';
+    const accountKey = `${item.provider}:${item.identity || item.email || item.title}`;
+    const wins = (item.windows || []).map(w => winRow(w, accountKey)).join('');
+    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(planTip(item))}">${esc(item.plan)}</span>` : '';
     const credit = item.reset_credits || {};
     const creditTotal = Number.isFinite(credit.available_count) ? credit.available_count : null;
     const creditNow = Number.isFinite(credit.applicable_available_count) ? credit.applicable_available_count : null;
@@ -1338,7 +1388,7 @@ function renderHistory(){
   historyItems.forEach((item, i) => {
     const div = document.createElement('div');
     const who = [item.email, item.name].filter(Boolean).join(' · ') || item.identity || '';
-    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}">${esc(item.plan)}</span>` : '';
+    const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(planTip(item))}">${esc(item.plan)}</span>` : '';
     div.className = 'history-item';
     if (entrance) div.style.animationDelay = (i * 25) + 'ms';
     else div.style.animation = 'none';
@@ -1749,6 +1799,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd()
     refreshMs = (cfg.watch_seconds ?? 60) * 1000;
   } catch(e) {}
   armTimer();
+  setInterval(updateCountdowns, 30000);
   refreshQuota(false);
   if (new URLSearchParams(location.search).get('add') === '1') openAdd();
 })();

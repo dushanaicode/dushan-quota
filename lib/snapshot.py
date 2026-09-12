@@ -25,7 +25,7 @@ from .store import store_dir
 # Version display-only cache records whenever normalized result fields change.
 # A mismatch forces a fresh provider read instead of decoding an old record as
 # if newly added fields were explicitly unavailable.
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 5
 _LOCK_STALE_SECONDS = 75.0
 _LOCK_WAIT_SECONDS = 45.0
 _LOCK_POLL_SECONDS = 0.1
@@ -290,6 +290,7 @@ def _encode_result(item: QuotaResult) -> dict:
         "name": item.name,
         "user_id": item.user_id,
         "plan": item.plan,
+        "plan_detail": item.plan_detail,
         "auth_mode": item.auth_mode,
         "sub_start": item.sub_start,
         "sub_end": item.sub_end,
@@ -338,6 +339,7 @@ def _decode_result(raw: dict) -> QuotaResult:
         name=str(raw.get("name") or ""),
         user_id=str(raw.get("user_id") or ""),
         plan=str(raw.get("plan") or ""),
+        plan_detail=str(raw.get("plan_detail") or ""),
         auth_mode=str(raw.get("auth_mode") or ""),
         sub_start=str(raw.get("sub_start") or ""),
         sub_end=str(raw.get("sub_end") or ""),

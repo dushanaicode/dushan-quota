@@ -11,6 +11,7 @@ def _window_name(value: str) -> str:
         "auto + composer": "自动模式 + Composer 额度",
         "five_hour": "5 小时额度", "seven_day": "周额度",
         "seven_day_oauth": "OAuth 周额度", "extra_usage": "额外用量",
+        "extra usage": "额外用量",
     }
     if name.lower() in labels:
         return labels[name.lower()]

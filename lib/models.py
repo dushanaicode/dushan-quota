@@ -90,3 +90,6 @@ class QuotaResult:
     sub_start: str = ""
     sub_end: str = ""
     sub_status: str = ""
+    # Raw provider fields the plan label was derived from, so the UI can show
+    # what the account actually reports instead of only the friendly name.
+    plan_detail: str = ""

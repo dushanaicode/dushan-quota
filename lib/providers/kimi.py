@@ -45,9 +45,40 @@ def fetch(account: Account) -> QuotaResult:
         email=profile.get("email") or account.email,
         name=profile.get("name") or account.name,
         user_id=profile.get("user_id") or account.user_id or f"key ****{api_key[-4:]}",
-        plan=profile.get("plan") or account.plan or "Kimi Code",
+        plan=_plan_label(payload if isinstance(payload, dict) else {}) or profile.get("plan") or account.plan or "Kimi Code",
+        plan_detail=_plan_detail(payload if isinstance(payload, dict) else {}),
         auth_mode=account.auth_mode or "api_key",
     )
+
+
+def _plan_label(payload: dict) -> str:
+    """usages.user.membership.level is Kimi's only plan signal.
+
+    It is an enum (LEVEL_BASIC / LEVEL_INTERMEDIATE / LEVEL_ADVANCED) rather
+    than a marketing name, so it is rendered as-is instead of being guessed at.
+    """
+    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    membership = user.get("membership") if isinstance(user.get("membership"), dict) else {}
+    level = str(membership.get("level") or "").strip()
+    if not level:
+        return ""
+    tier = level[len("LEVEL_"):] if level.upper().startswith("LEVEL_") else level
+    name = " ".join(word.capitalize() for word in tier.replace("-", "_").split("_") if word)
+    label = f"Kimi Code {name}".strip()
+    return f"{label} 试用" if "TRIAL" in str(payload.get("subType") or "").upper() else label
+
+
+def _plan_detail(payload: dict) -> str:
+    """The raw fields the label came from, so the UI can show the evidence."""
+    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    membership = user.get("membership") if isinstance(user.get("membership"), dict) else {}
+    fields = [
+        ("membership.level", membership.get("level")),
+        ("subType", payload.get("subType")),
+        ("authentication.scope", (payload.get("authentication") or {}).get("scope")
+         if isinstance(payload.get("authentication"), dict) else None),
+    ]
+    return " · ".join(f"{key}={value}" for key, value in fields if value)
 
 
 def _profile(api_key: str, payload: dict) -> dict:
@@ -56,7 +87,7 @@ def _profile(api_key: str, payload: dict) -> dict:
         if isinstance(value, dict):
             email = value.get("email") or ""
             name = value.get("name") or value.get("nickname") or ""
-            user_id = value.get("id") or value.get("user_id") or ""
+            user_id = value.get("id") or value.get("user_id") or value.get("userId") or ""
             if email or name or user_id:
                 return {"email": str(email), "name": str(name), "user_id": str(user_id), "plan": str(value.get("plan") or "")}
     for url in ("https://api.kimi.com/coding/v1/user", "https://api.kimi.com/coding/v1/me"):

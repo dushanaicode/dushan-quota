@@ -597,6 +597,7 @@ def _quota_payload(force: bool = False):
             "name": item.name or item.account.name,
             "user_id": item.user_id or item.account.user_id,
             "plan": item.plan or item.account.plan,
+            "plan_detail": item.plan_detail,
             "auth_mode": item.auth_mode or item.account.auth_mode,
             "source": item.account.source,
             "sub_start": item.sub_start,

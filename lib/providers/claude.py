@@ -1,8 +1,37 @@
+import re
+
 from .. import tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
+# organization_type names the plan (claude_pro / claude_max / claude_team / ...)
+# while rate_limit_tier is the only place the Max multiplier appears, as
+# default_claude_max_5x / default_claude_max_20x.
+_MULTIPLIER_RE = re.compile(r"(\d+)x\b", re.I)
+
+# api/oauth/usage ships the real quota windows next to internal codename buckets
+# (nimbus_quill, tangelo, cinder_cove, juniper_tide, ...) that carry the exact
+# same {utilization, resets_at, *_dollars} shape. Windows are therefore matched
+# by name; anything that merely looks like a window is ignored.
+_WINDOW_LABELS = {
+    "five_hour": "5h quota",
+    "seven_day": "Week quota",
+    "seven_day_oauth": "OAuth Week quota",
+    "seven_day_oauth_apps": "OAuth Apps Week quota",
+    "seven_day_opus": "Opus Week quota",
+    "seven_day_sonnet": "Sonnet Week quota",
+    "seven_day_cowork": "Cowork Week quota",
+    "extra_usage": "Extra usage",
+}
+_WINDOW_ALIASES = {key.replace("_", ""): label for key, label in _WINDOW_LABELS.items()}
+# Per-model detail, not a window of its own.
+_SKIP_KEYS = {"sevendaybreakdown"}
+
+# limits[] restates the same windows and is the only source left if a payload
+# ever drops the top-level keys.
+_LIMIT_LABELS = {"session": "5h quota", "weekly_all": "Week quota"}
 
 
 def fetch(account: Account) -> QuotaResult:
@@ -18,55 +47,137 @@ def fetch(account: Account) -> QuotaResult:
     windows = _windows(data)
     if not windows:
         return QuotaResult(account=account, ok=False, title="Claude Code", error="未解析到额度窗口")
+    profile = _profile(access)
+    identity = _identity(profile)
     return QuotaResult(
         account=account,
         ok=True,
         title="Claude Code",
         windows=windows,
-        email=account.email,
-        name=account.name,
-        user_id=account.user_id or account.identity,
-        plan=account.plan or "Claude",
+        email=identity.get("email") or account.email,
+        name=identity.get("name") or account.name,
+        user_id=identity.get("user_id") or account.user_id or account.identity,
+        plan=_plan_label(profile) or account.plan or "Claude",
+        plan_detail=_plan_detail(profile),
         auth_mode=account.auth_mode or "oauth",
+        sub_start=identity.get("sub_start", ""),
     )
 
 
 def _usage(access: str):
-    return request_json(
-        USAGE_URL,
-        headers={
-            "Authorization": f"Bearer {access}",
-            "anthropic-beta": "oauth-2025-04-20",
-            "User-Agent": "dushan-quota/1.0",
-        },
-    )
+    return request_json(USAGE_URL, headers=_headers(access))
+
+
+def _headers(access: str) -> dict:
+    return {
+        "Authorization": f"Bearer {access}",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": "dushan-quota/1.0",
+    }
+
+
+def _profile(access: str) -> dict:
+    """Plan and account identity; the usage endpoint carries neither."""
+    status, _, data = request_json(PROFILE_URL, headers=_headers(access))
+    return data if status == 200 and isinstance(data, dict) else {}
+
+
+def _section(profile: dict, key: str) -> dict:
+    value = profile.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _identity(profile: dict) -> dict:
+    account = _section(profile, "account")
+    started = str(_section(profile, "organization").get("subscription_created_at") or "")
+    return {
+        "email": str(account.get("email") or ""),
+        "name": str(account.get("display_name") or account.get("full_name") or ""),
+        "user_id": str(account.get("uuid") or ""),
+        "sub_start": started,
+    }
+
+
+def _plan_detail(profile: dict) -> str:
+    """The raw fields the label came from, so the UI can show the evidence."""
+    organization = _section(profile, "organization")
+    account = _section(profile, "account")
+    fields = [
+        ("organization_type", organization.get("organization_type")),
+        ("rate_limit_tier", organization.get("rate_limit_tier")),
+        ("billing_type", organization.get("billing_type")),
+        ("has_claude_max", account.get("has_claude_max")),
+        ("has_claude_pro", account.get("has_claude_pro")),
+    ]
+    return " · ".join(f"{key}={value}" for key, value in fields if value not in (None, ""))
+
+
+def _plan_label(profile: dict) -> str:
+    """"Claude Pro" / "Claude Max 20x" from organization_type + rate_limit_tier."""
+    organization = _section(profile, "organization")
+    account = _section(profile, "account")
+    tier = str(organization.get("organization_type") or "").strip()
+    if not tier:
+        tier = "claude_max" if account.get("has_claude_max") else "claude_pro" if account.get("has_claude_pro") else ""
+    if not tier:
+        return ""
+    name = " ".join(word.capitalize() for word in tier.replace("-", "_").split("_") if word)
+    if not name.lower().startswith("claude"):
+        name = f"Claude {name}"
+    multiplier = _MULTIPLIER_RE.search(str(organization.get("rate_limit_tier") or ""))
+    if multiplier and not _MULTIPLIER_RE.search(name):
+        name = f"{name} {multiplier[1]}x"
+    return name
 
 
 def _windows(data: dict) -> list[Window]:
-    found: list[Window] = []
-    roots = [data]
-    for key in ("quota", "usage", "rate_limits", "rateLimits", "oauth_usage"):
-        value = data.get(key)
-        if isinstance(value, dict):
-            roots.append(value)
-    for root in roots:
-        for name, key in (
-            ("5h quota", "five_hour"),
-            ("Week quota", "seven_day"),
-            ("7d quota", "seven_day_oauth"),
-        ):
-            window = _parse(root.get(key) or root.get(key.replace("_", "")))
-            if window:
-                window.name = name
-                found.append(window)
+    """Keep one window per label, in the order the payload lists them."""
+    found: dict[str, Window] = {}
+    for root in _roots(data):
         for key, value in root.items():
-            if not isinstance(value, dict):
-                continue
-            parsed = _parse(value)
-            if parsed and all(item.name != key for item in found):
-                parsed.name = str(key)
-                found.append(parsed)
-    return found
+            _collect(found, _window_label(key), value)
+        for entry in root.get("limits") or ():
+            if isinstance(entry, dict):
+                _collect(found, _limit_label(entry.get("kind")), entry)
+    return list(found.values())
+
+
+def _roots(data: dict):
+    yield data
+    for key in ("quota", "usage", "rate_limits", "rateLimits", "oauth_usage"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            yield nested
+
+
+def _collect(found: dict[str, Window], name: str, value) -> None:
+    if not name or name in found:
+        return
+    window = _parse(value)
+    if window:
+        window.name = name
+        found[name] = window
+
+
+def _window_label(key) -> str:
+    name = str(key or "").strip()
+    alias = name.lower().replace("_", "")
+    if alias in _SKIP_KEYS:
+        return ""
+    label = _WINDOW_ALIASES.get(alias)
+    if label:
+        return label
+    # Weekly windows Anthropic adds later stay readable through their prefix.
+    return name if name.lower().startswith("seven_day_") else ""
+
+
+def _limit_label(kind) -> str:
+    name = str(kind or "").strip().lower()
+    if name in _LIMIT_LABELS:
+        return _LIMIT_LABELS[name]
+    if name.startswith("weekly_"):
+        return f"{name[len('weekly_'):].replace('_', ' ').title()} Week quota"
+    return ""
 
 
 def _parse(window) -> Window | None:
@@ -81,9 +192,10 @@ def _parse(window) -> Window | None:
         "usedPercent",
         "percent_used",
         "percentUsed",
+        "percent",
     ):
         value = window.get(key)
-        if isinstance(value, (int, float)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
             used = float(value)
             break
         if isinstance(value, str):

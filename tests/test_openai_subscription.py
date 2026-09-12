@@ -104,7 +104,7 @@ class OpenAISubscriptionTests(unittest.TestCase):
         result = openai.fetch(self.account)
 
         self.assertTrue(result.ok)
-        self.assertEqual("OpenAI (Pro)", result.plan)
+        self.assertEqual("OpenAI (Pro 20x)", result.plan)
         self.assertEqual("2099-01-02T03:04:05+00:00", result.sub_start)
         self.assertEqual("2099-02-03T04:05:06+00:00", result.sub_end)
         self.assertEqual("known", result.sub_status)
@@ -115,6 +115,33 @@ class OpenAISubscriptionTests(unittest.TestCase):
             "pro",
             self.id_token,
         )
+
+    def test_fetch_keeps_explicit_subtiers_from_existing_plan_sources(self):
+        for usage_plan, subscription_plan, token_plan, account_plan, expected in (
+            ("prolite", "pro", "pro", "", "OpenAI (Pro 5x)"),
+            ("pro", "prolite", "pro", "", "OpenAI (Pro 5x)"),
+            ("pro", "pro", "pro_lite", "", "OpenAI (Pro 5x)"),
+            ("pro", "pro", "pro", "pro-5x", "OpenAI (Pro 5x)"),
+            ("promax", "prolite", "pro", "prolite", "OpenAI (Pro 20x)"),
+            ("free", "prolite", "pro", "prolite", "OpenAI (Free)"),
+        ):
+            with self.subTest(usage=usage_plan, subscription=subscription_plan, token=token_plan, local=account_plan):
+                self.account.plan = account_plan
+                self.account.secret["id_token"] = _jwt({
+                    openai.OPENAI_AUTH_CLAIM: {"chatgpt_plan_type": token_plan},
+                })
+                data = {
+                    "plan_type": usage_plan,
+                    "rate_limit": {"primary_window": {"limit_window_seconds": 604800, "used_percent": 4}},
+                }
+                with patch.object(openai.tokenstore, "ensure_fresh", return_value="test-access"), patch.object(
+                    openai, "_usage", return_value=(200, "", data)
+                ), patch.object(openai, "_subscription_status", return_value=("", "", "unavailable", subscription_plan)):
+                    result = openai.fetch(self.account)
+                self.assertTrue(result.ok)
+                self.assertEqual(expected, result.plan)
+                if account_plan:
+                    self.assertIn(account_plan, result.plan_detail)
 
     @patch.object(openai, "request_json")
     def test_cockpit_endpoints_supply_start_and_entitlement_expiry(self, request_json):
@@ -307,7 +334,8 @@ class OpenAISubscriptionTests(unittest.TestCase):
             account=self.account,
             ok=True,
             title="OpenAI",
-            plan="OpenAI (Pro)",
+            plan="OpenAI (Pro 5x)",
+            plan_detail="plan_type=pro · account.plan=prolite",
             windows=[Window(name="Week quota", remaining_percent=96)],
             sub_start="2030-01-02T03:04:05+00:00",
             sub_end="2030-02-03T04:05:06+00:00",
@@ -327,8 +355,9 @@ class OpenAISubscriptionTests(unittest.TestCase):
             web_item = web._quota_payload()["results"][0]
             float_item = float_win._fetch_payload()["results"][0]
 
-        for field in ("sub_start", "sub_end", "sub_status"):
-            self.assertEqual(web_item[field], float_item[field])
+        for field in ("plan", "plan_detail", "sub_start", "sub_end", "sub_status"):
+            self.assertEqual(getattr(result, field), web_item[field])
+            self.assertEqual(getattr(result, field), float_item[field])
 
 
 if __name__ == "__main__":
