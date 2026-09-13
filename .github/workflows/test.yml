@@ -45,3 +45,9 @@ jobs:
         run: ${{ matrix.python }} -m unittest discover -s tests -q
       - name: UI state tests
         run: node tests/test_ui_state.cjs
+      - name: Install pipx for upgrade smoke test
+        if: github.event_name == 'workflow_dispatch'
+        run: ${{ matrix.python }} -m pip install --no-compile pipx==1.8.0
+      - name: Test installed menu upgrade with real pipx
+        if: github.event_name == 'workflow_dispatch'
+        run: ${{ matrix.python }} -B tests/smoke_pipx_upgrade.py

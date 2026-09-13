@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -93,7 +94,8 @@ class CliStartupTests(unittest.TestCase):
         recovered = "".join(line[12:-3].rstrip() for line in wrapped)
         self.assertEqual(address, recovered)
 
-    def test_upgrade_choice_prints_command_and_stops_launch(self):
+    @patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+    def test_upgrade_choice_executes_command_once_and_stops_launch(self, run):
         lines = []
 
         proceed = quota._startup_update(
@@ -106,6 +108,53 @@ class CliStartupTests(unittest.TestCase):
 
         self.assertFalse(proceed)
         self.assertIn(quota.UPGRADE_COMMAND, "\n".join(lines))
+        run.assert_called_once_with(
+            ["pipx", "upgrade", "--index-url", "https://pypi.org/simple", "--pip-args=pip==25.2", "dushan-quota"],
+            check=True,
+            shell=False,
+        )
+        self.assertIn("请重新运行 quota", "\n".join(lines))
+
+    @patch("subprocess.run")
+    def test_upgrade_failures_are_reported_without_retry_or_launch(self, run):
+        for error, expected in (
+            (FileNotFoundError("pipx"), "未找到 pipx"),
+            (subprocess.CalledProcessError(7, ["pipx"]), "退出码 7"),
+            (PermissionError("access denied"), "无法执行升级"),
+            (KeyboardInterrupt(), "已取消"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                run.reset_mock()
+                run.side_effect = error
+                lines = []
+                proceed = quota._startup_update(
+                    version="0.1.1",
+                    update_result={"ok": True, "update_available": True, "latest_version": "0.2.0"},
+                    input_fn=lambda _prompt: "1",
+                    output=lines.append,
+                    interactive=True,
+                )
+                self.assertFalse(proceed)
+                self.assertEqual(1, run.call_count)
+                self.assertIn(expected, "\n".join(lines))
+                self.assertNotIn("升级命令执行完成", "\n".join(lines))
+
+    @patch("subprocess.run")
+    @patch.object(quota.config, "load_config", side_effect=lambda: {"ignored_update_version": ""})
+    @patch.object(quota.config, "save_config")
+    def test_skip_and_noninteractive_launch_never_run_upgrade(self, save_config, _load_config, run):
+        for choice, interactive in (("2", True), ("", True), ("3", True), ("1", False)):
+            with self.subTest(choice=choice, interactive=interactive):
+                proceed = quota._startup_update(
+                    version="0.1.1",
+                    update_result={"ok": True, "update_available": True, "latest_version": "0.2.0"},
+                    input_fn=lambda _prompt: choice,
+                    output=lambda _line: None,
+                    interactive=interactive,
+                )
+                self.assertTrue(proceed)
+                run.assert_not_called()
+        save_config.assert_called_once_with({"ignored_update_version": "0.2.0"})
 
     @patch.object(quota.config, "save_config")
     @patch.object(quota.config, "load_config", return_value={"ignored_update_version": ""})

@@ -1,6 +1,8 @@
 import argparse
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 import unicodedata
 from pathlib import Path
@@ -270,7 +272,7 @@ def _startup_update(
     while True:
         choice = ask("[1] 升级  [2] 本次跳过  [3] 永久跳过此版本（默认 2）：").strip().lower()
         if choice in {"1", "u", "upgrade", "升级"}:
-            output("\n请先关闭正在运行的悬浮窗，再执行上方的升级命令。\n")
+            _run_upgrade(output)
             return False
         if choice in {"", "2", "s", "skip", "跳过"}:
             _status("muted", "更新", "已跳过本次提醒，继续启动。", output)
@@ -285,6 +287,22 @@ def _startup_update(
                 _status("muted", "更新", f"已永久跳过 v{latest}；未来更高版本仍会提醒。", output)
             return True
         output("请输入 1、2 或 3。")
+
+
+def _run_upgrade(output=print) -> None:
+    _status("info", "升级", "正在执行 pipx upgrade，完成后请重启已有悬浮窗。", output)
+    try:
+        subprocess.run(shlex.split(UPGRADE_COMMAND), check=True, shell=False)
+    except FileNotFoundError:
+        _status("warn", "升级", "未找到 pipx，请先安装 pipx 并确认它位于 PATH 中。", output)
+    except subprocess.CalledProcessError as error:
+        _status("warn", "升级", f"升级失败（退出码 {error.returncode}），请查看上方 pipx 输出。", output)
+    except OSError as error:
+        _status("warn", "升级", f"无法执行升级：{error}", output)
+    except KeyboardInterrupt:
+        _status("warn", "升级", "升级已取消。", output)
+    else:
+        _status("ok", "升级", "升级命令执行完成，请重新运行 quota。", output)
 
 
 def _print_upgrade_command(output=print) -> None:

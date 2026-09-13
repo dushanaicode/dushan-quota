@@ -51,7 +51,7 @@ pipx install --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-q
 quota
 ```
 
-`quota`、`quota float` 和本地 `quota-t` 都会显示彩色启动页，包含当前版本、最新 Release、GitHub 地址、Web 地址和完整升级命令。发现新版本时，可以查看升级命令、本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。`quota-t` 使用本地源码，页面中的 pipx 命令用于更新已安装的 `quota` 发行版。
+`quota`、`quota float` 和本地 `quota-t` 都会显示彩色启动页，包含当前版本、最新 Release、GitHub 地址、Web 地址和完整升级命令。发现新版本时，选择 `[1] 升级` 会在当前终端自动执行下方的 pipx 命令并显示进度；完成后重新运行 `quota`，已有悬浮窗需退出重开。也可以本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。`quota-t` 使用本地源码，此操作更新已安装的 `quota` 发行版。
 
 升级也使用同一份稳定约束：
 
