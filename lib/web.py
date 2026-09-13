@@ -292,13 +292,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 from .providers import openai as openai_provider
 
-                credit_id = payload.get("credit_id")
-                if not isinstance(credit_id, str) or not credit_id.strip():
-                    credit_id = None
                 result = openai_provider.reset_credits(
                     account,
                     confirmed=payload.get("confirmed") is True,
-                    credit_id=credit_id,
                 )
                 if result.get("ok") or result.get("uncertain"):
                     snapshot.invalidate()

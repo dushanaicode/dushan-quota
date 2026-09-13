@@ -13,6 +13,11 @@ ACCOUNT_CHECK_URL = f"https://chatgpt.com{ACCOUNT_CHECK_PATH}"
 SUBSCRIPTIONS_PATH = "/backend-api/subscriptions"
 SUBSCRIPTIONS_URL = f"https://chatgpt.com{SUBSCRIPTIONS_PATH}"
 RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+RESET_CREDITS_CONSUME_URL = f"{RESET_CREDITS_URL}/consume"
+CHATGPT_WEB_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+)
 WINDOW_KIND = {18000: "5h quota", 604800: "Week quota", 2592000: "Month quota", 2628000: "Month quota"}
 OPENAI_AUTH_CLAIM = "https://api.openai.com/auth"
 # Follow Cockpit's display convention: generic Pro is 20x, explicit Pro Lite is 5x.
@@ -155,20 +160,21 @@ def _usage(account: Account, access: str):
     return request_json(USAGE_URL, headers=headers)
 
 
-def reset_credits(account: Account, *, confirmed: bool = False, credit_id: str | None = None) -> dict:
+def reset_credits(account: Account, *, confirmed: bool = False) -> dict:
     try:
-        return _reset_account_credits(account, confirmed=confirmed, credit_id=credit_id)
+        return _reset_account_credits(account, confirmed=confirmed)
     except tokenstore.RefreshError as error:
         return {"ok": False, "error": str(error), "reauth_required": error.reauth}
 
 
-def _reset_account_credits(
-    account: Account,
-    *,
-    confirmed: bool = False,
-    credit_id: str | None = None,
-) -> dict:
-    """Consume one reset credit only after explicit confirmation and eligibility checks."""
+def _reset_account_credits(account: Account, *, confirmed: bool = False) -> dict:
+    """Consume one reset credit after explicit confirmation.
+
+    Mirrors Cockpit's contract: the consume endpoint takes only
+    ``redeem_request_id`` and the server decides which credit to redeem and
+    whether it currently applies. ``applicable_available_count`` in usage is
+    not a precondition, so it must not block the request locally.
+    """
     import uuid
 
     if not confirmed:
@@ -176,45 +182,18 @@ def _reset_account_credits(
     access = tokenstore.ensure_fresh(account)
     if not access:
         return {"ok": False, "error": "缺少 access token"}
-    status, _, usage = _usage(account, access)
-    if status == 401:
-        refreshed = tokenstore.refresh_account(account)
-        if refreshed:
-            access = refreshed
-            status, _, usage = _usage(account, access)
-    if status != 200 or not isinstance(usage, dict):
-        return {"ok": False, "error": "无法确认当前重置次数，为保护额度未执行"}
-    available, applicable = _credit_counts(usage)
-    if available is None or applicable is None:
-        return {"ok": False, "error": "服务器未返回完整的重置状态，为保护额度未执行"}
-    if available <= 0:
-        return {"ok": False, "error": "当前没有剩余的重置次数"}
-    if applicable <= 0:
-        return {
-            "ok": False,
-            "error": f"仍剩余 {available} 次，但当前暂不可用；未使用任何次数",
-        }
-    if credit_id:
-        chosen = next(
-            (c for c in _reset_credit_list(account, access) if c["id"] == credit_id),
-            None,
-        )
-        if chosen is None:
-            return {"ok": False, "error": "未找到这张重置卡（可能已被使用或过期），未使用任何次数"}
-        if chosen["status"] != "available":
-            return {"ok": False, "error": "这张重置卡当前不可用（可能已被使用或过期），未使用任何次数"}
 
-    redeem_id = uuid.uuid4().hex
-    status, text, data = _consume(account, access, redeem_id, credit_id=credit_id)
+    redeem_id = str(uuid.uuid4())
+    status, text, data = _consume(account, access, redeem_id)
     if status == 401:
         refreshed = tokenstore.refresh_account(account)
         if refreshed:
             access = refreshed
-            status, text, data = _consume(account, access, redeem_id, credit_id=credit_id)
+            status, text, data = _consume(account, access, redeem_id)
     if 200 <= status < 300:
         return {
             "ok": True,
-            "message": "已使用选定的重置卡" if credit_id else "已使用一次重置",
+            "message": "已使用一次重置",
             "data": data if isinstance(data, dict) else {},
         }
     if status == 0:
@@ -226,23 +205,30 @@ def _reset_account_credits(
     return {"ok": False, "error": f"{status} {text[:120]}"}
 
 
-def _consume(account: Account, access: str, redeem_id: str, credit_id: str | None = None):
+def _consume(account: Account, access: str, redeem_id: str):
+    # Same header set Cockpit sends to chatgpt.com for this POST.
     headers = {
         "Authorization": f"Bearer {access}",
+        "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "OpenCode-Quota-Toast/1.0",
+        "Referer": "https://chatgpt.com/",
+        "User-Agent": CHATGPT_WEB_USER_AGENT,
+        "OpenAI-Beta": "codex-1",
+        "oai-language": "zh-CN",
+        "originator": "Codex Desktop",
+        "sec-fetch-site": "none",
+        "sec-fetch-mode": "no-cors",
+        "sec-fetch-dest": "empty",
+        "priority": "u=4, i",
     }
     account_id = account.secret.get("account_id") or _account_id(access)
     if account_id:
-        headers["ChatGPT-Account-ID"] = account_id
-    body = {"redeem_request_id": redeem_id}
-    if credit_id:
-        body["credit_id"] = credit_id
+        headers["ChatGPT-Account-Id"] = account_id
     return request_json(
-        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+        RESET_CREDITS_CONSUME_URL,
         method="POST",
         headers=headers,
-        body=body,
+        body={"redeem_request_id": redeem_id},
     )
 
 

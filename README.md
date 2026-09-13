@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.6.7-C3B191" alt="Release v0.6.7">
+  <img src="https://img.shields.io/badge/Release-v0.6.8-C3B191" alt="Release v0.6.8">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -230,8 +230,7 @@ Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个
 - `accounts.json` 和 `agent.db` 保存的是可用的完整凭证，不是系统钥匙串。请像保护 SSH Key 一样保护 Dushan Quota 数据目录，不要同步到网盘或提交到 Git。
 - `quota ui` 默认只绑定 `127.0.0.1:18765`。Web 后端没有登录认证和 TLS，**不要直接暴露到局域网或公网**。
 - 界面只展示脱敏后的 Key；共享快照不会写入 access token、refresh token 或 API Key。
-- OpenAI“重置额度”会消耗一次 reset credit，只有在界面明确确认且服务端状态完整时才会执行。
-- Web 端重置卡列表中可单独选择某一张卡使用（按 `credit_id` 消费，消费前会重新验证该卡仍为可用状态）；不指定时由服务端分配。
+- OpenAI“重置额度”会消耗一次 reset credit，只有在界面明确确认后才会执行；使用哪张重置卡、当前是否适用由服务端决定，Web 端重置卡列表仅作展示。
 
 ## 升级与开发
 

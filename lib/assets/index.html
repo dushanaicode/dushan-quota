@@ -210,11 +210,6 @@
   .credit-row .c-state.expired { color:var(--bad); }
   .credit-row .c-title { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .credit-row .c-exp { flex:1; text-align:right; color:var(--faint); white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .credit-row .c-use { flex:none; border:1px solid var(--line); background:transparent; color:var(--muted);
-    font-size:9.5px; padding:1px 8px; border-radius:99px; cursor:pointer; }
-  .credit-row .c-use:hover { color:var(--text); }
-  .credit-row .c-use.arm { color:var(--warn); border-color:rgba(207,154,46,.4); }
-  .credit-row .c-use:disabled { opacity:.5; cursor:default; }
   .err { color:var(--bad); font-size:12px; padding:6px 0 2px; }
   .foot { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
   .foot .btn { padding:4px 11px; font-size:11px; color:var(--muted); border-radius:8px; }
@@ -826,10 +821,7 @@ function creditBlock(item){
     const when = valid ? `${fmtResetAt(exp.getTime() / 1000)} 到期` : '';
     const left = valid && c.status === 'available' ? resetCountdown(exp.getTime()) : '';
     const full = valid ? `过期时间 ${exp.toLocaleString('zh-CN', {hour12:false})}` : '';
-    const usable = c.status === 'available' && c.id
-      ? `<button class="c-use" data-id="${esc(c.id)}" data-label="使用" title="仅消费这一张重置卡${full ? '，' + esc(full) : ''}">使用</button>`
-      : '';
-    return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span>${usable}</div>`;
+    return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span></div>`;
   }).join('');
   const avail = credits.filter(c => c.status === 'available').length;
   return `<div class="credits"><div class="credits-head">重置卡 · 可用 ${avail} / 共 ${credits.length} 张</div>${rows}</div>`;
@@ -1107,22 +1099,13 @@ function renderCards(){
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(planTip(item))}">${esc(item.plan)}</span>` : '';
     const credit = item.reset_credits || {};
     const creditTotal = Number.isFinite(credit.available_count) ? credit.available_count : null;
-    const creditNow = Number.isFinite(credit.applicable_available_count) ? credit.applicable_available_count : null;
-    // The card comes from a shared snapshot, so applicable_available_count may
-    // be stale or temporarily absent. Let an account with banked credits enter
-    // the confirmation flow; /api/reset re-fetches usage and fails closed before
-    // consuming anything when the credit is not currently applicable.
+    // 消费接口只接受 redeem_request_id，由服务端选择重置卡并判断是否适用。
     const creditAvailable = creditTotal > 0;
     const resetLabel = creditAvailable
       ? `使用重置次数（剩余 ${creditTotal}）`
       : (creditTotal === 0 ? '无重置次数' : '重置状态未知');
-    const resetTitle = creditAvailable
-      ? (creditNow > 0 ? '将消费一次重置次数，需要再次确认' : '点击后实时校验当前是否可用；不可用时不会消费次数')
-      : '当前没有可用的重置次数';
-    // 已拿到逐张重置卡列表时由卡片行内的"使用"按钮接管；底部按钮仅在
-    // 列表缺失（拉取失败）但确认仍有剩余次数时兜底显示，走服务端分配。
-    const hasCardList = Array.isArray(credit.credits) && credit.credits.length > 0;
-    const resetButton = item.provider === 'openai' && !hasCardList
+    const resetTitle = creditAvailable ? '将消费一次重置次数，需要再次确认' : '当前没有可用的重置次数';
+    const resetButton = item.provider === 'openai'
       ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditAvailable ? '' : 'disabled'} title="${esc(resetTitle)}">${esc(resetLabel)}</button>`
       : '';
     const usageButton = item.usage_supported
@@ -1158,9 +1141,6 @@ function renderCards(){
     if (ub) ub.onclick = () => openUsage(item);
     const rb = sec.querySelector('.act-reset');
     if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
-    sec.querySelectorAll('.c-use').forEach(btn => {
-      btn.onclick = e => { e.stopPropagation(); resetOpenAI(item, e.currentTarget, btn.dataset.id); };
-    });
     box.appendChild(sec);
   });
 }
@@ -1211,7 +1191,7 @@ async function confirmCloseCard(){
   }
 }
 
-async function resetOpenAI(item, btn, creditId){
+async function resetOpenAI(item, btn){
   if (!btn.dataset.arm) {
     btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认使用 1 次';
     setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = btn.dataset.label || '使用重置次数'; }, 2600);
@@ -1221,7 +1201,7 @@ async function resetOpenAI(item, btn, creditId){
   btn.classList.remove('arm');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>重置中';
   try {
-    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity, credit_id:creditId || undefined, confirmed:true})});
+    const r = await api('/api/reset', {method:'POST', body:JSON.stringify({provider:item.provider, identity:item.identity, confirmed:true})});
     toast(r.ok ? (r.message || '已重置') : (r.error || '重置失败'), !r.ok);
   } catch(e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.textContent = btn.dataset.label || '使用重置次数'; refreshQuota(false); }

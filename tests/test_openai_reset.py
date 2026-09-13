@@ -83,135 +83,22 @@ class OpenAIResetTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         consume.assert_not_called()
 
-    @patch.object(openai, "_consume")
-    @patch.object(openai, "_usage")
-    def test_does_not_consume_when_credit_is_not_applicable(self, usage, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 1,
-                    "applicable_available_count": 0,
-                }
-            },
-        )
-        result = openai.reset_credits(self.account, confirmed=True)
-        self.assertFalse(result["ok"])
-        self.assertIn("仍剩余 1 次", result["error"])
-        consume.assert_not_called()
-
-    @patch.object(openai, "_consume")
-    @patch.object(openai, "_usage")
-    def test_fails_closed_when_eligibility_is_unknown(self, usage, consume):
-        usage.return_value = (200, "", {"rate_limit_reset_credits": {"available_count": 1}})
-        result = openai.reset_credits(self.account, confirmed=True)
-        self.assertFalse(result["ok"])
-        self.assertIn("未返回完整", result["error"])
-        consume.assert_not_called()
-
+    @patch.object(openai.tokenstore, "ensure_fresh", return_value="test-access")
     @patch.object(openai, "_consume", return_value=(200, "", {"ok": True}))
-    @patch.object(openai, "_usage")
-    def test_eligible_credit_reaches_mocked_consumer_once(self, usage, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 1,
-                    "applicable_available_count": 1,
-                }
-            },
-        )
+    def test_confirmed_reset_posts_once_without_local_applicable_gate(self, consume, _fresh):
         result = openai.reset_credits(self.account, confirmed=True)
         self.assertTrue(result["ok"])
         consume.assert_called_once()
 
-    @patch.object(openai, "_consume", return_value=(200, "", {"code": "reset"}))
-    @patch.object(openai, "_reset_credit_list")
-    @patch.object(openai, "_usage")
-    def test_selected_credit_is_consumed_by_id(self, usage, credit_list, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 2,
-                    "applicable_available_count": 1,
-                }
-            },
-        )
-        credit_list.return_value = [
-            {"id": "RateLimitResetCredit_1", "status": "available"},
-            {"id": "RateLimitResetCredit_2", "status": "available"},
-        ]
-        result = openai.reset_credits(self.account, confirmed=True, credit_id="RateLimitResetCredit_2")
-        self.assertTrue(result["ok"])
-        self.assertEqual("已使用选定的重置卡", result["message"])
-        self.assertEqual("RateLimitResetCredit_2", consume.call_args.kwargs["credit_id"])
-
-    @patch.object(openai, "_consume")
-    @patch.object(openai, "_reset_credit_list", return_value=[])
-    @patch.object(openai, "_usage")
-    def test_unknown_credit_id_fails_closed(self, usage, credit_list, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 1,
-                    "applicable_available_count": 1,
-                }
-            },
-        )
-        result = openai.reset_credits(self.account, confirmed=True, credit_id="RateLimitResetCredit_gone")
-        self.assertFalse(result["ok"])
-        self.assertIn("未找到这张重置卡", result["error"])
-        consume.assert_not_called()
-
-    @patch.object(openai, "_consume")
-    @patch.object(openai, "_reset_credit_list")
-    @patch.object(openai, "_usage")
-    def test_unavailable_credit_is_never_consumed(self, usage, credit_list, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 1,
-                    "applicable_available_count": 1,
-                }
-            },
-        )
-        credit_list.return_value = [{"id": "RateLimitResetCredit_1", "status": "redeemed"}]
-        result = openai.reset_credits(self.account, confirmed=True, credit_id="RateLimitResetCredit_1")
-        self.assertFalse(result["ok"])
-        self.assertIn("不可用", result["error"])
-        consume.assert_not_called()
-
     @patch.object(openai, "request_json", return_value=(200, "", {"code": "reset"}))
-    def test_consume_body_includes_credit_id_only_when_selected(self, request):
-        openai._consume(self.account, "test-access", "rid-1", credit_id="RateLimitResetCredit_1")
-        self.assertEqual(
-            {"redeem_request_id": "rid-1", "credit_id": "RateLimitResetCredit_1"},
-            request.call_args.kwargs["body"],
-        )
-        openai._consume(self.account, "test-access", "rid-2")
-        self.assertEqual({"redeem_request_id": "rid-2"}, request.call_args.kwargs["body"])
+    def test_consume_body_is_only_redeem_request_id(self, request):
+        openai._consume(self.account, "test-access", "rid-1")
+        self.assertEqual({"redeem_request_id": "rid-1"}, request.call_args.kwargs["body"])
+        self.assertEqual(openai.RESET_CREDITS_CONSUME_URL, request.call_args.args[0])
 
+    @patch.object(openai.tokenstore, "ensure_fresh", return_value="test-access")
     @patch.object(openai, "_consume", return_value=(0, "timeout", None))
-    @patch.object(openai, "_usage")
-    def test_ambiguous_consume_result_warns_against_retry(self, usage, consume):
-        usage.return_value = (
-            200,
-            "",
-            {
-                "rate_limit_reset_credits": {
-                    "available_count": 1,
-                    "applicable_available_count": 1,
-                }
-            },
-        )
+    def test_ambiguous_consume_result_warns_against_retry(self, consume, _fresh):
         result = openai.reset_credits(self.account, confirmed=True)
         self.assertFalse(result["ok"])
         self.assertTrue(result["uncertain"])
