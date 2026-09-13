@@ -44,6 +44,18 @@ def _http_error(status, body=b'{}', headers=None):
 class RequestJsonRetryTests(unittest.TestCase):
     @patch.object(httputil.time, "sleep")
     @patch.object(httputil.urllib.request, "urlopen")
+    def test_caller_can_disable_all_immediate_retries(self, urlopen, sleep):
+        for error in (_http_error(429), _http_error(503), TimeoutError("offline")):
+            with self.subTest(error=type(error).__name__):
+                urlopen.reset_mock()
+                urlopen.side_effect = error
+                status, _, _ = httputil.request_json("https://example.test/quota", retry=False)
+                self.assertNotEqual(200, status)
+                self.assertEqual(1, urlopen.call_count)
+                sleep.assert_not_called()
+
+    @patch.object(httputil.time, "sleep")
+    @patch.object(httputil.urllib.request, "urlopen")
     def test_get_retries_incomplete_read_then_succeeds(self, urlopen, sleep):
         urlopen.side_effect = [
             _Response(read_error=http.client.IncompleteRead(b"x" * 1030, 478)),

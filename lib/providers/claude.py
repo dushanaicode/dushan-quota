@@ -35,25 +35,40 @@ _LIMIT_LABELS = {"session": "5h quota", "weekly_all": "Week quota"}
 
 
 def fetch(account: Account) -> QuotaResult:
+    try:
+        return _fetch(account)
+    except tokenstore.RefreshError as error:
+        return _failure(account, str(error))
+
+
+def _fetch(account: Account) -> QuotaResult:
+    previous = dict(account.secret)
     access = tokenstore.ensure_fresh(account)
     if not access:
-        return QuotaResult(account=account, ok=False, title="Claude Code", error="缺少 access token")
-    status, text, data = _usage(access)
-    if status == 401:
-        access = tokenstore.refresh_account(account) or access
-        status, text, data = _usage(access)
+        return _failure(account, "缺少 access token，请在 Claude Code 重新登录")
+    status, _, data = _usage(access)
+    if status == 401 and account.secret == previous:
+        refreshed = tokenstore.refresh_account(account)
+        if refreshed and refreshed != access:
+            access = refreshed
+            status, _, data = _usage(access)
     if status != 200 or not isinstance(data, dict):
-        return QuotaResult(account=account, ok=False, title="Claude Code", error=f"{status} {text[:80]}")
+        return _failure(account, _request_error(status))
     windows = _windows(data)
     if not windows:
-        return QuotaResult(account=account, ok=False, title="Claude Code", error="未解析到额度窗口")
-    profile = _profile(access)
+        return _failure(account, "未解析到额度窗口")
+    profile_status, _, profile = _profile(access)
+    profile_error = ""
+    if profile_status != 200 or not isinstance(profile, dict):
+        profile_error = _paused(f"账号信息查询失败：{_request_error(profile_status)}")
+        profile = {}
     identity = _identity(profile)
     return QuotaResult(
         account=account,
         ok=True,
         title="Claude Code",
         windows=windows,
+        error=profile_error,
         email=identity.get("email") or account.email,
         name=identity.get("name") or account.name,
         user_id=identity.get("user_id") or account.user_id or account.identity,
@@ -65,7 +80,27 @@ def fetch(account: Account) -> QuotaResult:
 
 
 def _usage(access: str):
-    return request_json(USAGE_URL, headers=_headers(access))
+    return request_json(USAGE_URL, headers=_headers(access), retry=False)
+
+
+def _paused(message: str) -> str:
+    return f"{message}；已暂停自动查询，请稍后手动刷新"
+
+
+def _failure(account: Account, message: str) -> QuotaResult:
+    return QuotaResult(account=account, ok=False, title="Claude Code", error=_paused(message))
+
+
+def _request_error(status: int) -> str:
+    if status == 0:
+        return "网络连接失败，请检查网络"
+    if status == 429:
+        return "请求受限（429），请等待限流解除"
+    if status in {401, 403}:
+        return f"认证失败（{status}），请在 Claude Code 重新登录"
+    if status == 200:
+        return "服务响应格式异常"
+    return f"请求失败（HTTP {status}）"
 
 
 def _headers(access: str) -> dict:
@@ -76,10 +111,9 @@ def _headers(access: str) -> dict:
     }
 
 
-def _profile(access: str) -> dict:
+def _profile(access: str):
     """Plan and account identity; the usage endpoint carries neither."""
-    status, _, data = request_json(PROFILE_URL, headers=_headers(access))
-    return data if status == 200 and isinstance(data, dict) else {}
+    return request_json(PROFILE_URL, headers=_headers(access), retry=False)
 
 
 def _section(profile: dict, key: str) -> dict:

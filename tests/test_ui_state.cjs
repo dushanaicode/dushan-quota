@@ -47,6 +47,9 @@ async function main() {
   const grok = {title: 'xAI', provider: 'grok', identity: 'x', ok: true, windows: [],
     usage: [{...row, harness: 'grok_cli', label: 'Grok CLI'}], harnesses: [{key: 'grok_cli', label: 'Grok CLI'}]};
   const saved = [];
+  const pausedClaude = {title: 'Claude Code', provider: 'claude', identity: 'c', ok: true,
+    windows: [{name: '5 小时额度', remaining_percent: 88}],
+    error: '账号信息查询失败：请求受限（429）；已暂停自动查询，请稍后手动刷新'};
   const floating = context();
   vm.runInContext(script('float.html'), floating);
   const now = Date.UTC(2030, 0, 1);
@@ -179,6 +182,10 @@ async function main() {
   }
 
   const storage = new Map();
+  floating.render([pausedClaude]);
+  assert(floating.get('list').innerHTML.includes('88%'));
+  assert(floating.get('list').innerHTML.includes(pausedClaude.error),
+    'A profile failure must keep valid quota and visibly explain the pause');
   const web = context(storage);
   const source = script('index.html');
   const usageSource = source.slice(source.indexOf('function compactNumber'), source.indexOf('function renderSide'));

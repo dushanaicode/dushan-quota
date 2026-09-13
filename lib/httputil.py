@@ -13,7 +13,7 @@ _RETRYABLE_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_RETRY_AFTER_SECONDS = 30.0
 
 
-def request_json(url, method="GET", headers=None, body=None, timeout=20):
+def request_json(url, method="GET", headers=None, body=None, timeout=20, *, retry=True):
     data = None
     req_headers = dict(headers or {})
     if body is not None:
@@ -21,7 +21,7 @@ def request_json(url, method="GET", headers=None, body=None, timeout=20):
         data = raw
         req_headers.setdefault("Content-Type", "application/json")
     normalized_method = str(method or "GET").upper()
-    retry_delays = _GET_RETRY_DELAYS if normalized_method == "GET" and body is None else ()
+    retry_delays = _GET_RETRY_DELAYS if retry and normalized_method == "GET" and body is None else ()
 
     for attempt in range(len(retry_delays) + 1):
         request = urllib.request.Request(

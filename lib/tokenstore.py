@@ -5,7 +5,9 @@
 - Cursor Agent 的 crsr_ Key 走 auth/exchange_user_api_key（provider 内自处理，不经本模块）。
 """
 
+import http.client
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -22,7 +24,7 @@ XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
 OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
-CLAUDE_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
+CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CURSOR_TOKEN_URL = "https://api2.cursor.sh/oauth/token"
 CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
@@ -91,6 +93,8 @@ def ensure_fresh(account) -> str:
                 return refresh_account(account) or ""
             return access
     access = account.secret.get("access") or ""
+    if account.provider == "claude" and not access and account.secret.get("refresh"):
+        return refresh_account(account) or ""
     if not access:
         return ""
     expiry = _expiry_ts(account)
@@ -117,14 +121,15 @@ def refresh_account(account) -> str | None:
 def _refresh_account(account) -> str | None:
     """按平台刷新 access token，写中央库并回写来源。返回新 access 或 None。"""
     refresh = (account.secret.get("refresh") or "").strip()
+    strict = account.provider in {"openai", "claude"}
     if not refresh:
-        if account.provider == "openai":
+        if strict:
             raise RefreshError("missing_refresh", "缺少续期凭据，请重新授权此账号", reauth=True)
         return None
     handler = {
         "grok": lambda: _form_post(XAI_TOKEN_URL, {"grant_type": "refresh_token", "client_id": XAI_CLIENT_ID, "refresh_token": refresh}),
         "openai": lambda: _refresh_openai(refresh),
-        "claude": lambda: _form_post(CLAUDE_TOKEN_URL, {"grant_type": "refresh_token", "client_id": CLAUDE_CLIENT_ID, "refresh_token": refresh}),
+        "claude": lambda: _json_post(CLAUDE_TOKEN_URL, {"grant_type": "refresh_token", "client_id": CLAUDE_CLIENT_ID, "refresh_token": refresh}, strict=True),
         "cursor": lambda: _json_post(CURSOR_TOKEN_URL, {"grant_type": "refresh_token", "client_id": CURSOR_CLIENT_ID, "refresh_token": refresh}),
         "antigravity": lambda: _refresh_google(refresh),
     }.get(account.provider)
@@ -132,29 +137,35 @@ def _refresh_account(account) -> str | None:
         return None
     token = handler()
     if not isinstance(token, dict):
-        if account.provider == "openai":
+        if strict:
             raise RefreshError("invalid_response", "续期服务未返回有效凭据，请稍后重试")
         return None
     if token.get("shouldLogout"):
-        if account.provider == "openai":
+        if strict:
             raise RefreshError("session_expired", "登录会话已失效，请重新授权此账号", reauth=True)
         return None
     access = token.get("access_token") or ""
     if not access or not isinstance(access, str):
-        if account.provider == "openai":
+        if strict:
             raise RefreshError("invalid_response", "续期服务未返回访问令牌，请稍后重试")
         return None
     new_refresh = token.get("refresh_token") or refresh
     new_id_token = token.get("id_token") or account.secret.get("id_token") or ""
+    if strict and not isinstance(new_refresh, str):
+        raise RefreshError("invalid_response", "续期服务响应异常，请稍后重试")
     if account.provider == "openai":
-        if not isinstance(new_refresh, str):
-            raise RefreshError("invalid_response", "续期服务响应异常，请稍后重试")
         expected = token_account_id(account.secret.get("access") or "") or account.secret.get("account_id") or account.user_id
         actual = token_account_id(access)
         if expected and actual and expected != actual:
             raise RefreshError("account_mismatch", "续期返回了其他账号的凭据，请重新授权此账号", reauth=True)
         new_id_token = matching_id_token(access, new_id_token, actual or expected or "")
     expires_in = token.get("expires_in")
+    if account.provider == "claude" and (
+        not isinstance(expires_in, (int, float)) or isinstance(expires_in, bool)
+        or not math.isfinite(expires_in) or expires_in <= 0
+    ):
+        raise RefreshError("invalid_response", "续期服务未返回有效过期时间，请稍后重试")
+    previous_access = account.secret.get("access") or ""
     account.secret["access"] = access
     account.secret["refresh"] = new_refresh
     if new_id_token or account.provider == "openai":
@@ -163,6 +174,8 @@ def _refresh_account(account) -> str | None:
         account.secret["expiry"] = int(time.time()) + int(expires_in)
         account.secret.pop("expires", None)
     record(account, access, new_refresh, expires_in)
+    if account.provider == "claude" and Path(account.source).is_absolute():
+        _write_claude_local(account, previous_access, refresh)
     _write_back(account, access, new_refresh, expires_in, new_id_token)
     return access
 
@@ -228,8 +241,10 @@ def _json_post(url: str, payload: dict, *, strict: bool = False):
                 body = json.loads(error.read().decode("utf-8"))
                 detail = body.get("error") if isinstance(body, dict) else None
                 code = detail.get("code") or detail.get("type") if isinstance(detail, dict) else detail
-            except (ValueError, OSError):
+            except (ValueError, OSError, http.client.HTTPException):
                 code = None
+            finally:
+                error.close()
             # Never expose response bodies: providers can echo credentials in them.
             reasons = {
                 "invalid_grant": "续期凭据已失效",
@@ -240,8 +255,9 @@ def _json_post(url: str, payload: dict, *, strict: bool = False):
             if isinstance(code, str) and code in reasons:
                 raise RefreshError(code, f"{reasons[code]}（{code}），请重新授权此账号", reauth=True) from None
             raise RefreshError(f"http_{error.code}", f"续期请求失败（HTTP {error.code}），请稍后重试") from None
+        error.close()
         return None
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, OSError, http.client.HTTPException):
         if strict:
             raise RefreshError("network_error", "续期时网络连接失败，请检查网络后重试") from None
         return None
@@ -297,6 +313,26 @@ def _write_back(account, access: str, refresh: str, expires_in, id_token: str = 
             _write_opencode(account, access, refresh, expires_in, id_token)
         if account.source != "official-grok":
             _write_grok_cli(account, access, refresh, expires_in)
+
+
+def _write_claude_local(account, previous_access: str, previous_refresh: str) -> None:
+    """Update only the local login whose tokens were used for this exchange."""
+    path = Path(account.source)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Claude credentials must be an object")
+        oauth = data.get("claudeAiOauth") if isinstance(data.get("claudeAiOauth"), dict) else data
+        access_key = "accessToken" if "accessToken" in oauth else "access_token"
+        refresh_key = "refreshToken" if "refreshToken" in oauth else "refresh_token"
+        if oauth.get(access_key) != previous_access or oauth.get(refresh_key) != previous_refresh:
+            return
+        oauth[access_key] = account.secret["access"]
+        oauth[refresh_key] = account.secret["refresh"]
+        oauth["expiresAt"] = int(_expiry_ts(account) * 1000)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except (OSError, ValueError) as error:
+        raise RefreshError("writeback_failed", "令牌已续期，但回写 Claude Code 登录文件失败，请检查文件权限") from error
 
 
 def _write_opencode(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:

@@ -69,6 +69,29 @@ class SnapshotTests(unittest.TestCase):
             snapshot.get_snapshot(force=True, max_age=300)
         self.assertEqual(2, fetch.call_count)
 
+    def test_failed_claude_stays_paused_across_auto_refreshes_until_manual_refresh(self):
+        claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1")
+        failure = QuotaResult(account=claude, ok=False, title="Claude Code", error="429，已暂停自动查询")
+        success = QuotaResult(account=claude, ok=True, title="Claude Code")
+        calls = []
+
+        def fetch(accounts):
+            calls.append([account.provider for account in accounts])
+            return [self.result if account.provider == "openai" else failure for account in accounts]
+
+        with patch.object(snapshot, "collect_accounts", return_value=[self.account, claude]), patch.object(
+            snapshot, "fetch_all", side_effect=fetch
+        ):
+            snapshot.get_snapshot(force=True)
+            for _ in range(3):
+                with patch.object(snapshot, "_is_fresh", return_value=False):
+                    paused = snapshot.get_snapshot()
+                self.assertEqual(failure.error, paused.results[1].error)
+            failure = success
+            resumed = snapshot.get_snapshot(force=True)
+        self.assertEqual([["openai", "claude"], ["openai"], ["openai"], ["openai"], ["openai", "claude"]], calls)
+        self.assertTrue(resumed.results[1].ok)
+
     def test_old_schema_is_refreshed_instead_of_inventing_missing_fields(self):
         path = snapshot.cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -552,7 +552,11 @@ def _from_claude_local(home: Path, add):
                 identity=oauth.get("email") or "claude-local",
                 auth_mode="oauth",
                 email=str(oauth.get("email") or ""),
-                secret={"access": str(access)},
+                secret={
+                    "access": str(access),
+                    "refresh": oauth.get("refreshToken") or oauth.get("refresh_token") or "",
+                    "expires": oauth.get("expiresAt"),
+                },
             )
         )
         return

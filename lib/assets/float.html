@@ -418,7 +418,8 @@ function render(items){
     html += `<div class="card" data-key="${esc(accountKey(it))}"><div class="name" title="按住上下拖动可调整顺序"><span class="grip" aria-hidden="true"></span><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
     const sub = S.show['#plan']!==false ? subscriptionText(it) : '';
     if(sub) html += `<div class="sub">${esc(sub)}</div>`;
-    html += it.ok ? it.windows.map(w=>row(w,accountKey(it))).join('') : `<div class="err">${esc(it.error||'失败')}</div>`;
+    if(it.ok) html += it.windows.map(w=>row(w,accountKey(it))).join('');
+    if(it.error || !it.ok) html += `<div class="err">${esc(it.error||'失败')}</div>`;
     html += usageBlock(it);
     html += `</div>`;
   }

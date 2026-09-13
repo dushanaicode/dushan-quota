@@ -1141,7 +1141,8 @@ function renderCards(){
       <div class="meta dim">${line2 || ' '}</div>
       ${activationLine?`<div class="activation-row">${activationLine}</div>`:''}
       ${subLine}
-      ${item.ok ? `<div class="wins">${wins}</div>` : `<div class="err">${esc(item.error || '获取失败')}</div>`}
+      ${item.ok ? `<div class="wins">${wins}</div>` : ''}
+      ${item.error || !item.ok ? `<div class="err">${esc(item.error || '获取失败')}</div>` : ''}
       ${creditBlock(item)}
       <div class="foot">
         ${usageButton}

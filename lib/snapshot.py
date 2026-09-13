@@ -11,11 +11,10 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from . import config
-from . import logbuf
+from . import config, logbuf
 from .discover import collect_accounts
 from .fetch import fetch_all
 from .models import Account, QuotaResult, Window
@@ -95,7 +94,20 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
             latest.from_cache = True
             return latest
 
-        results = fetch_all(collect_accounts())
+        accounts = collect_accounts()
+        # A failed Claude request stays paused across processes and timer ticks.
+        # Only an explicit refresh (or account-store invalidation) tries it again.
+        paused = {}
+        if latest and not force:
+            paused = {
+                (item.account.provider, item.account.identity): item
+                for item in latest.results
+                if item.account.provider == "claude" and (not item.ok or item.error)
+            }
+        active = [account for account in accounts if (account.provider, account.identity) not in paused]
+        refreshed = fetch_all(active)
+        by_account = {**paused, **{(item.account.provider, item.account.identity): item for item in refreshed}}
+        results = [replace(by_account[(account.provider, account.identity)], account=account) for account in accounts]
         fetched_at = time.time()
         generation = uuid.uuid4().hex
         _write_cache(results, fetched_at, generation)
