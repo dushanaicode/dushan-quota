@@ -4,6 +4,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import unicodedata
 from pathlib import Path
 
@@ -64,6 +65,8 @@ def main():
     ui_run.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
     sub.add_parser("float", help="打开悬浮窗（置顶可拖动）")
     sub.add_parser("float-run", help=argparse.SUPPRESS)
+    upgrade_run = sub.add_parser("upgrade-run", help=argparse.SUPPRESS)
+    upgrade_run.add_argument("--wait-pid", type=int, required=True, help=argparse.SUPPRESS)
 
     env_cmd = sub.add_parser("env", help="设置环境变量")
     env_cmd.add_argument("name")
@@ -112,6 +115,9 @@ def main():
     if args.command == "float-run":
         from lib.float_win import serve_float
         serve_float()
+        return
+    if args.command == "upgrade-run":
+        _run_upgrade(wait_pid=args.wait_pid)
         return
     if not _startup_update(version=version):
         return
@@ -289,8 +295,30 @@ def _startup_update(
         output("请输入 1、2 或 3。")
 
 
-def _run_upgrade(output=print) -> None:
+def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
+    if wait_pid is not None:
+        from lib.snapshot import _process_exists
+
+        deadline = time.monotonic() + 10
+        while _process_exists(wait_pid):
+            if time.monotonic() >= deadline:
+                _status("warn", "升级", "等待旧启动器退出超时，未执行升级，请重新运行 quota。", output)
+                return
+            time.sleep(0.1)
+    elif sys.platform == "win32" and Path(sys.argv[0]).name.lower() == "quota":
+        # distlib's quota.exe waits for this Python process. Release that launcher
+        # before pip replaces it; the new interpreter retains the terminal output.
+        _status("info", "升级", "正在退出旧启动器并执行升级，请等待完成。", output)
+        sys.stdout.flush()
+        try:
+            os.execv(sys.executable, [
+                sys.executable, str(ROOT / "quota.py"), "upgrade-run", "--wait-pid", str(os.getppid()),
+            ])
+        except OSError as error:
+            _status("warn", "升级", f"无法启动升级进程：{error}", output)
+        return
     _status("info", "升级", "正在执行 pipx upgrade，完成后请重启已有悬浮窗。", output)
+    sys.stdout.flush()
     try:
         subprocess.run(shlex.split(UPGRADE_COMMAND), check=True, shell=False)
     except FileNotFoundError:

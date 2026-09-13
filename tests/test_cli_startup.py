@@ -156,6 +156,36 @@ class CliStartupTests(unittest.TestCase):
                 run.assert_not_called()
         save_config.assert_called_once_with({"ignored_update_version": "0.2.0"})
 
+    @patch.object(quota.sys, "platform", "win32")
+    @patch.object(quota.sys, "argv", ["quota"])
+    @patch.object(quota.os, "getppid", return_value=1234)
+    @patch.object(quota.os, "execv")
+    @patch("subprocess.run")
+    def test_windows_installed_launcher_exits_before_upgrade(self, run, execv, _getppid):
+        quota._run_upgrade(output=lambda _line: None)
+        execv.assert_called_once_with(quota.sys.executable, [
+            quota.sys.executable, str(quota.ROOT / "quota.py"), "upgrade-run", "--wait-pid", "1234",
+        ])
+        run.assert_not_called()
+
+    @patch("lib.snapshot._process_exists", side_effect=[True, False])
+    @patch.object(quota.time, "sleep")
+    @patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0))
+    def test_upgrade_worker_waits_for_launcher_then_runs_once(self, run, sleep, exists):
+        quota._run_upgrade(output=lambda _line: None, wait_pid=1234)
+        self.assertEqual(2, exists.call_count)
+        sleep.assert_called_once_with(0.1)
+        run.assert_called_once()
+
+    @patch("lib.snapshot._process_exists", return_value=True)
+    @patch.object(quota.time, "monotonic", side_effect=[0, 11])
+    @patch("subprocess.run")
+    def test_upgrade_worker_stops_if_launcher_does_not_exit(self, run, _monotonic, _exists):
+        lines = []
+        quota._run_upgrade(output=lines.append, wait_pid=1234)
+        run.assert_not_called()
+        self.assertIn("未执行升级", "\n".join(lines))
+
     @patch.object(quota.config, "save_config")
     @patch.object(quota.config, "load_config", return_value={"ignored_update_version": ""})
     def test_permanent_skip_saves_only_the_latest_version(self, load_config, save_config):
