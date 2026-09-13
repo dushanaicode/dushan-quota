@@ -22,6 +22,7 @@ OLD_VERSION = "0.6.4"
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
     allowed = (ROOT / "Temp").resolve()
     allowed.mkdir(exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="pipx-upgrade-", dir=allowed)).resolve()
