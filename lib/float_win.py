@@ -118,6 +118,8 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
                 "identity": item.account.identity,
                 "ok": item.ok,
                 "error": item.error,
+                "notice": item.notice,
+                "retry_at": item.retry_at,
                 "email": item.email or item.account.email,
                 "plan": item.plan or item.account.plan,
                 "plan_detail": item.plan_detail,

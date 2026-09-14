@@ -93,3 +93,12 @@ class QuotaResult:
     # Raw provider fields the plan label was derived from, so the UI can show
     # what the account actually reports instead of only the friendly name.
     plan_detail: str = ""
+    # A temporary provider condition (rate limit, network) that retries on its
+    # own; unlike error it does not mean the account needs attention.
+    notice: str = ""
+    # Automatic queries resume at this epoch; set by the snapshot for notices.
+    retry_at: float = 0.0
+    failures: int = 0
+    # Short hash of the credentials the result was fetched with, so a new login
+    # or a refresh done by the source tool ends a pause immediately.
+    credential_tag: str = ""

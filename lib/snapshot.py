@@ -6,6 +6,7 @@ their original stores and are never written to the snapshot file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -24,7 +25,9 @@ from .store import store_dir
 # Version display-only cache records whenever normalized result fields change.
 # A mismatch forces a fresh provider read instead of decoding an old record as
 # if newly added fields were explicitly unavailable.
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
+_BACKOFF_SECONDS = 300
+_BACKOFF_MAX_SECONDS = 1800
 _LOCK_STALE_SECONDS = 75.0
 _LOCK_WAIT_SECONDS = 45.0
 _LOCK_POLL_SECONDS = 0.1
@@ -95,17 +98,31 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
             return latest
 
         accounts = collect_accounts()
-        # A failed Claude request stays paused across processes and timer ticks.
-        # Only an explicit refresh (or account-store invalidation) tries it again.
-        paused = {}
-        if latest and not force:
-            paused = {
+        now = time.time()
+        # Claude requests are throttled hard, so a failed account is skipped by
+        # timer ticks in every process: errors until a manual refresh, notices
+        # until their backoff ends. New credentials end either pause at once.
+        previous = {}
+        if latest:
+            previous = {
                 (item.account.provider, item.account.identity): item
                 for item in latest.results
-                if item.account.provider == "claude" and (not item.ok or item.error)
+                if item.account.provider == "claude"
             }
+        paused = {}
+        if not force:
+            for account in accounts:
+                item = previous.get((account.provider, account.identity))
+                if item and item.credential_tag == _credential_tag(account) and (
+                    item.error and not item.ok or now < item.retry_at
+                ):
+                    paused[(account.provider, account.identity)] = item
         active = [account for account in accounts if (account.provider, account.identity) not in paused]
-        refreshed = fetch_all(active)
+        refreshed = [
+            _settle(item, previous.get((item.account.provider, item.account.identity)), now)
+            if item.account.provider == "claude" else item
+            for item in fetch_all(active)
+        ]
         by_account = {**paused, **{(item.account.provider, item.account.identity): item for item in refreshed}}
         results = [replace(by_account[(account.provider, account.identity)], account=account) for account in accounts]
         fetched_at = time.time()
@@ -138,6 +155,26 @@ def invalidate() -> None:
         cache_path().unlink()
     except OSError:
         pass
+
+
+def _credential_tag(account: Account) -> str:
+    # A truncated one-way hash only detects change; the tokens never reach the cache.
+    raw = f"{account.secret.get('access') or ''}\0{account.secret.get('refresh') or ''}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _settle(item: QuotaResult, previous: QuotaResult | None, now: float) -> QuotaResult:
+    """Stamp the credentials used and, for a temporary failure, the next automatic retry."""
+    # The provider may have refreshed the tokens in place during this fetch.
+    tag = _credential_tag(item.account)
+    if not item.notice:
+        return replace(item, credential_tag=tag)
+    failures = previous.failures + 1 if previous and previous.notice else 1
+    retry_at = now + min(_BACKOFF_MAX_SECONDS, _BACKOFF_SECONDS * 2 ** (failures - 1))
+    if not item.ok and previous and previous.ok:
+        # Keep the last good quota on screen instead of blanking the card.
+        item = replace(previous, account=item.account, notice=item.notice)
+    return replace(item, credential_tag=tag, failures=failures, retry_at=retry_at)
 
 
 def _satisfies_waiter(snapshot: Snapshot, force: bool, starting_generation: str, ttl: int) -> bool:
@@ -307,6 +344,10 @@ def _encode_result(item: QuotaResult) -> dict:
         "sub_start": item.sub_start,
         "sub_end": item.sub_end,
         "sub_status": item.sub_status,
+        "notice": item.notice,
+        "retry_at": item.retry_at,
+        "failures": item.failures,
+        "credential_tag": item.credential_tag,
     }
 
 
@@ -356,4 +397,8 @@ def _decode_result(raw: dict) -> QuotaResult:
         sub_start=str(raw.get("sub_start") or ""),
         sub_end=str(raw.get("sub_end") or ""),
         sub_status=str(raw.get("sub_status") or ""),
+        notice=str(raw["notice"]),
+        retry_at=float(raw["retry_at"]),
+        failures=int(raw["failures"]),
+        credential_tag=str(raw["credential_tag"]),
     )

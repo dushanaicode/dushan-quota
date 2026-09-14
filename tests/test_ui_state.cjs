@@ -49,7 +49,8 @@ async function main() {
   const saved = [];
   const pausedClaude = {title: 'Claude Code', provider: 'claude', identity: 'c', ok: true,
     windows: [{name: '5 小时额度', remaining_percent: 88}],
-    error: '账号信息查询失败：请求受限（429）；已暂停自动查询，请稍后手动刷新'};
+    error: '', notice: '账号信息暂不可用：暂时被限流（429）', retry_at: new Date(2030, 0, 1, 9, 5).getTime() / 1000};
+  const limitedClaude = {...pausedClaude, ok: false, windows: [], notice: '令牌续期暂时被限流（429）'};
   const floating = context();
   vm.runInContext(script('float.html'), floating);
   const now = Date.UTC(2030, 0, 1);
@@ -184,8 +185,12 @@ async function main() {
   const storage = new Map();
   floating.render([pausedClaude]);
   assert(floating.get('list').innerHTML.includes('88%'));
-  assert(floating.get('list').innerHTML.includes(pausedClaude.error),
-    'A profile failure must keep valid quota and visibly explain the pause');
+  assert(floating.get('list').innerHTML.includes('<div class="note">账号信息暂不可用：暂时被限流（429），显示上次数据，09:05 自动重试</div>'),
+    'A temporary failure keeps valid quota and says when it retries');
+  assert(!floating.get('list').innerHTML.includes('class="err"'), 'A temporary failure is not shown as an account error');
+  floating.render([limitedClaude]);
+  assert(floating.get('list').innerHTML.includes('<div class="note">令牌续期暂时被限流（429），09:05 自动重试</div>'));
+  assert(!floating.get('list').innerHTML.includes('class="err"'));
   const web = context(storage);
   const source = script('index.html');
   const usageSource = source.slice(source.indexOf('function compactNumber'), source.indexOf('function renderSide'));

@@ -38,7 +38,9 @@ def fetch(account: Account) -> QuotaResult:
     try:
         return _fetch(account)
     except tokenstore.RefreshError as error:
-        return _failure(account, str(error))
+        if error.reauth or error.code == "writeback_failed":
+            return _failure(account, str(error))
+        return _temporary(account, "令牌续期暂时被限流（429）" if error.code == "http_429" else str(error))
 
 
 def _fetch(account: Account) -> QuotaResult:
@@ -52,15 +54,17 @@ def _fetch(account: Account) -> QuotaResult:
         if refreshed and refreshed != access:
             access = refreshed
             status, _, data = _usage(access)
-    if status != 200 or not isinstance(data, dict):
+    if status in {401, 403}:
         return _failure(account, _request_error(status))
+    if status != 200 or not isinstance(data, dict):
+        return _temporary(account, f"用量查询{_request_error(status)}")
     windows = _windows(data)
     if not windows:
         return _failure(account, "未解析到额度窗口")
     profile_status, _, profile = _profile(access)
-    profile_error = ""
+    notice = ""
     if profile_status != 200 or not isinstance(profile, dict):
-        profile_error = _paused(f"账号信息查询失败：{_request_error(profile_status)}")
+        notice = f"账号信息暂不可用：{_request_error(profile_status)}"
         profile = {}
     identity = _identity(profile)
     return QuotaResult(
@@ -68,7 +72,7 @@ def _fetch(account: Account) -> QuotaResult:
         ok=True,
         title="Claude Code",
         windows=windows,
-        error=profile_error,
+        notice=notice,
         email=identity.get("email") or account.email,
         name=identity.get("name") or account.name,
         user_id=identity.get("user_id") or account.user_id or account.identity,
@@ -83,19 +87,21 @@ def _usage(access: str):
     return request_json(USAGE_URL, headers=_headers(access), retry=False)
 
 
-def _paused(message: str) -> str:
-    return f"{message}；已暂停自动查询，请稍后手动刷新"
-
-
 def _failure(account: Account, message: str) -> QuotaResult:
-    return QuotaResult(account=account, ok=False, title="Claude Code", error=_paused(message))
+    """Needs the user: automatic queries stay paused until a manual refresh or a new login."""
+    return QuotaResult(account=account, ok=False, title="Claude Code", error=f"{message}；已暂停自动查询，处理后手动刷新")
+
+
+def _temporary(account: Account, message: str) -> QuotaResult:
+    """Rate limits and network trouble: the snapshot backs off and retries on its own."""
+    return QuotaResult(account=account, ok=False, title="Claude Code", notice=message)
 
 
 def _request_error(status: int) -> str:
     if status == 0:
-        return "网络连接失败，请检查网络"
+        return "网络连接失败"
     if status == 429:
-        return "请求受限（429），请等待限流解除"
+        return "暂时被限流（429）"
     if status in {401, 403}:
         return f"认证失败（{status}），请在 Claude Code 重新登录"
     if status == 200:

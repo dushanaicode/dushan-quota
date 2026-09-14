@@ -92,6 +92,53 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual([["openai", "claude"], ["openai"], ["openai"], ["openai"], ["openai", "claude"]], calls)
         self.assertTrue(resumed.results[1].ok)
 
+    def test_temporary_claude_failure_keeps_quota_and_retries_after_backoff(self):
+        claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1", secret={"access": "a"})
+        success = QuotaResult(account=claude, ok=True, title="Claude Code", windows=[Window(name="5h quota", remaining_percent=70)])
+        limited = QuotaResult(account=claude, ok=False, title="Claude Code", notice="暂时被限流（429）")
+        responses = [success, limited, limited]
+        calls = []
+
+        def fetch(accounts):
+            calls.append(len(accounts))
+            return [responses.pop(0) for _ in accounts]
+
+        now = time.time()
+        with patch.object(snapshot, "collect_accounts", return_value=[claude]), patch.object(
+            snapshot, "fetch_all", side_effect=fetch
+        ), patch.object(snapshot, "_is_fresh", return_value=False):
+            snapshot.get_snapshot()
+            with patch.object(snapshot.time, "time", return_value=now):
+                first = snapshot.get_snapshot().results[0]
+                snapshot.get_snapshot()
+            with patch.object(snapshot.time, "time", return_value=now + 301):
+                second = snapshot.get_snapshot().results[0]
+
+        self.assertEqual([1, 1, 0, 1], calls)
+        self.assertTrue(first.ok)
+        self.assertEqual(70, first.windows[0].remaining_percent)
+        self.assertEqual(("", "暂时被限流（429）"), (first.error, first.notice))
+        self.assertEqual(now + 300, first.retry_at)
+        self.assertEqual((2, now + 301 + 600), (second.failures, second.retry_at))
+        self.assertEqual(70, second.windows[0].remaining_percent)
+
+    def test_new_claude_credentials_end_a_pause_immediately(self):
+        claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1", secret={"access": "old"})
+        failure = QuotaResult(account=claude, ok=False, title="Claude Code", error="认证失败（401）")
+        success = QuotaResult(account=claude, ok=True, title="Claude Code")
+        responses = [failure, success]
+        with patch.object(snapshot, "collect_accounts", return_value=[claude]), patch.object(
+            snapshot, "fetch_all", side_effect=lambda accounts: [responses.pop(0) for _ in accounts]
+        ), patch.object(snapshot, "_is_fresh", return_value=False):
+            snapshot.get_snapshot()
+            snapshot.get_snapshot()
+            self.assertEqual([success], responses)
+            claude.secret["access"] = "logged-in-again"
+            resumed = snapshot.get_snapshot().results[0]
+        self.assertTrue(resumed.ok)
+        raw = Path(snapshot.cache_path()).read_text(encoding="utf-8")
+        self.assertNotIn("logged-in-again", raw)
+
     def test_old_schema_is_refreshed_instead_of_inventing_missing_fields(self):
         path = snapshot.cache_path()
         path.parent.mkdir(parents=True, exist_ok=True)

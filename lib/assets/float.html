@@ -145,6 +145,7 @@
   .bar i.y { background:var(--warn); }
   .bar i.r { background:var(--bad); }
   .err { color:var(--bad); font-size:11px; }
+  .note { color:var(--warn); font-size:11px; }
   #cfg {
     display:none; flex:1; min-height:0; overflow-y:auto; overflow-x:hidden;
     overscroll-behavior:contain; scrollbar-gutter:stable;
@@ -406,6 +407,12 @@ function resetCardOrder(){
   render(cache);
 }
 
+// 限流、断网等临时问题：不是账号异常，到点自动重试
+function noticeText(it){
+  const at = new Date(it.retry_at * 1000);
+  const time = `${String(at.getHours()).padStart(2,'0')}:${String(at.getMinutes()).padStart(2,'0')}`;
+  return `${it.notice}，${it.ok ? '显示上次数据，' : ''}${time} 自动重试`;
+}
 function render(items){
   if(cardDrag) return;
   let html = '';
@@ -419,7 +426,8 @@ function render(items){
     const sub = S.show['#plan']!==false ? subscriptionText(it) : '';
     if(sub) html += `<div class="sub">${esc(sub)}</div>`;
     if(it.ok) html += it.windows.map(w=>row(w,accountKey(it))).join('');
-    if(it.error || !it.ok) html += `<div class="err">${esc(it.error||'失败')}</div>`;
+    if(it.notice) html += `<div class="note">${esc(noticeText(it))}</div>`;
+    if(it.error || !it.ok && !it.notice) html += `<div class="err">${esc(it.error||'失败')}</div>`;
     html += usageBlock(it);
     html += `</div>`;
   }

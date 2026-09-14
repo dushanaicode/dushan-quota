@@ -107,7 +107,8 @@ class ClaudeRefreshTests(unittest.TestCase):
         ):
             result = claude.fetch(self.account(expires=time.time() - 60))
         self.assertFalse(result.ok)
-        self.assertIn("续期", result.error)
+        self.assertIn("续期", result.notice)
+        self.assertEqual("", result.error)
         self.assertEqual(1, post.call_count)
         request.assert_not_called()
 
@@ -165,8 +166,8 @@ class ClaudeRefreshTests(unittest.TestCase):
             ) as request:
                 result = claude.fetch(self.account(expires=time.time() - 60))
             self.assertFalse(result.ok)
-            self.assertIn("网络", result.error)
-            self.assertNotIn("old-refresh", result.error)
+            self.assertIn("网络", result.notice)
+            self.assertNotIn("old-refresh", result.notice)
             self.assertEqual(1, request.call_count)
 
     def test_invalid_expiry_does_not_save_an_unrenewable_bundle(self):
@@ -174,10 +175,10 @@ class ClaudeRefreshTests(unittest.TestCase):
         with patch.object(tokenstore, "_json_post", return_value={**TOKEN, "expires_in": None}):
             result = claude.fetch(self.account(expires=time.time() - 60))
         self.assertFalse(result.ok)
-        self.assertIn("过期时间", result.error)
+        self.assertIn("过期时间", result.notice)
         self.assertEqual(original, self.path.read_bytes())
 
-    def test_profile_failure_preserves_usage_and_shows_paused_error(self):
+    def test_profile_failure_preserves_usage_and_backs_off_with_a_notice(self):
         responses = [(200, "", USAGE), (429, "sensitive server response", None)]
         with (
             patch.object(claude, "request_json", side_effect=responses) as request,
@@ -188,12 +189,13 @@ class ClaudeRefreshTests(unittest.TestCase):
             result = snapshot.get_snapshot().results[0]
         self.assertTrue(result.ok)
         self.assertEqual(88, result.windows[0].remaining_percent)
-        self.assertIn("429", result.error)
-        self.assertIn("已暂停自动查询", result.error)
-        self.assertNotIn("sensitive", result.error)
+        self.assertIn("429", result.notice)
+        self.assertEqual("", result.error)
+        self.assertGreater(result.retry_at, time.time())
+        self.assertNotIn("sensitive", result.notice)
         self.assertEqual(2, request.call_count)
 
-    def test_real_fetch_path_makes_one_429_request_until_manually_resumed(self):
+    def test_real_fetch_path_makes_one_429_request_during_backoff(self):
         def limited(*args, **kwargs):
             raise urllib.error.HTTPError(
                 claude.USAGE_URL, 429, "limited", {}, io.BytesIO(b'{"error":"old-access"}')
@@ -208,12 +210,19 @@ class ClaudeRefreshTests(unittest.TestCase):
             for _ in range(4):
                 result = snapshot.get_snapshot().results[0]
                 self.assertFalse(result.ok)
-                self.assertIn("429", result.error)
-                self.assertNotIn("old-access", result.error)
+                self.assertIn("429", result.notice)
+                self.assertEqual("", result.error)
+                self.assertNotIn("old-access", result.notice)
             self.assertEqual(1, request.call_count)
             snapshot.get_snapshot(force=True)
             self.assertEqual(2, request.call_count)
             sleep.assert_not_called()
+
+    def test_refresh_rate_limit_is_a_temporary_notice(self):
+        limited = urllib.error.HTTPError(tokenstore.CLAUDE_TOKEN_URL, 429, "limited", {}, io.BytesIO(b"{}"))
+        with patch.object(tokenstore.urllib.request, "urlopen", side_effect=limited):
+            result = claude.fetch(self.account(expires=time.time() - 60))
+        self.assertEqual(("", "令牌续期暂时被限流（429）"), (result.error, result.notice))
 
 
 if __name__ == "__main__":

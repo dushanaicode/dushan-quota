@@ -589,6 +589,8 @@ def _quota_payload(force: bool = False):
             "identity": item.account.identity,
             "ok": item.ok,
             "error": item.error,
+            "notice": item.notice,
+            "retry_at": item.retry_at,
             "email": item.email or item.account.email,
             "name": item.name or item.account.name,
             "user_id": item.user_id or item.account.user_id,
