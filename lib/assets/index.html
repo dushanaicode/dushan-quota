@@ -1587,7 +1587,7 @@ const MODE_META = {
 };
 
 async function openAdd(account = null){
-  oauthGeneration++;
+  cancelOAuth();
   reauthCtx = account;
   oauthLogin = null;
   document.getElementById('addHeading').textContent = account ? '重新授权账号' : '添加账号';
@@ -1610,10 +1610,15 @@ async function openAdd(account = null){
   document.getElementById('addModal').classList.add('show');
 }
 function closeAdd(){
-  oauthGeneration++;
-  if (oauthLogin?.provider === 'openai') api('/api/oauth/openai/cancel', {method:'POST', body:JSON.stringify({login_id:oauthLogin.id})}).catch(() => {});
-  oauthLogin = null;
+  cancelOAuth();
   document.getElementById('addModal').classList.remove('show');
+}
+function cancelOAuth(){
+  oauthGeneration++;
+  if (oauthLogin && ['openai', 'claude'].includes(oauthLogin.provider)) api('/api/oauth/' + oauthLogin.provider + '/cancel', {method:'POST', body:JSON.stringify({login_id:oauthLogin.id})}).catch(() => {});
+  oauthLogin = null;
+  document.getElementById('btnAdd').disabled = false;
+  document.getElementById('btnAdd').textContent = '确认';
 }
 function selectProv(key){
   addProv = key;
@@ -1636,6 +1641,7 @@ function selectProv(key){
   });
 }
 function selectMode(m){
+  cancelOAuth();
   addMode = m;
   document.querySelectorAll('.mode-chip').forEach(c => c.classList.toggle('on', c.dataset.m === m));
   renderFields();
@@ -1646,7 +1652,7 @@ function renderFields(){
   else if (addMode === 'json') f.innerHTML = '<label>JSON</label><textarea id="jsonText"></textarea>';
   else if (addMode === 'env') f.innerHTML = '<p class="hint">读取并导入该平台已配置的环境变量。</p>';
   else if (addMode === 'local') f.innerHTML = '<p class="hint">从 OpenCode / Cockpit / 官方本机目录导入。</p>';
-  else if (addMode === 'oauth') f.innerHTML = '<p class="hint">复制授权链接到浏览器打开，完成后自动回到本页。</p><div id="oauthBox"></div>';
+  else if (addMode === 'oauth') f.innerHTML = `<p class="hint">${addProv === 'claude' ? '打开授权链接，完成后将页面显示的授权码粘贴到这里。' : '复制授权链接到浏览器打开，完成后自动回到本页。'}</p><div id="oauthBox"></div>`;
   else f.innerHTML = '';
 }
 async function submitAdd(){
@@ -1662,16 +1668,26 @@ async function submitAdd(){
     }
     else if (addMode === 'env') await api('/api/accounts/env', {method:'POST', body:JSON.stringify({provider:addProv})});
     else if (addMode === 'local') await api('/api/accounts/local', {method:'POST', body:JSON.stringify({provider:addProv})});
-    else if (addMode === 'oauth') { await startOAuth(addProv); return; }
+    else if (addMode === 'oauth') {
+      if (oauthLogin?.provider === 'claude') {
+        const id = oauthLogin.id;
+        await api('/api/oauth/claude/complete', {method:'POST', body:JSON.stringify({login_id:id, code:document.getElementById('oauthCode').value})});
+        if (oauthLogin?.id !== id) return;
+        oauthLogin = null;
+      } else { await startOAuth(addProv); return; }
+    }
     closeAdd(); refreshQuota(false);
   } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
-  finally { btn.disabled = !!oauthLogin; btn.textContent = oauthLogin ? '等待授权' : '确认'; }
+  finally {
+    btn.disabled = !!oauthLogin && oauthLogin.provider !== 'claude';
+    btn.textContent = oauthLogin?.provider === 'claude' ? '完成授权' : oauthLogin ? '等待授权' : '确认';
+  }
 }
 async function startOAuth(provider){
   const generation = ++oauthGeneration;
   const data = await api('/api/oauth/' + provider + '/start', {method:'POST', body:JSON.stringify({identity:reauthCtx?.identity || ''})});
   if (generation !== oauthGeneration) {
-    if (provider === 'openai') await api('/api/oauth/openai/cancel', {method:'POST', body:JSON.stringify({login_id:data.login_id})});
+    if (['openai', 'claude'].includes(provider)) await api('/api/oauth/' + provider + '/cancel', {method:'POST', body:JSON.stringify({login_id:data.login_id})});
     return;
   }
   oauthLogin = {provider, id:data.login_id};
@@ -1679,10 +1695,14 @@ async function startOAuth(provider){
   const box = document.getElementById('oauthBox');
   box.innerHTML = '';
   if (data.user_code) box.innerHTML += `<p class="hint">验证码 <b style="color:var(--text)">${esc(data.user_code)}</b></p>`;
-  box.innerHTML += `<div class="oauth-box"><input readonly value="${esc(url)}"/><button class="btn" id="cpBtn">复制</button></div>
-    <div class="waiting"><i></i>等待授权完成…</div>`;
+  box.innerHTML += `<div class="oauth-box"><input readonly value="${esc(url)}"/><button class="btn" id="cpBtn">复制</button></div>`;
+  if (provider === 'claude') {
+    box.innerHTML += `<p><a class="btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer">打开授权页面</a></p>
+      <label for="oauthCode">授权码或回调地址</label>
+      <input id="oauthCode" autocomplete="off" spellcheck="false" placeholder="粘贴授权完成后的 code 或回调地址" />`;
+  } else box.innerHTML += '<div class="waiting"><i></i>等待授权完成…</div>';
   document.getElementById('cpBtn').onclick = e => { navigator.clipboard.writeText(url); e.target.textContent = '已复制'; setTimeout(() => e.target.textContent = '复制', 1200); };
-  pollOAuth(provider, data.login_id);
+  if (provider !== 'claude') pollOAuth(provider, data.login_id);
 }
 async function pollOAuth(provider, id){
   if (oauthLogin?.id !== id) return;

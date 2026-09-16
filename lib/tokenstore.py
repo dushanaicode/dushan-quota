@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import agentdb, logbuf, store
-from .oauth_openai import matching_id_token, token_account_id
+from .oauth_openai import _jwt_claims, matching_id_token, token_account_id
 
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
@@ -46,7 +46,16 @@ class RefreshError(Exception):
 
 
 def adopt_latest(account) -> None:
-    """Use the newest complete OpenAI token bundle, regardless of its original source."""
+    """Use a newer complete bundle only when it belongs to this account."""
+    if account.provider == "claude" and account.auth_mode != "api_key":
+        cached = agentdb.get_tokens("claude", account.identity) or {}
+        if cached.get("access") and agentdb._secret_expiry(cached) > agentdb._secret_expiry(account.secret):
+            verified = agentdb.get_claude_identity(cached["access"])
+            if account.user_id and verified.get("user_id") == account.user_id:
+                account.secret.update(access=cached["access"], refresh=cached["refresh"], expiry=cached["expires"])
+                account.secret.pop("expires", None)
+                account.source = cached["source"]
+        return
     if account.provider != "openai" or account.auth_mode == "api_key":
         return
     cached = agentdb.get_tokens(account.provider, account.identity) or {}
@@ -165,7 +174,8 @@ def _refresh_account(account) -> str | None:
         or not math.isfinite(expires_in) or expires_in <= 0
     ):
         raise RefreshError("invalid_response", "续期服务未返回有效过期时间，请稍后重试")
-    previous_access = account.secret.get("access") or ""
+    previous_secret = dict(account.secret)
+    previous_access = previous_secret.get("access") or ""
     account.secret["access"] = access
     account.secret["refresh"] = new_refresh
     if new_id_token or account.provider == "openai":
@@ -174,9 +184,13 @@ def _refresh_account(account) -> str | None:
         account.secret["expiry"] = int(time.time()) + int(expires_in)
         account.secret.pop("expires", None)
     record(account, access, new_refresh, expires_in)
+    if account.provider == "claude" and previous_access:
+        verified = agentdb.get_claude_identity(previous_access)
+        if verified.get("user_id"):
+            agentdb.set_claude_identity(access, verified)
     if account.provider == "claude" and Path(account.source).is_absolute():
         _write_claude_local(account, previous_access, refresh)
-    _write_back(account, access, new_refresh, expires_in, new_id_token)
+    _write_back(account, access, new_refresh, expires_in, new_id_token, previous_secret=previous_secret)
     return access
 
 
@@ -284,35 +298,42 @@ def _expiry_ts(account) -> float:
     return 0.0
 
 
-def _write_back(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+def _write_back(account, access: str, refresh: str, expires_in, id_token: str = "", *, previous_secret=None) -> None:
     """把新票据写回来源工具，保证 OpenCode / Grok CLI / Cursor IDE / Codex 也用新票。"""
     if account.provider == "openai":
         _write_quota_store(account, access, refresh, expires_in, id_token)
         _write_codex_auth(account, access, refresh, expires_in, id_token)
         _write_opencode(account, access, refresh, expires_in, id_token)
         return
+    _write_quota_store(account, access, refresh, expires_in, id_token, previous_secret=previous_secret)
     writers = {
         "opencode": _write_opencode,
         "official-grok": _write_grok_cli,
-        "dushan-quota": _write_quota_store,
-        # Keep the pre-rename source value working for existing accounts.json data.
-        "quota-cli": _write_quota_store,
         "cursor-local": _write_cursor_ide,
-        "codex-local": _write_codex_auth,
     }
     writer = writers.get(account.source)
     if writer:
-        if writer in {_write_opencode, _write_codex_auth, _write_quota_store}:
-            writer(account, access, refresh, expires_in, id_token)
+        if writer == _write_opencode:
+            writer(account, access, refresh, expires_in, id_token, previous_secret=previous_secret)
         else:
-            writer(account, access, refresh, expires_in)
+            writer(account, access, refresh, expires_in, previous_secret=previous_secret)
     # grok 在 opencode 与 grok cli 中是同一个 xAI 账号，去重后只刷新了一个来源，
     # 另一个文件也必须同步，否则那边的认证会自然过期
     if account.provider == "grok":
         if account.source != "opencode":
-            _write_opencode(account, access, refresh, expires_in, id_token)
+            _write_opencode(account, access, refresh, expires_in, id_token, previous_secret=previous_secret)
         if account.source != "official-grok":
-            _write_grok_cli(account, access, refresh, expires_in)
+            _write_grok_cli(account, access, refresh, expires_in, previous_secret=previous_secret)
+
+
+def _matches_login(account, current: dict, previous: dict) -> bool:
+    expected_claims = _jwt_claims(previous.get("access") or "")
+    current_claims = _jwt_claims(current.get("access") or "")
+    expected_id = expected_claims.get("principal_id") or expected_claims.get("sub") or account.user_id
+    current_id = current_claims.get("principal_id") or current_claims.get("sub") or current.get("user_id")
+    if expected_id and current_id:
+        return expected_id == current_id
+    return any(previous.get(key) and previous[key] == current.get(key) for key in ("access", "refresh"))
 
 
 def _write_claude_local(account, previous_access: str, previous_refresh: str) -> None:
@@ -335,7 +356,7 @@ def _write_claude_local(account, previous_access: str, previous_refresh: str) ->
         raise RefreshError("writeback_failed", "令牌已续期，但回写 Claude Code 登录文件失败，请检查文件权限") from error
 
 
-def _write_opencode(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+def _write_opencode(account, access: str, refresh: str, expires_in, id_token: str = "", *, previous_secret=None) -> None:
     from .provision import _opencode_path
 
     entry_key = _OPENCODE_ENTRY_KEY.get(account.provider)
@@ -356,6 +377,8 @@ def _write_opencode(account, access: str, refresh: str, expires_in, id_token: st
             return
         entry["accountId"] = expected
         entry.pop("id_token", None)
+    elif not _matches_login(account, entry, previous_secret):
+        return
     entry["access"] = access
     entry["refresh"] = refresh
     if id_token:
@@ -367,7 +390,7 @@ def _write_opencode(account, access: str, refresh: str, expires_in, id_token: st
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _write_grok_cli(account, access: str, refresh: str, expires_in) -> None:
+def _write_grok_cli(account, access: str, refresh: str, expires_in, *, previous_secret) -> None:
     path = Path.home() / ".grok" / "auth.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -377,6 +400,10 @@ def _write_grok_cli(account, access: str, refresh: str, expires_in) -> None:
         if not isinstance(entry, dict) or not entry.get("key"):
             continue
         if "auth.x.ai" not in str(key):
+            continue
+        current = {"access": entry["key"], "refresh": entry.get("refresh_token"),
+                   "user_id": entry.get("principal_id") or entry.get("user_id")}
+        if not _matches_login(account, current, previous_secret):
             continue
         entry["key"] = access
         entry["create_time"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -426,7 +453,7 @@ def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: 
         pass
 
 
-def _write_quota_store(account, access: str, refresh: str, expires_in, id_token: str = "") -> None:
+def _write_quota_store(account, access: str, refresh: str, expires_in, id_token: str = "", *, previous_secret=None) -> None:
     fields = {"access": access, "refresh": refresh}
     if id_token or account.provider == "openai":
         fields["id_token"] = id_token
@@ -434,10 +461,11 @@ def _write_quota_store(account, access: str, refresh: str, expires_in, id_token:
         fields["expiry"] = int(time.time()) + int(expires_in)
     elif account.provider == "openai":
         fields["expiry"] = agentdb._secret_expiry({"access": access})
-    store.update_fields(account.provider, account.identity, fields)
+    expected = {key: previous_secret.get(key) or "" for key in ("access", "refresh")} if account.provider == "claude" else None
+    store.update_fields(account.provider, account.identity, fields, expected=expected)
 
 
-def _write_cursor_ide(account, access: str, refresh: str, expires_in) -> None:
+def _write_cursor_ide(account, access: str, refresh: str, expires_in, *, previous_secret=None) -> None:
     import sys
 
     if sys.platform == "win32":
@@ -451,6 +479,11 @@ def _write_cursor_ide(account, access: str, refresh: str, expires_in) -> None:
     try:
         conn = sqlite3.connect(f"file:{db.as_posix()}?mode=rw", uri=True, timeout=5)
         try:
+            if previous_secret is not None:
+                rows = dict(conn.execute("SELECT key, value FROM ItemTable WHERE key LIKE 'cursorAuth/%'"))
+                current = {"access": rows.get("cursorAuth/accessToken"), "refresh": rows.get("cursorAuth/refreshToken")}
+                if not _matches_login(account, current, previous_secret):
+                    return
             conn.execute("UPDATE ItemTable SET value = ? WHERE key = 'cursorAuth/accessToken'", (access,))
             conn.execute("UPDATE ItemTable SET value = ? WHERE key = 'cursorAuth/refreshToken'", (refresh,))
             conn.commit()

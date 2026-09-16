@@ -1,9 +1,10 @@
 import ctypes
 import runpy
 import sys
-from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from contextlib import ExitStack
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 from lib import float_win
 
@@ -64,6 +65,105 @@ class FloatPlatformTests(unittest.TestCase):
             self.assertNotIn("darwin_nsapplication", pystray.Icon.call_args.kwargs)
             thread.assert_called_once_with(target=pystray.Icon.return_value.run, daemon=True)
             thread.return_value.start.assert_called_once_with()
+
+    def test_tray_quit_keeps_the_event_loop_available_for_window_shutdown(self):
+        api = Mock()
+        tray = float_win._Tray(api)
+        tray._icon = Mock()
+        tray._quit()
+        api.quit.assert_called_once_with()
+        tray._icon.stop.assert_not_called()
+
+    def test_macos_tray_cleanup_does_not_stop_the_shared_application(self):
+        for macos in (True, False):
+            with self.subTest(macos=macos), patch.object(float_win, "_is_macos", return_value=macos):
+                tray = float_win._Tray(float_win.Api())
+                tray._icon = Mock()
+                tray.stop()
+                if macos:
+                    self.assertFalse(tray._icon.visible)
+                    tray._icon.stop.assert_not_called()
+                else:
+                    tray._icon.stop.assert_called_once_with()
+
+    def test_macos_bridge_quit_dispatches_native_termination_without_destroying_webview(self):
+        api = float_win.Api()
+        api._window = Mock()
+        app = Mock()
+        pid = Mock()
+        order = Mock()
+        order.attach_mock(pid.unlink, "remove_pid")
+        order.attach_mock(app.terminate_, "terminate")
+        queued = []
+        with patch.object(float_win, "_is_macos", return_value=True), patch.object(
+            float_win, "_invoke_on_ui", side_effect=lambda window, callback: queued.append(callback)
+        ), patch.object(float_win, "_float_pid_path", return_value=pid), patch.dict(
+            sys.modules, {"AppKit": SimpleNamespace(NSApplication=Mock(sharedApplication=Mock(return_value=app)))}
+        ):
+            api.quit()
+            api._window.destroy.assert_not_called()
+            app.terminate_.assert_not_called()
+            self.assertEqual(1, len(queued))
+            queued[0]()
+        self.assertEqual([call.remove_pid(missing_ok=True), call.terminate(None)], order.mock_calls)
+
+    def test_windows_bridge_quit_destroys_the_window(self):
+        api = float_win.Api()
+        api._window = Mock()
+        with patch.object(float_win, "_is_macos", return_value=False), patch.object(float_win, "_terminate_macos") as terminate:
+            api.quit()
+        api._window.destroy.assert_called_once_with()
+        terminate.assert_not_called()
+
+    def test_macos_tray_refresh_does_not_synchronously_wait_for_javascript(self):
+        api = float_win.Api()
+        api._window = Mock()
+        queued = []
+        with patch.object(float_win, "_is_macos", return_value=True), patch.object(
+            float_win, "_invoke_on_ui", side_effect=lambda window, callback: queued.append(callback)
+        ):
+            float_win._Tray(api)._refresh()
+        api._window.evaluate_js.assert_not_called()
+        webview = api._window.native.contentView.return_value
+        webview.evaluateJavaScript_completionHandler_.assert_not_called()
+        self.assertEqual(1, len(queued))
+        queued[0]()
+        webview.evaluateJavaScript_completionHandler_.assert_called_once_with("refresh(true)", None)
+
+    def test_native_close_finishes_macos_application_after_cleanup(self):
+        for fails in (False, True):
+            with self.subTest(fails=fails), ExitStack() as patches:
+                patches.enter_context(patch.object(float_win, "_is_macos", return_value=True))
+                patches.enter_context(patch.object(float_win, "_is_windows", return_value=False))
+                for name in ("_enable_dpi_awareness", "_mac_hide_dock_icon", "_start_embedded_web"):
+                    patches.enter_context(patch.object(float_win, name))
+                patches.enter_context(patch.object(float_win, "_primary_scale", return_value=1))
+                patches.enter_context(patch.object(float_win.config, "apply_config_env"))
+                patches.enter_context(patch.object(float_win.config, "load_config", return_value={}))
+                pid = patches.enter_context(patch.object(float_win, "_float_pid_path")).return_value
+                timers = [Mock(), Mock()]
+                patches.enter_context(patch.object(float_win.threading, "Timer", side_effect=timers))
+                patches.enter_context(patch.object(float_win.webview, "create_window", return_value=Mock()))
+                start = patches.enter_context(patch.object(float_win.webview, "start"))
+                tray = patches.enter_context(patch.object(float_win, "_Tray")).return_value
+                terminate = patches.enter_context(patch.object(float_win, "_terminate_macos"))
+                order = Mock()
+                order.attach_mock(tray.stop, "tray_cleanup")
+                order.attach_mock(pid.unlink, "remove_pid")
+                order.attach_mock(terminate, "terminate")
+                if fails:
+                    start.side_effect = RuntimeError("GUI startup failed")
+                    with self.assertRaisesRegex(RuntimeError, "GUI startup failed"):
+                        float_win.serve_float()
+                    terminate.assert_not_called()
+                else:
+                    float_win.serve_float()
+                    self.assertEqual([
+                        call.tray_cleanup(), call.remove_pid(missing_ok=True), call.terminate(),
+                    ], order.mock_calls)
+                for timer in timers:
+                    timer.start.assert_called_once_with()
+                    timer.cancel.assert_called_once_with()
 
     def test_macos_window_changes_are_dispatched_to_the_main_thread(self):
         foundation = SimpleNamespace(NSThread=Mock())

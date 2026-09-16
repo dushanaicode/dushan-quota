@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.6.9-C3B191" alt="Release v0.6.9">
+  <img src="https://img.shields.io/badge/Release-v0.7.0-C3B191" alt="Release v0.7.0">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -99,7 +99,9 @@ quota --version
 - **更新检查**：运行 `quota` 会检查 GitHub Release，Web 顶栏也能手动检查；升级仍由你确认，不会悄悄改动环境。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
 - **Claude 限流退避**：查询或令牌续期遇到 `429`、网络错误或服务错误时，不立即重试，显示黄色提示并保留上次额度；该账号的自动请求依次暂停 5、10、20、30 分钟后自动再试，手动刷新可立即重试。认证失败或续期凭据失效显示红色错误，并暂停自动请求，直到手动刷新或在 Claude Code 重新登录（检测到新凭据即自动恢复）。`401` 最多续期一次。本地 Claude Code 登录态会读取 refresh token 与过期时间，续期成功后回写原文件。
+- **Claude 账号合并**：本机和 OAuth 登录经服务端确认属于同一账号后，共用原账号卡片，选择到期更晚的整组凭据；不同账号分别保留。令牌轮换不会新增卡片；身份查询失败会退避，不保存未确认的新账号。续期只回写使用的登录会话，保留同账号的独立 OAuth 会话；归档与恢复跟随账号身份。删除 Quota 记录不会退出本机 Claude Code，仍在本机登录的账号可再次被发现。
 - **OpenAI 多账号恢复**：优先使用账号库中的新令牌，刷新时只同步仍使用该账号的 Codex / OpenCode。续期失败会显示原因，也可以在原卡片点击“重新授权”，保留账号和历史记录；登录其他账号时会拒绝覆盖。
+- **同来源多账号**：Claude Code、ChatGPT 和其他平台可重复使用本机导入、OAuth 等方式添加不同账号。按账号 ID 或完整凭据指纹区分，客户端切号后旧账号仍保存在本地库；后台续期只回写仍属于该账号的客户端。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
 
@@ -144,6 +146,12 @@ Cursor 的两类凭证也不能混用：`cursor` 使用 IDE session，`cursor_ag
 
 ## 导入与导出账号
 
+### Claude Code OAuth
+
+在 Web 中选择「添加账号 → Claude Code → OAuth 授权」，点击确认生成登录链接，再点击「打开授权页面」。在浏览器完成登录后，复制页面显示的授权码或最终回调地址，粘贴回 Quota 并点击「完成授权」。链接有效期为 10 分钟；添加另一个账号时重新生成链接。CLI 的 `quota add` 也支持同一流程。
+
+「本机导入」保存当前客户端的账号及完整续期凭据。同一方式可导入多个不同账号；同一账号再次导入会更新原记录。无可用账号 ID 时使用凭据指纹，无法确认归属的新凭据会另存，避免覆盖旧账号。
+
 Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个勾选不同平台的账号，下载 JSON 数组。列表包含当前可发现的本机、环境变量和本地库账号，包括已归档但仍有凭据的账号。
 
 点击「导入」，选择 JSON 文件或粘贴 JSON 数组，例如：
@@ -157,7 +165,7 @@ Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个
 
 每项需要 `provider` 和至少一种凭据（`api_key`、`access`、`refresh`、`id_token`）。建议明确填写 `identity`；省略时由账号 ID、邮箱或凭据指纹生成。可同时保存 `label`、`email`、`name`、`user_id`、`plan`、`auth_mode`、`variant` 和 `expiry`（Unix 秒）。导出的文件可以直接重新导入。
 
-导入前会校验整批数据，错误会指出账号序号；有错误时整批不写入。相同 `provider + identity` 更新本地记录，其余新增，完成后显示数量。同一数组内重复的账号需要先合并。导入不携带原机器路径、数据库 ID、用量或界面设置。
+导入前会校验整批数据，错误会指出账号序号；有错误时整批不写入。相同 `provider + identity` 更新本地记录，若已知账号 ID 不同则拒绝覆盖；其余新增，完成后显示数量。同一数组内重复的账号需要先合并。导入不携带原机器路径、数据库 ID、用量或界面设置。
 
 导出的 JSON 包含完整 Key / Token，请按凭据文件妥善保存。
 

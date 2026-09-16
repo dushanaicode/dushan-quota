@@ -1,6 +1,7 @@
 import re
+import time
 
-from .. import tokenstore
+from .. import agentdb, logbuf, tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
@@ -67,6 +68,10 @@ def _fetch(account: Account) -> QuotaResult:
         notice = f"账号信息暂不可用：{_request_error(profile_status)}"
         profile = {}
     identity = _identity(profile)
+    if identity["user_id"]:
+        agentdb.set_claude_identity(access, identity)
+        if account.user_id and account.user_id != identity["user_id"]:
+            return _failure(account, "凭据对应的账号与已保存账号不一致，请重新导入此账号")
     return QuotaResult(
         account=account,
         ok=True,
@@ -120,6 +125,25 @@ def _headers(access: str) -> dict:
 def _profile(access: str):
     """Plan and account identity; the usage endpoint carries neither."""
     return request_json(PROFILE_URL, headers=_headers(access), retry=False)
+
+
+def resolve_identity(access: str) -> dict:
+    """Do not turn an unverified token rotation into a new account."""
+    cached = agentdb.get_claude_identity(access)
+    if cached.get("user_id"):
+        return cached
+    if time.time() < cached.get("retry_at", 0):
+        return {}
+    status, _, profile = _profile(access)
+    identity = _identity(profile) if status == 200 and isinstance(profile, dict) else {}
+    if identity.get("user_id"):
+        agentdb.set_claude_identity(access, identity)
+        return identity
+    failures = min(cached.get("failures", 0) + 1, 4)
+    delay = (300, 600, 1200, 1800)[failures - 1]
+    agentdb.set_claude_identity(access, {"failures": failures, "retry_at": time.time() + delay})
+    logbuf.warn("Claude 本机账号身份暂未确认，稍后重试", http_status=status, retry_seconds=delay)
+    return {}
 
 
 def _section(profile: dict, key: str) -> dict:

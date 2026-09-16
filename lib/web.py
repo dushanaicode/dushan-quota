@@ -12,7 +12,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import config, logbuf, oauth_antigravity, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
+from . import config, logbuf, oauth_antigravity, oauth_claude, oauth_cursor, oauth_grok, oauth_openai, snapshot, store
 from .add import _save_oauth_account, add_api_key, add_from_env, add_local, add_raw_json, export_accounts
 from .discover import collect_accounts
 from .httputil import request_json
@@ -190,6 +190,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/oauth/grok/start":
                 self._json(oauth_grok.start_login())
+                return
+            if path == "/api/oauth/claude/start":
+                self._json(oauth_claude.start_login())
+                return
+            if path == "/api/oauth/claude/complete":
+                result = oauth_claude.complete_login(str(payload.get("login_id") or ""), str(payload.get("code") or ""))
+                _save_oauth("claude", "Claude Code", result)
+                self._json({"status": "ok"})
+                return
+            if path == "/api/oauth/claude/cancel":
+                oauth_claude.cancel_login(str(payload.get("login_id") or ""))
+                self._json({"ok": True})
                 return
             if path == "/api/oauth/openai/start":
                 identity = str(payload.get("identity") or "")
@@ -553,7 +565,7 @@ def _quota_payload(force: bool = False):
     now = datetime.now().astimezone()
     shared = snapshot.get_snapshot(force=force)
     active = activation_statuses(shared.results)
-    stored = {item.get("identity"): item.get("id") for item in store.list_stored()}
+    stored = {(item.get("provider"), item.get("identity")): item.get("id") for item in store.list_stored()}
     archived_records = _archived_records(config.load_config())
     archived_by_key = {item["key"]: item for item in archived_records}
     archived_keys = set(archived_by_key)
@@ -602,7 +614,7 @@ def _quota_payload(force: bool = False):
             "sub_end": item.sub_end,
             "sub_status": item.sub_status,
             "windows": windows,
-            "stored_id": stored.get(item.account.identity),
+            "stored_id": stored.get((item.account.provider, item.account.identity)),
             "reset_credits": reset_credits,
             "activations": active.get((item.account.provider, item.account.identity), []),
         }

@@ -78,7 +78,7 @@ class ClaudeRefreshTests(unittest.TestCase):
         self.assertGreater(oauth["expiresAt"], time.time() * 1000)
         self.assertEqual(self.credentials["other"], saved["other"])
         self.assertEqual(self.credentials["claudeAiOauth"]["scopes"], oauth["scopes"])
-        self.assertEqual("new-refresh", agentdb.get_tokens("claude", "claude-local")["refresh"])
+        self.assertEqual("new-refresh", agentdb.get_tokens("claude", accounts[0].identity)["refresh"])
         discovered = []
         discover._from_claude_local(self.home, discovered.append)
         with patch.object(tokenstore, "_json_post") as post:

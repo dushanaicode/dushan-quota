@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import agentdb, store, tokenstore
 from .discover import collect_accounts, load_json
-from .models import AUTH_RULES, Account
+from .models import AUTH_RULES, Account, credential_identity
 from .oauth_openai import matching_id_token, token_account_id
 from .store import upsert_account
 
@@ -49,6 +49,24 @@ def add_interactive() -> None:
         add_local(provider)
         return
     if mode == "oauth":
+        if provider == "claude":
+            from . import oauth_claude
+
+            data = oauth_claude.start_login()
+            try:
+                print("请在浏览器中打开以下链接完成授权:")
+                print(f"  {data['verification_uri_complete']}")
+                code = input("粘贴授权完成后的 code 或回调地址: ").strip()
+                result = oauth_claude.complete_login(data["login_id"], code)
+                _save_oauth_account("claude", "Claude Code", result)
+                print("OAuth 授权成功并已保存账号！")
+            except (ValueError, OSError) as error:
+                print(error)
+            except KeyboardInterrupt:
+                print("\n已取消授权")
+            finally:
+                oauth_claude.cancel_login(data["login_id"])
+            return
         if provider == "openai":
             from . import oauth_openai
 
@@ -122,23 +140,38 @@ def _save_oauth_account(provider: str, label: str, result: dict):
 
 def _store_oauth_account(provider: str, label: str, result: dict):
     profile = result.get("profile") or {}
+    user_id = profile.get("user_id") or profile.get("principal_id") or ""
+    credential = result.get("access") or result.get("refresh") or ""
+    stored = store.list_stored()
     record = {
         "provider": provider,
         "auth_mode": "oauth",
         "label": label,
-        "identity": profile.get("email") or profile.get("user_id") or profile.get("principal_id") or f"{provider}-oauth",
+        "identity": user_id or profile.get("email") or credential_identity(provider, credential),
         "email": profile.get("email") or "",
         "name": profile.get("name") or "",
-        "user_id": profile.get("user_id") or profile.get("principal_id") or "",
+        "user_id": user_id,
         "access": result.get("access") or "",
         "refresh": result.get("refresh") or "",
+        "source": "dushan-quota",
     }
+    if not record["access"] and not record["refresh"]:
+        raise ValueError("授权未返回账号凭据，请重试")
+    existing = next((item for item in stored if item.get("provider") == provider and (
+        (record["user_id"] and item.get("user_id") == record["user_id"])
+        or (record["access"] and item.get("access") == record["access"])
+        or (record["refresh"] and item.get("refresh") == record["refresh"])
+    )), {})
+    record["identity"] = existing.get("identity") or record["identity"]
+    lifetime = result.get("expires_in")
+    if isinstance(lifetime, (int, float)):
+        record["expiry"] = int(time.time()) + int(lifetime)
     if provider == "openai":
         account_id = token_account_id(record["access"]) or profile.get("account_id") or profile.get("user_id")
         if not account_id or not record["access"] or not record["refresh"]:
             raise ValueError("授权未返回完整账号凭据，请重试")
         identity = result.get("identity") or account_id
-        existing = next((item for item in store.list_stored() if item.get("provider") == "openai" and
+        existing = next((item for item in stored if item.get("provider") == "openai" and
                          (item.get("identity") == identity or item.get("user_id") == account_id)), {})
         record.update(identity=existing.get("identity") or identity, user_id=account_id,
                       source=existing.get("source") or "dushan-quota")
@@ -150,11 +183,15 @@ def _store_oauth_account(provider: str, label: str, result: dict):
     if profile.get("plan_type"):
         record["plan"] = profile["plan_type"]
     store.upsert_account(record)
+    account = Account(
+        provider=provider, label=label, source=record["source"], identity=record["identity"],
+        auth_mode="oauth", email=record["email"], name=record["name"], user_id=record["user_id"],
+        plan=record.get("plan") or "", secret={**record, "account_id": record["user_id"]},
+    )
+    agentdb.sync_accounts([account])
+    if provider == "claude" and user_id and record["access"]:
+        agentdb.set_claude_identity(record["access"], {"user_id": user_id, "email": record["email"], "name": record["name"]})
     if provider == "openai":
-        account = Account(provider=provider, label=label, source=record["source"], identity=record["identity"],
-                          auth_mode="oauth", email=record["email"], name=record["name"], user_id=record["user_id"],
-                          plan=record.get("plan") or "", secret={**record, "account_id": record["user_id"]})
-        agentdb.sync_accounts([account])
         tokenstore.record(account, record["access"], record["refresh"], result.get("expires_in"))
         tokenstore._write_back(account, record["access"], record["refresh"], result.get("expires_in"), record["id_token"])
     return record
@@ -170,7 +207,7 @@ def add_api_key(provider: str, api_key: str, variant: str = "") -> None:
         "provider": provider,
         "auth_mode": "api_key",
         "label": AUTH_RULES[provider]["title"],
-        "identity": f"{provider}:key:{api_key[-4:]}",
+        "identity": credential_identity(provider, api_key, "key"),
         "api_key": api_key,
         "variant": variant or provider,
     }
@@ -332,13 +369,19 @@ def add_from_env(provider: str) -> None:
 
 
 def add_local(provider: str) -> None:
-    accounts = [item for item in collect_accounts() if item.provider == provider]
+    accounts = [item for item in collect_accounts(local_only=True) if item.provider == provider]
     if not accounts:
+        if provider == "claude":
+            raise ValueError("未发现可确认身份的 Claude 本机登录；请检查登录状态，身份查询被限流时稍后重试")
         print("本机没有发现该平台登录")
         return
     count = 0
+    stored = {item["user_id"]: item for item in store.list_stored()
+              if item.get("provider") == provider and item.get("user_id")}
     for account in accounts:
-        upsert_account(
+        existing = stored.get(account.user_id, {})
+        account.identity = existing.get("identity") or account.identity
+        saved = upsert_account(
             {
                 "provider": account.provider,
                 "auth_mode": account.auth_mode or "local",
@@ -352,11 +395,15 @@ def add_local(provider: str) -> None:
                 "access": account.secret.get("access"),
                 "refresh": account.secret.get("refresh"),
                 "id_token": account.secret.get("id_token"),
+                "expiry": agentdb._secret_expiry(account.secret),
                 "variant": account.secret.get("variant"),
                 "source": account.source,
             }
         )
+        if account.user_id:
+            stored[account.user_id] = saved
         count += 1
+    agentdb.sync_accounts(accounts)
     print(f"已从本机导入 {count} 个账号")
 
 

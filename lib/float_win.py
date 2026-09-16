@@ -690,7 +690,25 @@ class Api:
     def quit(self):
         logbuf.info("悬浮窗退出")
         if self._window:
-            self._window.destroy()
+            if _is_macos():
+                _invoke_on_ui(self._window, _terminate_macos)
+            else:
+                self._window.destroy()
+
+
+def _clear_float_pid() -> None:
+    try:
+        _float_pid_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _terminate_macos() -> None:
+    """Finish the application, including bridge workers waiting on a closed WKWebView."""
+    from AppKit import NSApplication
+
+    _clear_float_pid()
+    NSApplication.sharedApplication().terminate_(None)
 
 
 def _invoke_on_ui(window, func) -> None:
@@ -785,7 +803,12 @@ class _Tray:
     def stop(self) -> None:
         if self._icon:
             try:
-                self._icon.stop()
+                if _is_macos():
+                    # stop() also stops the shared NSApplication event loop.
+                    # Only the window/application lifecycle may do that.
+                    self._icon.visible = False
+                else:
+                    self._icon.stop()
             except Exception:
                 pass
 
@@ -815,20 +838,20 @@ class _Tray:
         window = self._api._window
         if window:
             try:
-                window.evaluate_js("refresh(true)")
+                if _is_macos():
+                    # Menu actions run on the Cocoa thread. evaluate_js waits
+                    # for that same thread, so submit this one-way call directly.
+                    _invoke_on_ui(
+                        window,
+                        lambda: window.native.contentView().evaluateJavaScript_completionHandler_("refresh(true)", None),
+                    )
+                else:
+                    window.evaluate_js("refresh(true)")
             except Exception:
                 pass
 
     def _quit(self, icon=None, item=None) -> None:
-        self.stop()
-        window = self._api._window
-        if window:
-            try:
-                window.destroy()
-                return
-            except Exception:
-                pass
-            _invoke_on_ui(window, lambda: window.native.Close())
+        self._api.quit()
 
 
 def _float_pid_path() -> Path:
@@ -973,8 +996,9 @@ def serve_float():
         window.events.loaded += _on_shown
     except Exception:
         pass
-    threading.Timer(0.4, _on_shown).start()
-    threading.Timer(1.2, _on_shown).start()
+    timers = [threading.Timer(delay, _on_shown) for delay in (0.4, 1.2)]
+    for timer in timers:
+        timer.start()
 
     tray = _Tray(api)
     tray.start()
@@ -983,8 +1007,11 @@ def serve_float():
     try:
         webview.start(_ready, gui="edgechromium" if _is_windows() else None, debug=False)
     finally:
+        for timer in timers:
+            timer.cancel()
         tray.stop()
-        try:
-            _float_pid_path().unlink(missing_ok=True)
-        except OSError:
-            pass
+        _clear_float_pid()
+    if _is_macos():
+        # Native close / Cmd+Q can stop pywebview's loop while non-daemon
+        # bridge or quota workers remain alive. Complete the Cocoa lifecycle.
+        _terminate_macos()

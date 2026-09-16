@@ -80,6 +80,8 @@ def _upsert_account(data: dict, record: dict) -> dict:
             and item.get("identity") == record.get("identity")
         )
         if same_id or same_identity:
+            if item.get("user_id") and record.get("user_id") and item["user_id"] != record["user_id"]:
+                raise ValueError("账号身份与已有记录不一致，请使用不同的 identity 添加，原账号未修改")
             record["id"] = item.get("id") or account_id
             record["created_at"] = item.get("created_at") or record["created_at"]
             merged = dict(item)
@@ -117,11 +119,13 @@ def remove_by_identity(provider: str, identity: str) -> bool:
     return True
 
 
-def update_fields(provider: str, identity: str, fields: dict) -> bool:
+def update_fields(provider: str, identity: str, fields: dict, *, expected: dict | None = None) -> bool:
     data = load_store()
     changed = False
     for item in data["accounts"]:
         if item.get("provider") == provider and item.get("identity") == identity:
+            if expected is not None and any((item.get(key) or "") != value for key, value in expected.items()):
+                continue
             item.update(fields)
             item["updated_at"] = int(time.time())
             changed = True

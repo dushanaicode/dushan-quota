@@ -1,7 +1,7 @@
 import os
 
 from .config import apply_config_env
-from .models import AUTH_RULES, Account
+from .models import AUTH_RULES, Account, credential_identity
 
 
 def collect_env_accounts() -> list[Account]:
@@ -18,7 +18,7 @@ def collect_env_accounts() -> list[Account]:
                     provider=provider,
                     label=rule["title"],
                     source=f"env:{name}",
-                    identity=f"env:{name}:{value[-4:]}",
+                    identity=credential_identity(provider, value, "key"),
                     auth_mode="env",
                     secret={"api_key": value, "access": value, "variant": variant},
                 )

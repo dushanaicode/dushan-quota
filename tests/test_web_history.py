@@ -119,6 +119,14 @@ class WebHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "缺少要删除的账号标识"):
             web._forget_account("openai", "")
 
+    def test_stored_id_is_scoped_to_provider(self):
+        records = [store.upsert_account({"provider": provider, "identity": "account-1", "access": "test"})
+                   for provider in ("openai", "claude")]
+        with patch.object(web.snapshot, "get_snapshot", return_value=self.shared), patch(
+            "lib.usage.activation_statuses", return_value={}
+        ):
+            self.assertEqual(records[0]["id"], web._quota_payload()["results"][0]["stored_id"])
+
     def test_forget_clears_history_when_account_is_not_in_store(self):
         web._set_archived(
             "openai",

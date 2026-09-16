@@ -281,7 +281,40 @@ async function main() {
   assert(!rendered.includes('value="grok_cli"'));
   web.renderUsageDetail({account: {title: 'OpenAI'}, usage: [], harnesses: [{key: 'opencode', label: 'OpenCode', configured: true}]});
   assert(web.get('usageBody').innerHTML.includes('value="opencode"'));
-  console.log('UI checks passed: dropdowns, saved filters, account-scoped clients, keyboard focus, animations, empty states, and metrics.');
+  const auth = context(), authCalls = [];
+  const authSource = script('index.html').split('/* ---------- add account')[1].split('/* ---------- sync to harness')[0];
+  vm.runInContext('/* ---------- add account' + authSource, auth);
+  auth.api = async (url, options) => {
+    authCalls.push({url, body: options?.body && JSON.parse(options.body)});
+    if (url.endsWith('/start')) return {login_id:'claude-login', verification_uri_complete:'https://claude.com/cai/oauth/authorize?state=test'};
+    return {status:'ok'};
+  };
+  auth.refreshQuota = () => {};
+  vm.runInContext("addProv = 'claude'; selectMode('oauth');", auth);
+  assert(auth.get('fields').innerHTML.includes('授权码'));
+  await auth.submitAdd();
+  assert(auth.get('oauthBox').innerHTML.includes('id="oauthCode"'));
+  assert(auth.get('oauthBox').innerHTML.includes('打开授权页面'));
+  assert.equal(auth.get('btnAdd').disabled, false);
+  assert.equal(auth.get('btnAdd').textContent, '完成授权');
+  assert(!authCalls.some(call => call.url.includes('/poll')), 'Claude uses manual completion, without device polling');
+  auth.get('oauthCode').value = 'sample-code#test';
+  await auth.submitAdd();
+  assert.deepEqual(authCalls.at(-1), {url:'/api/oauth/claude/complete', body:{login_id:'claude-login', code:'sample-code#test'}});
+  assert.equal(vm.runInContext('oauthLogin', auth), null);
+  await auth.submitAdd();
+  auth.selectMode('local');
+  assert.equal(authCalls.at(-1).url, '/api/oauth/claude/cancel', 'Switching modes cancels the previous login');
+  assert.equal(auth.get('btnAdd').disabled, false);
+  let resolveStart;
+  auth.api = (url, options) => url.endsWith('/start') ? new Promise(resolve => {resolveStart = resolve;}) : Promise.resolve(authCalls.push({url, body:JSON.parse(options.body)}));
+  auth.selectMode('oauth');
+  const starting = auth.startOAuth('claude');
+  auth.closeAdd();
+  resolveStart({login_id:'late-login', verification_uri_complete:'https://claude.com'});
+  await starting;
+  assert.equal(authCalls.at(-1).body.login_id, 'late-login', 'A dismissed dialog cannot leave a late OAuth session active');
+  console.log('UI checks passed: dropdowns, saved filters, account-scoped clients, keyboard focus, animations, empty states, metrics, and Claude OAuth.');
 }
 
 main().catch(error => {console.error(error); process.exitCode = 1;});

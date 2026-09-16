@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import store
+from .models import credential_identity
 from .oauth_openai import _jwt_claims
 
 _SCHEMA = """
@@ -63,7 +64,9 @@ ON CONFLICT(provider, identity) DO UPDATE SET
   user_id = excluded.user_id,
   plan = excluded.plan,
   auth_mode = excluded.auth_mode,
-  source = excluded.source,
+  source = CASE
+    WHEN excluded.provider = 'claude' AND (excluded.access = '' OR excluded.expires < accounts.expires) THEN accounts.source
+    ELSE excluded.source END,
   api_key = CASE WHEN excluded.api_key <> '' THEN excluded.api_key ELSE accounts.api_key END,
   api_key_masked = CASE WHEN excluded.api_key <> '' THEN excluded.api_key_masked ELSE accounts.api_key_masked END,
   access = CASE
@@ -71,20 +74,43 @@ ON CONFLICT(provider, identity) DO UPDATE SET
     WHEN excluded.expires >= accounts.expires THEN excluded.access
     ELSE accounts.access END,
   refresh = CASE
-    WHEN excluded.provider = 'openai' AND excluded.access <> '' AND excluded.expires >= accounts.expires THEN excluded.refresh
+    WHEN excluded.provider IN ('openai', 'claude') AND excluded.access <> '' AND excluded.expires >= accounts.expires THEN excluded.refresh
+    WHEN excluded.provider = 'claude' THEN accounts.refresh
     WHEN excluded.refresh = '' THEN accounts.refresh
     WHEN excluded.expires >= accounts.expires THEN excluded.refresh
     ELSE accounts.refresh END,
   id_token = CASE
     WHEN excluded.expires >= accounts.expires THEN excluded.id_token
     ELSE accounts.id_token END,
-  expires = MAX(excluded.expires, accounts.expires),
+  expires = CASE
+    WHEN excluded.provider = 'claude' AND excluded.access = '' THEN accounts.expires
+    ELSE MAX(excluded.expires, accounts.expires) END,
   updated_at = excluded.updated_at
 """
 
 
 def db_path() -> Path:
     return store.store_dir() / "agent.db"
+
+
+def get_claude_identity(access: str) -> dict:
+    """Identity verified for this exact opaque token, or its probe retry state."""
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (credential_identity("claude", access),)).fetchone()
+        return json.loads(row[0]) if row else {}
+    finally:
+        conn.close()
+
+
+def set_claude_identity(access: str, identity: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                     (credential_identity("claude", access), json.dumps(identity)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def mask_key(key: str) -> str:

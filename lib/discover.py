@@ -5,7 +5,7 @@ from pathlib import Path
 from . import agentdb, tokenstore
 from .crypto_store import cockpit_key, load_maybe_encrypted
 from .env_auth import collect_env_accounts
-from .models import Account
+from .models import Account, credential_identity
 from .store import list_stored
 
 
@@ -27,35 +27,62 @@ def opencode_auth(home: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def collect_accounts(home: Path | None = None) -> list[Account]:
+def collect_accounts(home: Path | None = None, *, local_only: bool = False) -> list[Account]:
     home = home or home_dir()
     accounts: list[Account] = []
     seen: dict[tuple[str, str], Account] = {}
     stored = list_stored()
-    # Keep existing identity/history keys when older OAuth imports used an email.
-    openai_identities = {
-        str(item.get("user_id")): str(item["identity"])
-        for item in stored
-        if item.get("provider") == "openai" and item.get("user_id") and item.get("identity")
-    }
+    # Reuse saved history keys only for matching accounts or complete credentials.
+    identities = {}
+    for item in stored:
+        provider, identity = item.get("provider"), item.get("identity")
+        if not provider or not identity:
+            continue
+        if provider == "claude" and not item.get("user_id") and item.get("access") and item.get("auth_mode") != "api_key":
+            verified = agentdb.get_claude_identity(item["access"])
+            if verified.get("user_id"):
+                item.update({field: verified.get(field, "") for field in ("user_id", "email", "name")})
+        for field in ("user_id", "api_key", "access", "refresh"):
+            value = item.get(field)
+            if value:
+                identities[(provider, field, value)] = item
 
-    def add(account: Account):
+    def add(account: Account, *, saved: bool = False):
+        if account.provider == "claude" and account.auth_mode != "api_key" and not saved:
+            from .providers import claude
+
+            verified = claude.resolve_identity(account.secret.get("access") or "")
+            if not verified:
+                return
+            account.identity = account.user_id = verified["user_id"]
+            account.email = verified.get("email", "")
+            account.name = verified.get("name", "")
         if account.provider == "openai" and account.auth_mode != "api_key":
             account_id = _openai_account_id(account.secret.get("access")) or account.secret.get("account_id") or account.user_id
             if account_id:
-                account.identity = openai_identities.get(account_id, account_id)
+                account.identity = account_id
                 account.secret["account_id"] = account_id
                 account.user_id = account_id
+        for field in ("user_id", "api_key", "access", "refresh"):
+            value = account.user_id if field == "user_id" else account.secret.get(field)
+            saved = identities.get((account.provider, field, value)) if value else None
+            if saved and not (account.user_id and saved.get("user_id") and account.user_id != saved["user_id"]):
+                account.identity = saved["identity"]
+                for metadata in ("email", "name", "user_id", "plan"):
+                    if not getattr(account, metadata):
+                        setattr(account, metadata, saved.get(metadata) or "")
+                break
         key = (account.provider, account.identity)
         api_key = str(account.secret.get("api_key") or "")
         if api_key:
-            key = (account.provider, f"key:{api_key[-6:]}")
+            key = (account.provider, credential_identity(account.provider, api_key, "key"))
         if not account.identity and not api_key:
             return
         if key in seen:
             previous = seen[key]
-            if account.provider == "openai" and agentdb._secret_expiry(account.secret) > agentdb._secret_expiry(previous.secret):
+            if account.provider in {"openai", "claude"} and agentdb._secret_expiry(account.secret) > agentdb._secret_expiry(previous.secret):
                 previous.secret = account.secret
+                previous.source = account.source
             return
         seen[key] = account
         accounts.append(account)
@@ -68,13 +95,15 @@ def collect_accounts(home: Path | None = None) -> list[Account]:
     _from_cursor_local(home, add)
     _from_cursor_agent_local(home, add)
     _from_claude_local(home, add)
-    _from_store(add, stored)
-    for account in collect_env_accounts():
-        add(account)
+    if not local_only:
+        _from_store(lambda account: add(account, saved=True), stored)
+        for account in collect_env_accounts():
+            add(account)
     with tokenstore.OPENAI_LOCK:
         for account in accounts:
             tokenstore.adopt_latest(account)
-        agentdb.sync_accounts(accounts)
+        if not local_only:
+            agentdb.sync_accounts(accounts)
     return accounts
 
 
@@ -104,7 +133,7 @@ def _from_codex_local(home: Path, add):
         if (id_acc_id and acc_acc_id and id_acc_id == acc_acc_id) or not id_acc_id or not acc_acc_id:
             if access:
                 account_id = acc_acc_id or id_acc_id or account_id_hint or ""
-                identity = account_id or _jwt_sub(access) or "codex-local"
+                identity = account_id or _jwt_sub(access) or credential_identity("openai", access)
                 add(
                     Account(
                         provider="openai",
@@ -130,7 +159,7 @@ def _from_codex_local(home: Path, add):
             # Case 2: Multi-account state in auth.json (id_token belongs to Account A, access belongs to Account B)
             # 1) Add Account B (the access token account)
             account_id_b = acc_acc_id or account_id_hint or ""
-            identity_b = account_id_b or _jwt_sub(access) or "codex-local"
+            identity_b = account_id_b or _jwt_sub(access) or credential_identity("openai", access)
             add(
                 Account(
                     provider="openai",
@@ -182,7 +211,7 @@ def _from_codex_local(home: Path, add):
     if pat:
         payload = _jwt_payload(pat)
         account_id = str(_openai_account_id(pat) or "").strip()
-        identity = account_id or _jwt_sub(pat) or "codex-local"
+        identity = account_id or _jwt_sub(pat) or credential_identity("openai", pat)
         add(
             Account(
                 provider="openai",
@@ -209,7 +238,7 @@ def _from_codex_local(home: Path, add):
                 provider="openai",
                 label="OpenAI / Codex",
                 source="codex-local",
-                identity=f"openai:key:{_mask(api_key)}",
+                identity=credential_identity("openai", api_key, "key"),
                 auth_mode="api_key",
                 secret={"api_key": api_key},
             )
@@ -224,7 +253,7 @@ def _from_opencode(auth: dict, add):
                 provider="grok",
                 label="Grok",
                 source="opencode",
-                identity=_jwt_sub(xai.get("access")) or "opencode-xai",
+                identity=_jwt_sub(xai.get("access")) or credential_identity("grok", xai["access"]),
                 auth_mode="oauth",
                 user_id=_jwt_sub(xai.get("access")) or "",
                 secret={
@@ -243,7 +272,7 @@ def _from_opencode(auth: dict, add):
                 provider="openai",
                 label="OpenAI",
                 source="opencode",
-                identity=account_id or "opencode-openai",
+                identity=account_id or _jwt_sub(openai["access"]) or credential_identity("openai", openai["access"]),
                 auth_mode="oauth",
                 email=_openai_email(openai.get("access")) or "",
                 user_id=account_id or "",
@@ -265,7 +294,7 @@ def _from_opencode(auth: dict, add):
                 provider="claude",
                 label="Claude Code",
                 source="opencode",
-                identity="opencode-anthropic",
+                identity=credential_identity("claude", anthropic["access"]),
                 auth_mode="oauth",
                 secret={"access": anthropic.get("access", ""), "refresh": anthropic.get("refresh", ""), "expires": anthropic.get("expires")},
             )
@@ -285,7 +314,7 @@ def _from_opencode(auth: dict, add):
                     provider=provider,
                     label=label,
                     source="opencode",
-                    identity=f"glm:{_mask(api_key)}",
+                    identity=credential_identity(provider, api_key, "key"),
                     auth_mode="api_key",
                     secret={"api_key": api_key, "variant": key},
                 )
@@ -300,7 +329,7 @@ def _from_opencode(auth: dict, add):
                     provider="kimi",
                     label="Kimi Code",
                     source="opencode",
-                    identity=f"kimi:{_mask(api_key)}",
+                    identity=credential_identity("kimi", api_key, "key"),
                     auth_mode="api_key",
                     secret={"api_key": api_key},
                 )
@@ -314,7 +343,7 @@ def _from_opencode(auth: dict, add):
                 provider="deepseek",
                 label="DeepSeek",
                 source="opencode",
-                identity=f"deepseek:{_mask(api_key)}",
+                identity=credential_identity("deepseek", api_key, "key"),
                 auth_mode="api_key",
                 secret={"api_key": api_key},
             )
@@ -328,7 +357,7 @@ def _from_opencode(auth: dict, add):
                     provider="antigravity",
                     label="Antigravity",
                     source="opencode",
-                    identity=entry.get("email") or key,
+                    identity=entry.get("email") or credential_identity("antigravity", entry["refresh"]),
                     auth_mode="oauth",
                     email=str(entry.get("email") or ""),
                     secret=dict(entry),
@@ -350,7 +379,7 @@ def _from_official_grok(home: Path, add):
                 provider="grok",
                 label="Grok",
                 source="official-grok",
-                identity=entry.get("principal_id") or entry.get("user_id") or entry.get("email") or key,
+                identity=entry.get("principal_id") or entry.get("user_id") or _jwt_sub(entry["key"]) or credential_identity("grok", entry["key"]),
                 auth_mode="oauth",
                 email="" if entry.get("email") == "unknown@grok.local" else str(entry.get("email") or ""),
                 name=" ".join(part for part in [entry.get("first_name"), entry.get("last_name")] if part).strip(),
@@ -387,7 +416,7 @@ def _from_cockpit(home: Path, add):
                 provider="grok",
                 label="Grok",
                 source="cockpit",
-                identity=detail.get("principal_id") or detail.get("user_id") or detail.get("email") or account_id,
+                identity=detail.get("principal_id") or detail.get("user_id") or account_id,
                 auth_mode=str(detail.get("auth_mode") or "oauth"),
                 email="" if detail.get("email") == "unknown@grok.local" else str(detail.get("email") or ""),
                 name=" ".join(part for part in [detail.get("first_name"), detail.get("last_name")] if part).strip(),
@@ -448,7 +477,7 @@ def _from_cockpit(home: Path, add):
                 provider="zai",
                 label="Z.ai",
                 source="cockpit",
-                identity=f"glm:{_mask(api_key)}",
+                identity=credential_identity("zai", api_key, "key"),
                 auth_mode="api_key",
                 email=str(detail.get("email") or ""),
                 secret={"api_key": api_key, "variant": "zai"},
@@ -482,7 +511,7 @@ def _from_cursor_local(home: Path, add):
             provider="cursor",
             label="Cursor",
             source="cursor-local",
-            identity=email or "cursor-local",
+            identity=_jwt_sub(access) or email or credential_identity("cursor", access),
             auth_mode="local",
             email=email,
             secret={
@@ -499,7 +528,7 @@ def _from_cursor_agent_local(home: Path, add):
     import sys
 
     if sys.platform == "win32":
-        appdata = Path.home() / "AppData" / "Roaming" / "Cursor" / "auth.json"
+        appdata = home / "AppData" / "Roaming" / "Cursor" / "auth.json"
     elif sys.platform == "darwin":
         appdata = home / "Library" / "Application Support" / "Cursor" / "auth.json"
     else:
@@ -518,7 +547,7 @@ def _from_cursor_agent_local(home: Path, add):
             provider="cursor_agent",
             label="Cursor Agent",
             source="cursor-agent-local",
-            identity=user_id or "cursor-agent-local",
+            identity=credential_identity("cursor_agent", api_key, "key") if api_key else user_id or credential_identity("cursor_agent", access),
             auth_mode="local",
             user_id=user_id,
             secret={
@@ -544,14 +573,19 @@ def _from_claude_local(home: Path, add):
         access = oauth.get("accessToken") or oauth.get("access_token") or data.get("accessToken")
         if not access:
             continue
+        profile = oauth.get("profile") if isinstance(oauth.get("profile"), dict) else {}
+        account = profile.get("account") if isinstance(profile.get("account"), dict) else {}
+        user_id = str(account.get("uuid") or oauth.get("accountUuid") or "")
+        email = str(account.get("email") or oauth.get("email") or "")
         add(
             Account(
                 provider="claude",
                 label="Claude Code",
                 source=str(path),
-                identity=oauth.get("email") or "claude-local",
+                identity=user_id or email or credential_identity("claude", str(access)),
                 auth_mode="oauth",
-                email=str(oauth.get("email") or ""),
+                email=email,
+                user_id=user_id,
                 secret={
                     "access": str(access),
                     "refresh": oauth.get("refreshToken") or oauth.get("refresh_token") or "",
@@ -559,14 +593,6 @@ def _from_claude_local(home: Path, add):
                 },
             )
         )
-        return
-
-
-def _mask(value: str) -> str:
-    text = value.strip()
-    if len(text) <= 8:
-        return text
-    return text[-4:]
 
 
 def _jwt_payload(token: str) -> dict:
@@ -598,8 +624,8 @@ def _from_store(add, records=None):
         refresh = str(item.get("refresh") or "").strip()
         id_token = str(item.get("id_token") or "").strip()
 
-        # OpenAI merges complete bundles after discovery, never individual old/new tokens.
-        if provider != "openai" and (not access or not refresh):
+        # OAuth sessions must keep their access and refresh tokens together.
+        if provider not in {"openai", "claude"} and (not access or not refresh):
             db_token = agentdb.get_tokens(provider, identity)
             if db_token:
                 if not access:

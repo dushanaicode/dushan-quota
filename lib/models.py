@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass, field
 
 
@@ -14,7 +15,7 @@ AUTH_RULES = {
     },
     "claude": {
         "title": "Claude Code",
-        "modes": ("api_key", "json", "local", "env"),
+        "modes": ("oauth", "api_key", "json", "local", "env"),
         "env": ("ANTHROPIC_API_KEY",),
     },
     "zai": {
@@ -48,6 +49,10 @@ AUTH_RULES = {
         "env": ("CURSOR_API_KEY",),
     },
 }
+
+
+def credential_identity(provider: str, credential: str, kind: str = "token") -> str:
+    return f"{provider}:{kind}:{hashlib.sha256(credential.encode()).hexdigest()}"
 
 
 @dataclass
