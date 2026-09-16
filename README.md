@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.7.0-C3B191" alt="Release v0.7.0">
+  <img src="https://img.shields.io/badge/Release-v0.7.1-C3B191" alt="Release v0.7.1">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -100,6 +100,7 @@ quota --version
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。
 - **Claude 限流退避**：查询或令牌续期遇到 `429`、网络错误或服务错误时，不立即重试，显示黄色提示并保留上次额度；该账号的自动请求依次暂停 5、10、20、30 分钟后自动再试，手动刷新可立即重试。认证失败或续期凭据失效显示红色错误，并暂停自动请求，直到手动刷新或在 Claude Code 重新登录（检测到新凭据即自动恢复）。`401` 最多续期一次。本地 Claude Code 登录态会读取 refresh token 与过期时间，续期成功后回写原文件。
 - **Claude 账号合并**：本机和 OAuth 登录经服务端确认属于同一账号后，共用原账号卡片，选择到期更晚的整组凭据；不同账号分别保留。令牌轮换不会新增卡片；身份查询失败会退避，不保存未确认的新账号。续期只回写使用的登录会话，保留同账号的独立 OAuth 会话；归档与恢复跟随账号身份。删除 Quota 记录不会退出本机 Claude Code，仍在本机登录的账号可再次被发现。
+- **Claude 提前续期**：每次额度查询时提前 5 分钟检查令牌期限，续期、额度和账号信息请求的超时为 15 秒；同进程的续期请求串行处理并复用同账号的新凭据。续期响应提供 `Retry-After` 时，自动重试不会早于服务端要求的时间。日志只记录账号短哈希、来源类别和经过筛选的响应元数据，用于区分限流、网页验证和授权失效；不记录令牌、Cookie 或原始响应正文。
 - **OpenAI 多账号恢复**：优先使用账号库中的新令牌，刷新时只同步仍使用该账号的 Codex / OpenCode。续期失败会显示原因，也可以在原卡片点击“重新授权”，保留账号和历史记录；登录其他账号时会拒绝覆盖。
 - **同来源多账号**：Claude Code、ChatGPT 和其他平台可重复使用本机导入、OAuth 等方式添加不同账号。按账号 ID 或完整凭据指纹区分，客户端切号后旧账号仍保存在本地库；后台续期只回写仍属于该账号的客户端。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。

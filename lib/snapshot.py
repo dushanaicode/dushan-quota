@@ -170,7 +170,7 @@ def _settle(item: QuotaResult, previous: QuotaResult | None, now: float) -> Quot
     if not item.notice:
         return replace(item, credential_tag=tag)
     failures = previous.failures + 1 if previous and previous.notice else 1
-    retry_at = now + min(_BACKOFF_MAX_SECONDS, _BACKOFF_SECONDS * 2 ** (failures - 1))
+    retry_at = max(item.retry_at, now + min(_BACKOFF_MAX_SECONDS, _BACKOFF_SECONDS * 2 ** (failures - 1)))
     if not item.ok and previous and previous.ok:
         # Keep the last good quota on screen instead of blanking the card.
         item = replace(previous, account=item.account, notice=item.notice)

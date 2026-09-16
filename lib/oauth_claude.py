@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from .httputil import request_json
 from .providers import claude
-from .tokenstore import CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL
+from .tokenstore import CLAUDE_CLIENT_ID, CLAUDE_TOKEN_URL, CLAUDE_USER_AGENT
 
 AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize"
 REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
@@ -79,7 +79,7 @@ def complete_login(login_id: str, callback_or_code: str) -> dict:
             raise ValueError("授权已取消或完成，请重新开始授权")
         if "tokens" not in item:
             status, _, tokens = request_json(CLAUDE_TOKEN_URL, method="POST", headers={
-                "Accept": "application/json", "User-Agent": "dushan-quota/1.0",
+                "Accept": "application/json, text/plain, */*", "User-Agent": CLAUDE_USER_AGENT,
             }, body={
                 "grant_type": "authorization_code", "client_id": CLAUDE_CLIENT_ID,
                 "code": code, "redirect_uri": REDIRECT_URI,

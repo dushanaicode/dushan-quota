@@ -41,7 +41,7 @@ def fetch(account: Account) -> QuotaResult:
     except tokenstore.RefreshError as error:
         if error.reauth or error.code == "writeback_failed":
             return _failure(account, str(error))
-        return _temporary(account, "令牌续期暂时被限流（429）" if error.code == "http_429" else str(error))
+        return _temporary(account, "令牌续期暂时被限流（429）" if error.code == "http_429" else str(error), retry_at=error.retry_at)
 
 
 def _fetch(account: Account) -> QuotaResult:
@@ -89,7 +89,7 @@ def _fetch(account: Account) -> QuotaResult:
 
 
 def _usage(access: str):
-    return request_json(USAGE_URL, headers=_headers(access), retry=False)
+    return request_json(USAGE_URL, headers=_headers(access), timeout=tokenstore.CLAUDE_REQUEST_TIMEOUT, retry=False)
 
 
 def _failure(account: Account, message: str) -> QuotaResult:
@@ -97,9 +97,9 @@ def _failure(account: Account, message: str) -> QuotaResult:
     return QuotaResult(account=account, ok=False, title="Claude Code", error=f"{message}；已暂停自动查询，处理后手动刷新")
 
 
-def _temporary(account: Account, message: str) -> QuotaResult:
+def _temporary(account: Account, message: str, *, retry_at: float = 0) -> QuotaResult:
     """Rate limits and network trouble: the snapshot backs off and retries on its own."""
-    return QuotaResult(account=account, ok=False, title="Claude Code", notice=message)
+    return QuotaResult(account=account, ok=False, title="Claude Code", notice=message, retry_at=retry_at)
 
 
 def _request_error(status: int) -> str:
@@ -118,13 +118,18 @@ def _headers(access: str) -> dict:
     return {
         "Authorization": f"Bearer {access}",
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "dushan-quota/1.0",
+        "User-Agent": tokenstore.CLAUDE_USER_AGENT,
     }
 
 
 def _profile(access: str):
     """Plan and account identity; the usage endpoint carries neither."""
-    return request_json(PROFILE_URL, headers=_headers(access), retry=False)
+    headers = {
+        "Authorization": f"Bearer {access}",
+        "Content-Type": "application/json",
+        "User-Agent": tokenstore.CLAUDE_USER_AGENT,
+    }
+    return request_json(PROFILE_URL, headers=headers, timeout=tokenstore.CLAUDE_REQUEST_TIMEOUT, retry=False)
 
 
 def resolve_identity(access: str) -> dict:

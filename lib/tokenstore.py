@@ -5,9 +5,11 @@
 - Cursor Agent 的 crsr_ Key 走 auth/exchange_user_api_key（provider 内自处理，不经本模块）。
 """
 
+import hashlib
 import http.client
 import json
 import math
+import re
 import sqlite3
 import threading
 import time
@@ -18,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import agentdb, logbuf, store
+from .httputil import _retry_after_seconds
 from .oauth_openai import _jwt_claims, matching_id_token, token_account_id
 
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
@@ -26,6 +29,9 @@ OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+CLAUDE_USER_AGENT = "antigravity-cockpit-tools"
+CLAUDE_REQUEST_TIMEOUT = 15
+CLAUDE_EXPIRY_SKEW_SECONDS = 5 * 60
 CURSOR_TOKEN_URL = "https://api2.cursor.sh/oauth/token"
 CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -36,13 +42,17 @@ _OPENCODE_ENTRY_KEY = {"grok": "xai", "openai": "openai", "claude": "anthropic"}
 
 # ponytail: serialize OpenAI refresh/switch/save within this process; per-account locks if contention grows.
 OPENAI_LOCK = threading.RLock()
+# ponytail: serialize Claude renewal in this process; per-account locks if contention grows.
+CLAUDE_LOCK = threading.RLock()
 
 
 class RefreshError(Exception):
-    def __init__(self, code: str, message: str, *, reauth: bool = False):
+    def __init__(self, code: str, message: str, *, reauth: bool = False, retry_at: float = 0, diagnostics: dict | None = None):
         super().__init__(message)
         self.code = code
         self.reauth = reauth
+        self.retry_at = retry_at
+        self.diagnostics = diagnostics or {}
 
 
 def adopt_latest(account) -> None:
@@ -93,17 +103,17 @@ def record(account, access: str, refresh: str = "", expires_in=None) -> None:
 
 def ensure_fresh(account) -> str:
     """已知过期就先刷新；未知过期时间的返回原票，由 provider 遇到 401 再刷新。"""
-    if account.provider == "openai":
-        with OPENAI_LOCK:
+    if account.provider in {"openai", "claude"}:
+        lock = CLAUDE_LOCK if account.provider == "claude" else OPENAI_LOCK
+        skew = CLAUDE_EXPIRY_SKEW_SECONDS if account.provider == "claude" else _EXPIRY_SKEW_SECONDS
+        with lock:
             adopt_latest(account)
             access = account.secret.get("access") or ""
             expiry = _expiry_ts(account)
-            if (not access and account.secret.get("refresh")) or (expiry and time.time() >= expiry - _EXPIRY_SKEW_SECONDS):
+            if (not access and account.secret.get("refresh")) or (expiry and time.time() >= expiry - skew):
                 return refresh_account(account) or ""
             return access
     access = account.secret.get("access") or ""
-    if account.provider == "claude" and not access and account.secret.get("refresh"):
-        return refresh_account(account) or ""
     if not access:
         return ""
     expiry = _expiry_ts(account)
@@ -124,6 +134,23 @@ def refresh_account(account) -> str | None:
             except RefreshError as error:
                 logbuf.warn("OpenAI 令牌续期失败", identity=account.identity, code=error.code, reauth=error.reauth)
                 raise
+    if account.provider == "claude":
+        with CLAUDE_LOCK:
+            previous = account.secret.get("access")
+            adopt_latest(account)
+            if account.secret.get("access") != previous and _expiry_ts(account) > time.time() + CLAUDE_EXPIRY_SKEW_SECONDS:
+                return account.secret["access"]
+            source = "local-file" if Path(account.source).is_absolute() else account.source if account.source in {"dushan-quota", "opencode"} else "other"
+            context = {"account": hashlib.sha256(account.identity.encode()).hexdigest()[:12], "source": source}
+            expiry = _expiry_ts(account)
+            logbuf.info("Claude 令牌续期开始", **context, access_expired=bool(expiry and expiry <= time.time()))
+            try:
+                access = _refresh_account(account)
+            except RefreshError as error:
+                logbuf.warn("Claude 令牌续期失败", **context, code=error.code, reauth=error.reauth, **error.diagnostics)
+                raise
+            logbuf.info("Claude 令牌续期成功", **context, expires_at=_expiry_ts(account))
+            return access
     return _refresh_account(account)
 
 
@@ -239,21 +266,50 @@ def _form_post(url: str, fields: dict):
     return payload if isinstance(payload, dict) else None
 
 
+def _refresh_response_diagnostics(error, response_body, payload: dict) -> tuple[dict, float]:
+    """Keep only bounded protocol metadata, never response text or credentials."""
+    headers = error.headers or {}
+    content_type = headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+    diagnostics = {
+        "http_status": error.code,
+        "response_format": "json" if isinstance(response_body, (dict, list)) else "html" if content_type == "text/html" else "other",
+        "cloudflare_challenge": headers.get("cf-mitigated") == "challenge",
+    }
+    patterns = {
+        "request-id": r"(?:req_[A-Za-z0-9]{8,96}|[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})",
+        "cf-ray": r"[0-9a-fA-F]{16,32}(?:-[A-Z]{3})?",
+    }
+    for name, pattern in patterns.items():
+        value = headers.get(name, "")
+        if re.fullmatch(pattern, value) and not any(isinstance(secret, str) and secret and secret in value for secret in payload.values()):
+            diagnostics[name.replace("-", "_")] = value
+    delay = _retry_after_seconds(headers) if error.code in {429, 503} else None
+    if delay is not None and math.isfinite(delay) and delay > 0:
+        diagnostics["retry_after_seconds"] = delay
+        return diagnostics, time.time() + delay
+    return diagnostics, 0
+
+
 def _json_post(url: str, payload: dict, *, strict: bool = False):
     body = json.dumps(payload).encode()
+    is_claude = url == CLAUDE_TOKEN_URL
+    headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0"}
+    if is_claude:
+        headers = {"Content-Type": "application/json", "User-Agent": CLAUDE_USER_AGENT}
     request = urllib.request.Request(
         url,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0"},
+        headers=headers,
     )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.urlopen(request, timeout=CLAUDE_REQUEST_TIMEOUT if is_claude else 20) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         if strict:
+            response_body = None
             try:
-                body = json.loads(error.read().decode("utf-8"))
-                detail = body.get("error") if isinstance(body, dict) else None
+                response_body = json.loads(error.read().decode("utf-8"))
+                detail = response_body.get("error") if isinstance(response_body, dict) else None
                 code = detail.get("code") or detail.get("type") if isinstance(detail, dict) else detail
             except (ValueError, OSError, http.client.HTTPException):
                 code = None
@@ -266,9 +322,12 @@ def _json_post(url: str, payload: dict, *, strict: bool = False):
                 "refresh_token_expired": "续期凭据已过期",
                 "refresh_token_revoked": "续期凭据已被撤销",
             }
+            diagnostics, retry_at = _refresh_response_diagnostics(error, response_body, payload) if is_claude else ({}, 0)
+            if isinstance(code, str) and code in {*reasons, "rate_limit_error", "overloaded_error", "authentication_error", "permission_error", "invalid_request_error"}:
+                diagnostics["provider_error"] = code
             if isinstance(code, str) and code in reasons:
-                raise RefreshError(code, f"{reasons[code]}（{code}），请重新授权此账号", reauth=True) from None
-            raise RefreshError(f"http_{error.code}", f"续期请求失败（HTTP {error.code}），请稍后重试") from None
+                raise RefreshError(code, f"{reasons[code]}（{code}），请重新授权此账号", reauth=True, diagnostics=diagnostics) from None
+            raise RefreshError(f"http_{error.code}", f"续期请求失败（HTTP {error.code}），请稍后重试", retry_at=retry_at, diagnostics=diagnostics) from None
         error.close()
         return None
     except (urllib.error.URLError, OSError, http.client.HTTPException):
