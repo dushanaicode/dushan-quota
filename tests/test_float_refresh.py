@@ -221,11 +221,12 @@ class FloatRefreshTests(unittest.TestCase):
         self.assertEqual("error", payload["snapshot"]["state"])
         self.assertNotIn("secret-token", str(payload))
 
-    def test_tray_refresh_forces_a_real_refresh(self):
+    def test_non_macos_tray_refresh_forces_a_real_refresh(self):
         api = float_win.Api()
         api._window = Mock()
 
-        float_win._Tray(api)._refresh()
+        with patch.object(float_win, "_is_macos", return_value=False):
+            float_win._Tray(api)._refresh()
 
         api._window.evaluate_js.assert_called_once_with("refresh(true)")
 
