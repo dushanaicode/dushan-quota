@@ -112,13 +112,14 @@
   .name b { font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; }
   .pill { font-size:10px; padding:1px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; flex:none; }
   .name span { font-size:11px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; white-space:pre-line; overflow-wrap:anywhere; line-height:1.5; font-variant-numeric:tabular-nums; }
   .row { margin:6px 0 2px; }
   .row .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; margin-bottom:4px; }
   .row .lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
   .row .rst { flex:1; text-align:right; font-size:10.5px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .row .pct { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .row .rst-toggle { background:none; border:0; padding:0; cursor:pointer; flex:1 0 auto; overflow:visible; font-variant-numeric:tabular-nums; }
+  .row .rst-toggle[aria-pressed="true"] { order:1; flex-basis:100%; white-space:normal; text-align:left; overflow-wrap:anywhere; }
   .row .rst-toggle:hover { color:var(--text); text-decoration:underline dotted; }
   .bar { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
   .bar i { display:block; height:100%; border-radius:99px; }
@@ -162,6 +163,9 @@
   .chip.on { color:var(--text); background:var(--accent-soft); }
   .chip:active { transform:scale(.94); }
   #cfg input[type=range] { width:100%; accent-color:var(--accent); height:14px; }
+  #timeZone { width:100%; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px; font-size:11px; }
+  #timeZone:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .time-zone-note { color:var(--faint); font-size:10px; line-height:1.5; margin-top:3px; }
   .albl { display:flex; justify-content:space-between; font-size:11.5px; color:var(--muted); margin-bottom:1px; }
   .bgrow { display:flex; gap:8px; padding:3px 0 2px; }
   .bgbtn { flex:1; text-align:center; font-size:11.5px; color:var(--muted); background:var(--track); border-radius:7px; padding:5px 0; cursor:pointer; transition:background .15s, color .15s, transform .1s; }
@@ -193,6 +197,10 @@
   </div>
   <div id="body"><div id="list"><div class="txt" style="padding:6px 0">加载中…</div></div></div>
   <div id="cfg">
+    <label class="sec" for="timeZone">显示时区</label>
+    <select id="timeZone" aria-describedby="timeZoneHelp timeZoneStatus"></select>
+    <div class="time-zone-note" id="timeZoneHelp">订阅、额度重置及更新时间按此时区显示，网页与悬浮窗共用。</div>
+    <div class="time-zone-note" id="timeZoneStatus" role="status"></div>
     <div class="sec">窗口</div>
     <div class="albl"><span>不透明度</span><span id="aVal">82%</span></div>
     <input type="range" id="alphaR" min="20" max="100">
@@ -224,6 +232,9 @@
 let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{}, reset_modes:{}, card_order:[] };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
+let displayTimeZone = '';
+let timeZoneOptions = [];
+let lastSnapshot = {};
 let api = null;
 let refreshing = false;
 let renderedContent = '';
@@ -247,8 +258,7 @@ function updateCountdowns(){
   });
 }
 function quotaResetAt(ts){
-  const date = new Date(ts * 1000), pad = n => String(n).padStart(2,'0');
-  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return fmtDate(ts * 1000);
 }
 function toggleResetTime(button){
   const key = button.dataset.resetKey;
@@ -342,14 +352,28 @@ function usageBlock(item){
 }
 
 function fmtDate(iso){
-  if(!iso) return '';
+  if(iso == null || iso === '') return '';
   const d = new Date(iso);
   if(isNaN(d)) return '';
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone:displayTimeZone || undefined, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23', timeZoneName:'longOffset',
+  }).formatToParts(d).map(part => [part.type, part.value]));
+  const offset = parts.timeZoneName === 'GMT' ? 'UTC+00:00' : parts.timeZoneName.replace('GMT', 'UTC');
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${offset}`;
 }
 function subscriptionText(it){
-  const end = fmtDate(it.sub_end);
-  return end ? `${it.sub_status === 'expired' ? '已到期' : '到期'} ${end}` : '';
+  const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
+  const expired = it.sub_status === 'expired' || Date.parse(it.sub_end) <= Date.now();
+  const lines = [];
+  if(start) lines.push(`订阅生效 ${start}`);
+  if(end) lines.push(`${expired ? '订阅已到期' : '订阅到期'} ${end}`);
+  else if(it.sub_status === 'not_applicable') lines.push('订阅 免费方案 · 到期 不适用');
+  else if(start) lines.push('订阅到期时间未提供');
+  else if(it.provider === 'claude') lines.push('订阅时间未提供');
+  else if(it.sub_status === 'unavailable') lines.push('订阅信息暂未取得，请刷新重试');
+  return lines.join('\n');
 }
 
 /* 卡片排序：按住卡片标题上下拖，顺序存进设置，随窗口一起持久化 */
@@ -409,8 +433,7 @@ function resetCardOrder(){
 
 // 限流、断网等临时问题：不是账号异常，到点自动重试
 function noticeText(it){
-  const at = new Date(it.retry_at * 1000);
-  const time = `${String(at.getHours()).padStart(2,'0')}:${String(at.getMinutes()).padStart(2,'0')}`;
+  const time = fmtDate(it.retry_at * 1000).slice(11);
   return `${it.notice}，${it.ok ? '显示上次数据，' : ''}${time} 自动重试`;
 }
 function render(items){
@@ -514,10 +537,33 @@ function flashUpdated(){
   panel.classList.add('refreshed');
 }
 function resultLabel(meta){
-  const stamp = new Date(meta.fetched_at || Date.now()).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  const full = fmtDate(meta.fetched_at || Date.now()), stamp = full.slice(11,19);
   if(meta.state === 'stale' || meta.stale) return [`旧数据 · ${stamp}`, 'error', '刷新失败，保留上次数据'];
   if(meta.state === 'error') return ['刷新失败', 'error', meta.error || '刷新失败，请稍后重试'];
-  return [`已更新 · ${stamp}`, 'ok', `更新于 ${stamp}`];
+  return [`已更新 · ${stamp}`, 'ok', `更新于 ${full}`];
+}
+async function setTimeZone(value){
+  const select = $('timeZone'), status = $('timeZoneStatus');
+  if(!timeZoneOptions.some(([zone]) => zone === value)) {
+    select.value = displayTimeZone;
+    status.textContent = '请选择列表中的时区';
+    return;
+  }
+  select.disabled = true;
+  try{
+    const result = await api.set_time_zone(value);
+    if(!result.ok) throw new Error(result.error);
+    displayTimeZone = result.time_zone;
+    select.value = displayTimeZone;
+    render(cache);
+    setRefreshState(...resultLabel(lastSnapshot));
+    status.textContent = '时区已保存';
+  }catch(e){
+    select.value = displayTimeZone;
+    status.textContent = `时区保存失败：${e.message}`;
+  }finally{
+    select.disabled = false;
+  }
 }
 async function refresh(force=false){
   if(refreshing) return;
@@ -526,8 +572,13 @@ async function refresh(force=false){
   setRefreshState('刷新中…', 'loading');
   try{
     const payload = await api.quota(!!force, usageOn());
-    const meta = Array.isArray(payload) ? {} : (payload.snapshot || {});
-    const next = Array.isArray(payload) ? payload : (payload.results || []);
+    const meta = payload.snapshot;
+    const next = payload.results;
+    lastSnapshot = meta;
+    if('time_zone' in payload) {
+      displayTimeZone = payload.time_zone;
+      $('timeZone').value = displayTimeZone;
+    }
     if(meta.state !== 'error' || !cache.length) cache = next;
     render(cache); buildPick();
     const [text, state, detail] = resultLabel(meta);
@@ -573,7 +624,15 @@ async function init(){
   inited = true;
   api = window.pywebview.api;
 
-  try{ S = Object.assign(S, await api.settings()); }catch(e){}
+  try{
+    const {time_zone, time_zones, ...settings} = await api.settings();
+    displayTimeZone = time_zone;
+    timeZoneOptions = time_zones;
+    S = Object.assign(S, settings);
+    $('timeZone').innerHTML = timeZoneOptions.map(([zone, label]) => `<option value="${esc(zone)}">${esc(label)}</option>`).join('');
+    $('timeZone').value = displayTimeZone;
+  }catch(e){ setRefreshState('设置加载失败', 'error', e.message); }
+  $('timeZone').onchange = e => setTimeZone(e.target.value);
   if(!['1d','3d','7d','30d','all'].includes(S.usage_period)) S.usage_period='30d';
   if(!S.usage_harnesses || typeof S.usage_harnesses!=='object' || Array.isArray(S.usage_harnesses)) S.usage_harnesses={};
   delete S.usage_harness;

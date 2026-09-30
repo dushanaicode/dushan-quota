@@ -24,6 +24,25 @@ ENV_KEYS = (
     "ANTHROPIC_API_KEY",
 )
 
+TIME_ZONES = (
+    ("", "跟随电脑时区"),
+    ("Asia/Shanghai", "北京时间 · Asia/Shanghai"),
+    ("America/Los_Angeles", "洛杉矶 · America/Los_Angeles"),
+    ("UTC", "UTC"),
+    ("Asia/Tokyo", "东京 · Asia/Tokyo"),
+    ("Asia/Singapore", "新加坡 · Asia/Singapore"),
+    ("Asia/Kolkata", "印度 · Asia/Kolkata"),
+    ("Europe/London", "伦敦 · Europe/London"),
+    ("Europe/Paris", "巴黎 · Europe/Paris"),
+    ("Australia/Sydney", "悉尼 · Australia/Sydney"),
+)
+
+
+def validate_time_zone(value: str) -> str:
+    if not isinstance(value, str) or value not in dict(TIME_ZONES):
+        raise ValueError("不支持的时区")
+    return value
+
 
 def config_path() -> Path:
     return store_dir() / "config.json"
@@ -32,6 +51,7 @@ def config_path() -> Path:
 def default_config() -> dict:
     return {
         "watch_seconds": 15,
+        "time_zone": "",
         "ignored_update_version": "",
         "env": {name: "" for name in ENV_KEYS if name not in HOME_ENV_KEYS},
         "hidden": [],
@@ -53,6 +73,7 @@ def load_config() -> dict:
         return data
     if isinstance(raw.get("watch_seconds"), int) and raw["watch_seconds"] >= 0:
         data["watch_seconds"] = raw["watch_seconds"]
+    data["time_zone"] = validate_time_zone(raw.get("time_zone", ""))
     if isinstance(raw.get("ignored_update_version"), str):
         data["ignored_update_version"] = raw["ignored_update_version"].strip()
     env = raw.get("env")
@@ -88,6 +109,7 @@ def load_config() -> dict:
 
 
 def save_config(data: dict) -> None:
+    validate_time_zone(data.get("time_zone", ""))
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

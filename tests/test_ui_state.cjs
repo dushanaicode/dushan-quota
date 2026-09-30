@@ -15,26 +15,31 @@ function context(storage = new Map()) {
   const node = () => {
     const classes = new Set(), attributes = {}, animations = [];
     return {
-      innerHTML: '', style: {}, dataset: {}, textContent: '', animations,
+      html: '', children: [], style: {}, dataset: {}, textContent: '', animations,
+      get innerHTML() {return this.html;},
+      set innerHTML(value) {this.html = value; this.children = [];},
+      appendChild(child) {this.children.push(child); return child;},
+      addEventListener() {},
       focus() {this.focused = true;},
       classList: {
         add(value) {classes.add(value);}, remove(value) {classes.delete(value);}, contains(value) {return classes.has(value);},
         toggle(value, on = !classes.has(value)) {if (on) classes.add(value); else classes.delete(value); return on;},
       },
-      querySelectorAll() {return [];},
+      querySelector() {return node();},
+      querySelectorAll(selector) {return selector === '.actions-row .btn' ? [node(), node()] : [];},
       setAttribute(key, value) {attributes[key] = value;}, getAttribute(key) {return attributes[key];},
       animate() {const item = {cancelled: false, cancel() {this.cancelled = true;}}; animations.push(item); return item;},
       getAnimations() {return animations.filter(item => !item.cancelled);},
     };
   };
   const get = id => {
-    if (!nodes.has(id)) nodes.set(id, {...node(), id});
+    if (!nodes.has(id)) nodes.set(id, Object.assign(node(), {id}));
     return nodes.get(id);
   };
   return vm.createContext({
-    window: {}, document: {body: get('document-body'), getElementById: get, querySelectorAll() {return [];}, addEventListener() {},
+    window: {}, document: {body: get('document-body'), getElementById: get, createElement: node, querySelectorAll() {return [];}, addEventListener() {},
       getAnimations() {return [...nodes.values()].flatMap(item => item.getAnimations());}},
-    setTimeout() {}, setInterval() {}, esc: String, get,
+    setTimeout() {}, setInterval() {}, esc: String, get, displayTimeZone: '',
     localStorage: {getItem(key) {return storage.get(key) ?? null;}, setItem(key, value) {storage.set(key, String(value));}},
   });
 }
@@ -89,7 +94,7 @@ async function main() {
   assert.equal(countdownNode.textContent, floating.quotaCountdown(resetTs));
   floating.document.querySelectorAll = queryAll;
   Object.assign(floating, {fixture, grok, bridge: {
-    quota: async () => ({results: [], snapshot: {state: 'fresh'}}), save_settings(raw) {saved.push(JSON.parse(raw));},
+    quota: async () => ({results: [], snapshot: {state: 'fresh'}, time_zone: ''}), save_settings(raw) {saved.push(JSON.parse(raw));},
   }});
   vm.runInContext("cache = [fixture, grok]; S.show['#usage'] = true; api = bridge;", floating);
   floating.toggleResetTime(countdownNode);
@@ -161,6 +166,7 @@ async function main() {
   assert.equal(floating.orderedItems([grok, fixture]).map(it => it.title).join('|'), 'xAI|OpenAI',
     'Without a saved order the payload order stands');
   const dragged = {dataset: {key: 'openai:a'}, classList: {add() {}, remove() {}}, releasePointerCapture() {}};
+  floating.dragged = dragged;
   floating.get('list').children = [{dataset: {key: 'grok:x'}}, dragged];
   vm.runInContext("S.card_order = ['openai:a', 'kimi:hidden']", floating);
   vm.runInContext("cardDrag = {card: get('list').children[1], moved: true, pointerId: 1}", floating);
@@ -168,7 +174,7 @@ async function main() {
   assert.equal(vm.runInContext("S.card_order.join('|')", floating), 'grok:x|openai:a|kimi:hidden',
     'Dropping saves the visible order and keeps hidden cards queued behind it');
   assert.equal(saved.at(-1).card_order.join('|'), 'grok:x|openai:a|kimi:hidden', 'The order is persisted');
-  vm.runInContext("cardDrag = {card: get('list').children[1], moved: false, pointerId: 1}", floating);
+  vm.runInContext("cardDrag = {card: dragged, moved: false, pointerId: 1}", floating);
   floating.cardDragEnd();
   assert.equal(vm.runInContext("S.card_order.join('|')", floating), 'grok:x|openai:a|kimi:hidden',
     'A click that never moved must not rewrite the order');
@@ -183,17 +189,164 @@ async function main() {
   }
 
   const storage = new Map();
+  const retryTime = floating.fmtDate(pausedClaude.retry_at * 1000).slice(11);
   floating.render([pausedClaude]);
   assert(floating.get('list').innerHTML.includes('88%'));
-  assert(floating.get('list').innerHTML.includes('<div class="note">账号信息暂不可用：暂时被限流（429），显示上次数据，09:05 自动重试</div>'),
+  assert(floating.get('list').innerHTML.includes(`<div class="note">账号信息暂不可用：暂时被限流（429），显示上次数据，${retryTime} 自动重试</div>`),
     'A temporary failure keeps valid quota and says when it retries');
   assert(!floating.get('list').innerHTML.includes('class="err"'), 'A temporary failure is not shown as an account error');
   floating.render([limitedClaude]);
-  assert(floating.get('list').innerHTML.includes('<div class="note">令牌续期暂时被限流（429），09:05 自动重试</div>'));
+  assert(floating.get('list').innerHTML.includes(`<div class="note">令牌续期暂时被限流（429），${retryTime} 自动重试</div>`));
   assert(!floating.get('list').innerHTML.includes('class="err"'));
   const web = context(storage);
   const source = script('index.html');
-  const usageSource = source.slice(source.indexOf('function compactNumber'), source.indexOf('function renderSide'));
+  // Render the actual subscription helpers, cards, history and overview with complete and missing timestamps.
+  const subscriptions = context();
+  vm.runInContext(source.slice(source.indexOf('function pillClass'), source.indexOf('function fmtResetAt')), subscriptions);
+  vm.runInContext(source.slice(source.indexOf('function renderCards'), source.indexOf('let closeCardCtx')), subscriptions);
+  vm.runInContext(source.slice(source.indexOf('function renderFocus'), source.indexOf('/* ---------- 历史')), subscriptions);
+  vm.runInContext(source.slice(source.indexOf('function archivedTime'), source.indexOf('let forgetCardCtx')), subscriptions);
+  Object.assign(subscriptions, {cache: [], historyItems: [], filter: '*', fpTab: 'subscription',
+    displayTimeZone: '', cardsSignature: '', focusSignature: '', historySignature: '', planTip: item => item.plan, creditBlock: () => ''});
+  const subscribed = {...fixture, sub_start: '2030-01-01T03:04:05Z', sub_end: '2030-02-01T06:07:08Z', sub_status: 'known'};
+  const claudeStart = {...pausedClaude, notice: '', sub_start: subscribed.sub_start, sub_status: 'unavailable', windows: []};
+  const claudeMissing = {...claudeStart, sub_start: ''};
+  const staleExpired = {...fixture, sub_end: '2000-01-01T12:34:56Z', sub_status: 'known'};
+  const free = {...fixture, sub_end: '', sub_status: 'not_applicable'};
+  for (const ctx of [floating, subscriptions]) {
+    for (const [zone, iso, expected] of [
+      ['Asia/Shanghai', subscribed.sub_start, '2030-01-01 11:04:05 UTC+08:00'],
+      ['America/Los_Angeles', subscribed.sub_start, '2029-12-31 19:04:05 UTC-08:00'],
+      ['America/Los_Angeles', '2030-07-01T03:04:05Z', '2030-06-30 20:04:05 UTC-07:00'],
+      ['Asia/Kolkata', subscribed.sub_start, '2030-01-01 08:34:05 UTC+05:30'],
+      ['UTC', subscribed.sub_start, '2030-01-01 03:04:05 UTC+00:00'],
+    ]) {
+      vm.runInContext(`displayTimeZone = '${zone}'`, ctx);
+      assert.equal(ctx.fmtDate(iso), expected, 'Subscription precision respects the selected zone, historical DST, seconds and UTC offset');
+      assert.equal(ctx.fmtDate(Date.parse(iso)), expected, 'Epoch milliseconds use the same display time zone');
+      assert.equal(ctx.fmtDate('2030-01-01'), '2030-01-01', 'Date-only inputs must not invent an exact time or shift a day');
+    }
+    const hostTimeZone = process.env.TZ;
+    try {
+      vm.runInContext("displayTimeZone = 'Asia/Shanghai'", ctx);
+      for (const hostZone of ['America/Los_Angeles', 'UTC', 'Asia/Shanghai']) {
+        process.env.TZ = hostZone;
+        assert.equal(ctx.fmtDate(subscribed.sub_start), '2030-01-01 11:04:05 UTC+08:00', 'Shanghai display must not depend on the computer time zone');
+      }
+      vm.runInContext("displayTimeZone = ''", ctx);
+      assert.equal(ctx.fmtDate(subscribed.sub_start), '2030-01-01 11:04:05 UTC+08:00', 'System mode uses the host time zone');
+      process.env.TZ = 'America/Los_Angeles';
+      assert.equal(ctx.fmtDate(subscribed.sub_start), '2029-12-31 19:04:05 UTC-08:00');
+    } finally {
+      if (hostTimeZone === undefined) delete process.env.TZ;
+      else process.env.TZ = hostTimeZone;
+    }
+    vm.runInContext("displayTimeZone = 'Asia/Shanghai'", ctx);
+    for (const value of [null, undefined, '', 'not-a-date']) assert.equal(ctx.fmtDate(value), '');
+  }
+  const exactStart = subscriptions.fmtDate(subscribed.sub_start), exactEnd = subscriptions.fmtDate(subscribed.sub_end);
+  for (const item of [subscribed, claudeStart, claudeMissing, staleExpired, free]) {
+    floating.render([item]);
+    subscriptions.cache = [item];
+    subscriptions.historyItems = [item];
+    subscriptions.renderCards();
+    subscriptions.renderHistory();
+    subscriptions.renderFocus();
+    const views = [floating.get('list').innerHTML, subscriptions.get('list').children[0].innerHTML,
+      subscriptions.get('historyList').children[0].innerHTML, subscriptions.get('fpList').children[0].innerHTML];
+    for (const html of views) {
+      if (item === subscribed) assert(html.includes(exactStart) && html.includes(exactEnd), 'Every subscription view shows complete start and end timestamps');
+      if (item === claudeStart) assert(html.includes(exactStart) && html.includes('订阅到期时间未提供'));
+      if (item === claudeMissing) assert(html.includes('订阅时间未提供'), 'Missing Claude dates remain visible');
+      if (item === staleExpired) assert(html.includes('已到期'), 'An elapsed end timestamp overrides a cached known status');
+      if (item === free) assert(html.includes('免费'), 'Free subscriptions retain their explicit status');
+      assert(!html.includes('Invalid Date'));
+    }
+    const overview = subscriptions.get('fpList').children[0].innerHTML;
+    if (item === claudeStart || item === claudeMissing) assert(overview.includes('>未知</span>') && !overview.includes('>有效</span>'));
+  }
+  for (const item of [{...claudeStart, sub_status: 'known'}, {...claudeMissing, sub_status: ''},
+    {...subscribed, sub_end: 'invalid'}]) {
+    subscriptions.cache = [item];
+    subscriptions.renderFocus();
+    const overview = subscriptions.get('fpList').children[0].innerHTML;
+    assert(overview.includes('>未知</span>'), 'Missing or invalid end dates never establish an active subscription');
+    assert(!overview.includes('Invalid Date'));
+  }
+  const zonedFloat = context(), timeZoneSaves = [], appearanceSaves = [];
+  let globalTimeZone = 'Asia/Shanghai', quotaCalls = 0;
+  const snapshot = {state: 'fresh', fetched_at: '2030-01-01T03:04:05Z'};
+  const timeZoneBridge = {
+    settings: async () => ({time_zone: globalTimeZone, time_zones: [['', '跟随系统'], ['Asia/Shanghai', '中国 · 上海'], ['America/Los_Angeles', '美国 · 洛杉矶']], theme: 'paper'}),
+    quota: async () => {quotaCalls++; return {results: [subscribed], snapshot, time_zone: globalTimeZone};},
+    set_time_zone: async value => {timeZoneSaves.push(value); globalTimeZone = value; return {ok: true, time_zone: value};},
+    save_settings: raw => appearanceSaves.push(JSON.parse(raw)), set_alpha() {}, background: async () => ({}),
+  };
+  vm.runInContext(script('float.html'), zonedFloat);
+  zonedFloat.window.pywebview = {api: timeZoneBridge};
+  await zonedFloat.init();
+  assert.equal(zonedFloat.get('timeZone').value, 'Asia/Shanghai');
+  assert(zonedFloat.get('timeZone').innerHTML.includes('中国 · 上海'));
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 UTC+08:00'));
+  const beforeSwitch = quotaCalls;
+  await zonedFloat.setTimeZone('America/Los_Angeles');
+  assert.equal(quotaCalls, beforeSwitch, 'Changing the time zone rerenders cached data without fetching quota');
+  assert.equal(timeZoneSaves.at(-1), 'America/Los_Angeles');
+  assert(zonedFloat.get('list').innerHTML.includes('2029-12-31 19:04:05 UTC-08:00'));
+  assert(zonedFloat.get('status').textContent.includes('19:04:05'));
+  assert(zonedFloat.get('status').title.includes('UTC-08:00'));
+  assert(zonedFloat.quotaResetAt(Date.parse(subscribed.sub_start) / 1000).includes('19:04:05 UTC-08:00'));
+  assert(zonedFloat.noticeText({...limitedClaude, retry_at: Date.parse(subscribed.sub_start) / 1000}).includes('19:04:05 UTC-08:00'));
+  zonedFloat.save();
+  assert(!Object.hasOwn(appearanceSaves.at(-1), 'time_zone') && !Object.hasOwn(appearanceSaves.at(-1), 'time_zones'), 'Appearance saves cannot overwrite global time-zone settings');
+  const savesBeforeInvalid = timeZoneSaves.length;
+  await zonedFloat.setTimeZone('Invalid/Zone');
+  assert.equal(timeZoneSaves.length, savesBeforeInvalid, 'Invalid choices are never saved');
+  assert.equal(zonedFloat.get('timeZone').value, 'America/Los_Angeles');
+  timeZoneBridge.set_time_zone = async () => ({ok: false, error: '写入失败'});
+  await zonedFloat.setTimeZone('Asia/Shanghai');
+  assert.equal(zonedFloat.get('timeZone').value, 'America/Los_Angeles', 'Failed saves keep the previous display zone');
+  assert(zonedFloat.get('timeZoneStatus').textContent.includes('写入失败'));
+  globalTimeZone = 'Asia/Shanghai';
+  await zonedFloat.refresh();
+  assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'Quota refresh synchronizes a time zone changed in the other view');
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 UTC+08:00'));
+  timeZoneBridge.quota = async () => ({results: [], snapshot: {state: 'error'}});
+  await zonedFloat.refresh();
+  assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'A failed quota response without a time zone preserves the selected zone');
+  const webTimeZoneSaves = [], toasts = [];
+  const timeZoneConfig = {time_zone: 'Asia/Shanghai', time_zones: [['', '跟随系统'], ['Asia/Shanghai', '中国 · 上海'], ['America/Los_Angeles', '美国 · 洛杉矶']]};
+  Object.assign(subscriptions, {usageDetailData: null, cache: [subscribed], historyItems: [subscribed], toast: (...args) => toasts.push(args)});
+  vm.runInContext(source.slice(source.indexOf('function timeZoneOptions'), source.indexOf('let logTimer')), subscriptions);
+  vm.runInContext(source.slice(source.indexOf("document.getElementById('setTimeZone').onchange"), source.indexOf("document.getElementById('btnFloat').onclick")), subscriptions);
+  subscriptions.api = async (url, options) => {
+    assert.equal(url, '/api/config');
+    if (options) {
+      webTimeZoneSaves.push(JSON.parse(options.body));
+      return {time_zone: JSON.parse(options.body).time_zone};
+    }
+    return timeZoneConfig;
+  };
+  await subscriptions.openSet();
+  const webTimeZone = subscriptions.get('setTimeZone');
+  assert.equal(webTimeZone.value, 'Asia/Shanghai');
+  assert(webTimeZone.innerHTML.includes('中国 · 上海'));
+  webTimeZone.value = 'America/Los_Angeles';
+  await webTimeZone.onchange({target: webTimeZone});
+  assert.deepEqual(webTimeZoneSaves.at(-1), {time_zone: 'America/Los_Angeles'});
+  assert(subscriptions.get('list').children[0].innerHTML.includes('2029-12-31 19:04:05 UTC-08:00'));
+  subscriptions.api = async () => {throw Error('写入失败');};
+  webTimeZone.value = 'Asia/Shanghai';
+  await webTimeZone.onchange({target: webTimeZone});
+  assert.equal(webTimeZone.value, 'America/Los_Angeles');
+  assert.equal(toasts.at(-1)[0], '写入失败');
+  vm.runInContext(source.slice(source.indexOf('async function refreshQuota'), source.indexOf('function restartTick')), subscriptions);
+  Object.assign(subscriptions, {firstLoad: false, renderSide() {}, restartTick() {},
+    api: async () => ({results: [subscribed], history: [subscribed], time_zone: 'Asia/Shanghai'})});
+  await subscriptions.refreshQuota();
+  assert(subscriptions.get('list').children[0].innerHTML.includes('2030-01-01 11:04:05 UTC+08:00'), 'Web refresh synchronizes a zone changed in the floating window');
+  const usageSource = source.slice(source.indexOf('function fmtDate'), source.indexOf('function subscriptionLine'))
+    + source.slice(source.indexOf('function compactNumber'), source.indexOf('function renderSide'));
   vm.runInContext(usageSource, web);
   assert.equal(web.exactNumber(null), '\u2014');
   assert.equal(web.exactNumber(undefined), '\u2014');
@@ -220,11 +373,20 @@ async function main() {
   const rowSource = source.slice(source.indexOf('function textRowClass'), source.indexOf('function fmtActivation'));
   const bootClock = store => {
     const ctx = context(store);
+    ctx.displayTimeZone = '';
+    vm.runInContext(source.slice(source.indexOf('function pillClass'), source.indexOf('function fmtResetAt')), ctx);
     vm.runInContext("const colorOf = p => p >= 40 ? 'g' : p >= 15 ? 'y' : 'r';", ctx);
     vm.runInContext(rowSource, ctx);
     return ctx;
   };
   const clock = bootClock(clockStorage);
+  for (const zone of ['Asia/Shanghai', 'America/Los_Angeles']) {
+    clock.displayTimeZone = zone;
+    vm.runInContext(`displayTimeZone = '${zone}'`, floating);
+    assert.equal(clock.quotaResetAt(resetTs), floating.quotaResetAt(resetTs), 'Web and float reset timestamps use the same selected zone');
+    assert.equal(clock.quotaResetAt(resetTs), clock.fmtDate(resetTs * 1000), 'Quota resets and subscription timestamps share one time-zone formatter');
+  }
+  clock.displayTimeZone = '';
   const webRow = clock.winRow({name: '周额度', remaining_percent: 95, reset_ts: resetTs}, 'openai:a');
   assert(webRow.includes('<button type="button" class="rst rst-toggle"'), 'Reset time is a button, not a bare help cursor');
   assert(webRow.includes('onclick="toggleResetTime(this)"') && webRow.includes('点击切换重置时间'));
@@ -314,7 +476,7 @@ async function main() {
   resolveStart({login_id:'late-login', verification_uri_complete:'https://claude.com'});
   await starting;
   assert.equal(authCalls.at(-1).body.login_id, 'late-login', 'A dismissed dialog cannot leave a late OAuth session active');
-  console.log('UI checks passed: dropdowns, saved filters, account-scoped clients, keyboard focus, animations, empty states, metrics, and Claude OAuth.');
+  console.log('UI checks passed: subscription timestamps, saved time zones, dropdowns, filters, account-scoped clients, keyboard focus, animations, empty states, metrics, and Claude OAuth.');
 }
 
 main().catch(error => {console.error(error); process.exitCode = 1;});

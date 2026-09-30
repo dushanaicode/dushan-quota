@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.7.1-C3B191" alt="Release v0.7.1">
+  <img src="https://img.shields.io/badge/Release-v0.7.2-C3B191" alt="Release v0.7.2">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -95,6 +95,8 @@ quota --version
 - **用量智能**：按账号、模型、时间与 Harness 汇总本机/远端 Token，支持详细输入、输出、缓存和推理拆分。
 - **激活状态**：读取目标 Harness 的当前凭据，展示激活账号、写入时间、有效期、过期、失效、受限与不可续期状态。
 - **悬浮窗设置**：小窗口可滚动查看全部选项；“动画效果”可开关并保存。
+- **显示时区**：在 Web「设置」或悬浮窗设置中选择「北京时间 · Asia/Shanghai」等时区并自动保存。选择后不再跟随电脑时区；两端共用，另一窗口刷新后同步。也可选择「跟随电脑时区」。
+- **订阅时间**：有完整时间的数据展示到秒并标明 UTC 偏移。Claude Code 可展示接口提供的订阅开始时间；未取得的真实订阅到期会标为未提供，不使用登录令牌到期或额度重置时间代替。
 - **共享快照**：Web 与悬浮窗共用 `~/.dushan-quota/quota-snapshot.json`，跨进程锁会合并同一刷新周期的请求。
 - **更新检查**：运行 `quota` 会检查 GitHub Release，Web 顶栏也能手动检查；升级仍由你确认，不会悄悄改动环境。
 - **令牌保鲜**：账号带有 refresh token 时，会在过期前或遇到 `401` 后尝试刷新，并同步回支持的来源。

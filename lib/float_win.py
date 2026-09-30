@@ -80,7 +80,8 @@ def _primary_scale() -> float:
 def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
     now = datetime.now().astimezone()
     shared = get_snapshot(force=force)
-    archived = config.archived_keys()
+    cfg = config.load_config()
+    archived = config.archived_keys(cfg)
     visible_results = [
         item
         for item in shared.results
@@ -132,6 +133,7 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
             }
         )
     return {
+        "time_zone": cfg["time_zone"],
         "results": results,
         "snapshot": {
             "state": "stale" if shared.stale else "cached" if shared.from_cache else "fresh",
@@ -485,17 +487,28 @@ class Api:
             }
 
     def settings(self):
-        saved = config.load_config().get("float", {})
+        cfg = config.load_config()
+        saved = dict(cfg["float"])
         saved["on_top"] = self._on_top
         saved["platform"] = sys.platform
+        saved["time_zone"] = cfg["time_zone"]
+        saved["time_zones"] = config.TIME_ZONES
         return saved
 
     def save_settings(self, raw):
-        data = json.loads(raw) if isinstance(raw, str) else raw
+        data = dict(json.loads(raw) if isinstance(raw, str) else raw)
+        data.pop("time_zone", None)
+        data.pop("time_zones", None)
         cfg = config.load_config()
         cfg["float"] = data
         config.save_config(cfg)
         return {"ok": True}
+
+    def set_time_zone(self, value):
+        cfg = config.load_config()
+        cfg["time_zone"] = value
+        config.save_config(cfg)
+        return {"ok": True, "time_zone": value}
 
     def toggle_on_top(self):
         self._on_top = not self._on_top

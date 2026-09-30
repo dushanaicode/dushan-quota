@@ -85,6 +85,8 @@ def _fetch(account: Account) -> QuotaResult:
         plan_detail=_plan_detail(profile),
         auth_mode=account.auth_mode or "oauth",
         sub_start=identity.get("sub_start", ""),
+        # The Code OAuth profile supplies creation time, not subscription expiry.
+        sub_status="unavailable",
     )
 
 

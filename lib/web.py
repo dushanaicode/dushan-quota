@@ -99,7 +99,11 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/config":
             cfg = config.load_config()
             seconds = cfg.get("watch_seconds")
-            self._json({"watch_seconds": int(seconds) if isinstance(seconds, int) else 60})
+            self._json({
+                "watch_seconds": int(seconds) if isinstance(seconds, int) else 60,
+                "time_zone": cfg["time_zone"],
+                "time_zones": config.TIME_ZONES,
+            })
             return
         if parsed.path == "/api/logs":
             query = parse_qs(parsed.query)
@@ -234,11 +238,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/config":
                 seconds = payload.get("watch_seconds")
+                cfg = config.load_config()
                 if isinstance(seconds, int) and 0 <= seconds <= 3600:
-                    cfg = config.load_config()
                     cfg["watch_seconds"] = seconds
+                if "time_zone" in payload:
+                    cfg["time_zone"] = payload["time_zone"]
+                if "time_zone" in payload or isinstance(seconds, int) and 0 <= seconds <= 3600:
                     config.save_config(cfg)
-                self._json({"ok": True})
+                self._json({"ok": True, "time_zone": cfg["time_zone"]})
                 return
             if path == "/api/float":
                 from .float_win import launch_float
@@ -566,7 +573,8 @@ def _quota_payload(force: bool = False):
     shared = snapshot.get_snapshot(force=force)
     active = activation_statuses(shared.results)
     stored = {(item.get("provider"), item.get("identity")): item.get("id") for item in store.list_stored()}
-    archived_records = _archived_records(config.load_config())
+    cfg = config.load_config()
+    archived_records = _archived_records(cfg)
     archived_by_key = {item["key"]: item for item in archived_records}
     archived_keys = set(archived_by_key)
     results = []
@@ -635,6 +643,7 @@ def _quota_payload(force: bool = False):
     )
     fetched_at = datetime.fromtimestamp(shared.fetched_at).astimezone().isoformat()
     return {
+        "time_zone": cfg["time_zone"],
         "results": results,
         "history": history,
         "history_count": len(history),

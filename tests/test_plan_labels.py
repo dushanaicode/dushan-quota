@@ -1,7 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from lib.providers import grok
+from lib.models import Account
+from lib.providers import claude, grok
 from lib.providers.claude import _identity, _plan_label as claude_plan
 from lib.providers.grok import _user_tier
 from lib.providers.kimi import _plan_label as kimi_plan
@@ -57,6 +58,26 @@ class ClaudePlanTests(unittest.TestCase):
             },
             _identity(PROFILE),
         )
+
+    def test_claude_subscription_dates_never_use_token_expiry_or_quota_reset(self):
+        account = Account(
+            provider="claude", label="Claude Code", source="test", identity="claude-test",
+            secret={"access": "test-access", "expires": 4_102_444_800_000},
+        )
+        usage = {"five_hour": {"utilization": 12, "resets_at": "2099-01-02T03:04:05Z"}}
+        for profile, start in ((PROFILE, "2026-09-12T12:27:47.649940Z"), ({}, "")):
+            with (
+                self.subTest(profile=profile),
+                patch.object(claude.tokenstore, "ensure_fresh", return_value="test-access"),
+                patch.object(claude, "_usage", return_value=(200, "", usage)),
+                patch.object(claude, "_profile", return_value=(200, "", profile)),
+                patch.object(claude.agentdb, "set_claude_identity"),
+            ):
+                result = claude.fetch(account)
+            self.assertTrue(result.ok)
+            self.assertEqual(start, result.sub_start)
+            self.assertEqual("", result.sub_end)
+            self.assertEqual("unavailable", result.sub_status)
 
 
 class OpenAIPlanTests(unittest.TestCase):

@@ -264,8 +264,10 @@
   .fp-item .t small { display:block; margin-top:1px; color:var(--faint); font-size:9.5px; overflow:hidden; text-overflow:ellipsis; }
   .fp-item .r { font-size:10px; color:var(--faint); white-space:nowrap; }
   .fp-item .p { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  .fp-sub-item { align-items:flex-start; }
-  .fp-period { display:flex; flex-direction:column; align-items:flex-end; gap:1px; color:var(--muted); font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .fp-sub-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:flex-start; gap:4px 10px; }
+  .fp-sub-item .t { grid-column:1 / -1; }
+  .fp-period { grid-column:1; grid-row:2; display:flex; flex-direction:column; gap:1px; min-width:0; color:var(--muted); font-size:10px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+  .fp-sub-item .fp-state { grid-column:2; grid-row:2; }
   .fp-period i { width:28px; display:inline-block; color:var(--faint); font-style:normal; }
   .fp-state { min-width:38px; margin-top:1px; border-radius:99px; padding:2px 7px; text-align:center; font-size:9.5px; white-space:nowrap; background:var(--accent-soft); color:var(--accent); }
   .fp-state.expired, .fp-state.unavailable { background:rgba(205,97,89,.12); color:var(--bad); }
@@ -568,6 +570,9 @@
       <option value="300">5 分钟</option>
       <option value="0">仅手动刷新</option>
     </select>
+    <label for="setTimeZone">显示时区</label>
+    <select id="setTimeZone"></select>
+    <p class="hint">选择固定时区后，时间不再跟随电脑。网页与悬浮窗共用，另一窗口刷新后同步。</p>
     <label>悬浮窗</label>
     <div class="row" style="margin-top:0">
       <button class="btn" id="btnFloat">启动悬浮窗</button>
@@ -691,6 +696,7 @@ let cache = [];
 let historyItems = [];
 let filter = '*';
 let fpTab = 'low';
+let displayTimeZone = '';
 let cardsSignature = '', focusSignature = '', historySignature = '';
 
 async function api(path, opt={}) {
@@ -760,8 +766,7 @@ function planTip(item){
 }
 // 限流、断网等临时问题：不是账号异常，到点自动重试
 function noticeText(item){
-  const at = new Date(item.retry_at * 1000);
-  const time = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  const time = fmtDate(item.retry_at * 1000).slice(11);
   return `${item.notice}，${item.ok ? '显示上次数据，' : ''}${time} 自动重试`;
 }
 function pillClass(plan){
@@ -770,21 +775,29 @@ function pillClass(plan){
   return '';
 }
 function fmtDate(iso){
-  if (!iso) return '';
+  if (iso == null || iso === '') return '';
   const d = new Date(iso);
   if (isNaN(d)) return '';
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone:displayTimeZone || undefined, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23', timeZoneName:'longOffset',
+  }).formatToParts(d).map(part => [part.type, part.value]));
+  const offset = parts.timeZoneName === 'GMT' ? 'UTC+00:00' : parts.timeZoneName.replace('GMT', 'UTC');
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${offset}`;
 }
 function subscriptionLine(item){
   const start = fmtDate(item.sub_start), end = fmtDate(item.sub_end);
+  const expired = item.sub_status === 'expired' || Date.parse(item.sub_end) <= Date.now();
   if (start && end) {
-    const endLabel = item.sub_status === 'expired' ? '已到期' : '到期';
+    const endLabel = expired ? '已到期' : '到期';
     return `<div class="meta dim">订阅生效 ${esc(start)} · ${endLabel} ${esc(end)}</div>`;
   }
-  if (end) return `<div class="meta dim">${item.sub_status === 'expired' ? '历史订阅已到期' : '订阅到期'} ${esc(end)}</div>`;
-  if (start) return `<div class="meta dim">订阅生效 ${esc(start)}</div>`;
+  if (end) return `<div class="meta dim">${expired ? '历史订阅已到期' : '订阅到期'} ${esc(end)}</div>`;
+  if (start) return `<div class="meta dim">订阅生效 ${esc(start)} · 订阅到期时间未提供</div>`;
   const status = item.sub_status || '';
   if (status === 'not_applicable') return '<div class="meta dim">订阅 免费方案 · 到期 不适用</div>';
+  if (item.provider === 'claude') return '<div class="meta dim">订阅时间未提供</div>';
   if (status === 'unavailable') {
     return '<div class="meta dim">订阅信息暂未取得，请刷新重试</div>';
   }
@@ -793,10 +806,7 @@ function subscriptionLine(item){
 
 function fmtResetAt(ts){
   if (!ts) return '';
-  const d = new Date(ts * 1000);
-  if (isNaN(d)) return '';
-  const p2 = n => String(n).padStart(2,'0');
-  return `${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return fmtDate(ts * 1000).slice(5, 16);
 }
 function resetCountdown(targetMs){
   const s = Math.floor((targetMs - Date.now()) / 1000);
@@ -827,7 +837,7 @@ function creditBlock(item){
     const valid = exp && !isNaN(exp);
     const when = valid ? `${fmtResetAt(exp.getTime() / 1000)} 到期` : '';
     const left = valid && c.status === 'available' ? resetCountdown(exp.getTime()) : '';
-    const full = valid ? `过期时间 ${exp.toLocaleString('zh-CN', {hour12:false})}` : '';
+    const full = valid ? `过期时间 ${fmtDate(c.expires_at)}` : '';
     return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span></div>`;
   }).join('');
   const avail = credits.filter(c => c.status === 'available').length;
@@ -847,14 +857,13 @@ function quotaCountdown(ts){
   return m ? `${m}m` : '<1m';
 }
 function quotaResetAt(ts){
-  const d = new Date(ts * 1000), p2 = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return fmtDate(ts * 1000);
 }
 function resetLabel(ts, absolute){
   return absolute ? `重置于 ${quotaResetAt(ts)}` : `${quotaCountdown(ts)} · ${fmtResetAt(ts)}`;
 }
 function resetTip(ts, absolute){
-  return `额度重置时间：${new Date(ts * 1000).toLocaleString('zh-CN', {hour12:false})}；点击切换${absolute ? '倒计时' : '重置时间'}`;
+  return `额度重置时间：${quotaResetAt(ts)}；点击切换${absolute ? '倒计时' : '重置时间'}`;
 }
 function toggleResetTime(button){
   const key = button.dataset.resetKey, ts = Number(button.dataset.resetTs);
@@ -889,9 +898,7 @@ function winRow(w, account){
   return `<div class="wrow"><div class="top"><span class="lbl">${esc(w.name)}</span>${time}<span class="pct ${c}">${p}%</span></div><div class="bar"><i class="${c}" style="width:${p}%"></i></div></div>`;
 }
 function fmtActivation(iso){
-  const d = new Date(iso);
-  if (!iso || isNaN(d)) return '';
-  return `${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  return fmtDate(iso).slice(5, 16);
 }
 
 function compactNumber(value){
@@ -1015,8 +1022,7 @@ function renderUsageDetail(data){
   document.getElementById('usageBody').innerHTML = filters + content;
   document.getElementById('usagePeriod').onchange = changeUsageFilters;
   document.getElementById('usageHarness').onchange = changeUsageFilters;
-  const stamp = new Date(data.fetched_at || Date.now());
-  document.getElementById('usageFetched').textContent = `用量读取 ${stamp.toLocaleString('zh-CN',{hour12:false})}`;
+  document.getElementById('usageFetched').textContent = `用量读取 ${fmtDate(data.fetched_at || Date.now())}`;
 }
 function aggregateLocalUsage(rows){
   const breakdown = {};
@@ -1093,10 +1099,10 @@ function renderCards(){
     const line2 = [item.user_id && item.user_id !== item.email ? item.user_id : '', [item.auth_mode, item.source].filter(Boolean).join(' / ')].filter(Boolean).map(esc).join('<i>·</i>');
     const activationLine = (item.activations || []).map(active => {
       const written = fmtActivation(active.written_at);
-      const full = active.written_at ? new Date(active.written_at).toLocaleString('zh-CN',{hour12:false}) : '时间未知';
+      const full = active.written_at ? fmtDate(active.written_at) : '时间未知';
       const status = active.status || 'active';
       const state = {expired:'已激活但过期',invalid:'已激活但失效',blocked:'已激活但受限',unrenewable:'已激活 · 不可续期'}[status] || '已激活';
-      const expiry = active.expires_at ? new Date(active.expires_at).toLocaleString('zh-CN',{hour12:false}) : '';
+      const expiry = active.expires_at ? fmtDate(active.expires_at) : '';
       const title = [active.status_detail, expiry?`有效期 ${expiry}`:'', `写入时间 ${full}`].filter(Boolean).join(' · ');
       return `<span class="activation-badge ${esc(status)}" title="${esc(title)}">${esc(active.label)} ${state}${written?` · ${esc(written)}`:''}</span>`;
     }).join('');
@@ -1225,6 +1231,8 @@ async function refreshQuota(manual){
   if (manual) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>刷新中'; }
   try {
     const data = await api('/api/quota' + (manual ? '?force=1' : ''));
+    displayTimeZone = data.time_zone;
+    document.getElementById('setTimeZone').value = displayTimeZone;
     cache = data.results || [];
     historyItems = data.history || [];
     renderSide(); renderCards(); renderFocus(); renderHistory();
@@ -1300,12 +1308,12 @@ function renderFocus(){
   const subscriptions = cache.map(it => {
     const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
     const status = it.sub_status || '';
-    if (!start && !end && !status) return null;
+    if (!start && !end && !status && it.provider !== 'claude') return null;
     const endTimestamp = Date.parse(it.sub_end || '');
     const inferredExpired = Number.isFinite(endTimestamp) && endTimestamp <= Date.now();
-    const state = status === 'expired' || (!status && inferredExpired)
+    const state = status === 'expired' || inferredExpired
       ? {label:'已到期', cls:'expired', rank:0}
-      : status === 'known' || (!status && (start || end))
+      : end
         ? {label:'有效', cls:'known', rank:1}
         : status === 'not_applicable'
           ? {label:'免费', cls:'free', rank:2}
@@ -1317,6 +1325,7 @@ function renderFocus(){
       account: it.email || it.name || '',
       start,
       end,
+      missingTime: it.provider === 'claude' ? '订阅时间未提供' : '时间暂不可获取',
       state,
       timestamp,
     };
@@ -1336,9 +1345,10 @@ function renderFocus(){
     let period = '';
     if (r.start) period += `<span><i>生效</i>${esc(r.start)}</span>`;
     if (r.end) period += `<span><i>到期</i>${esc(r.end)}</span>`;
+    else if (r.start && r.state.cls !== 'free') period += '<span>订阅到期时间未提供</span>';
     if (!period) period = r.state.cls === 'free'
       ? '<span>免费方案 · 到期不适用</span>'
-      : '<span>时间暂不可获取</span>';
+      : `<span>${esc(r.missingTime)}</span>`;
     div.innerHTML = `<span class="t"><b>${esc(r.title)}</b>${r.plan ? `<span>${esc(r.plan)}</span>` : ''}${r.account ? `<small>${esc(r.account)}</small>` : ''}</span><span class="fp-period">${period}</span><span class="fp-state ${r.state.cls}">${r.state.label}</span>`;
     box.appendChild(div);
   });
@@ -1352,9 +1362,8 @@ function toggleHistory(open){
 }
 function archivedTime(iso){
   if (!iso) return '由旧版隐藏记录迁移';
-  const date = new Date(iso);
-  if (isNaN(date)) return '';
-  return `关闭于 ${date.toLocaleString([], {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'})}`;
+  const date = fmtDate(iso);
+  return date ? `关闭于 ${date}` : '';
 }
 function renderHistory(){
   const box = document.getElementById('historyList');
@@ -1764,9 +1773,21 @@ function armTimer(){
   clearInterval(refreshTimer);
   if (refreshMs > 0) refreshTimer = setInterval(() => refreshQuota(false), refreshMs);
 }
+function timeZoneOptions(cfg){
+  const select = document.getElementById('setTimeZone');
+  select.innerHTML = cfg.time_zones.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
+  displayTimeZone = cfg.time_zone;
+  select.value = displayTimeZone;
+}
+function renderTimes(){
+  renderCards(); renderFocus(); renderHistory();
+  if (usageDetailData) renderUsageDetail(usageDetailData);
+}
 async function openSet(){
   const cfg = await api('/api/config');
   document.getElementById('setWatch').value = String(cfg.watch_seconds ?? 60);
+  timeZoneOptions(cfg);
+  renderTimes();
   document.getElementById('setModal').classList.add('show');
 }
 let logTimer = null;
@@ -1777,7 +1798,7 @@ async function loadLogs(){
     const items = (data.logs || []).slice().reverse();
     document.getElementById('logList').innerHTML = items.map(e => {
       const ctx = e.ctx ? ' ' + Object.entries(e.ctx).map(([k,v]) => `${k}=${v}`).join(' ') : '';
-      return `<div class="log-line"><span class="lv ${esc(e.level)}">${esc(e.level)}</span><span class="lt">${new Date(e.ts*1000).toLocaleTimeString('zh-CN',{hour12:false})}</span><span class="lm">${esc(e.msg)}${esc(ctx)}</span></div>`;
+      return `<div class="log-line"><span class="lv ${esc(e.level)}">${esc(e.level)}</span><span class="lt">${fmtDate(e.ts*1000).slice(11)}</span><span class="lm">${esc(e.msg)}${esc(ctx)}</span></div>`;
     }).join('') || '<p class="hint">暂无日志</p>';
   }catch(e){}
 }
@@ -1797,6 +1818,21 @@ document.getElementById('setWatch').onchange = async e => {
   await api('/api/config', {method:'POST', body:JSON.stringify({watch_seconds:+e.target.value})});
   armTimer(); restartTick(); toast('已保存');
 };
+document.getElementById('setTimeZone').onchange = async e => {
+  const select = e.target;
+  select.disabled = true;
+  try {
+    const data = await api('/api/config', {method:'POST', body:JSON.stringify({time_zone:select.value})});
+    displayTimeZone = data.time_zone;
+    renderTimes();
+    toast('显示时区已保存');
+  } catch(e) {
+    toast(e.message, true);
+  } finally {
+    select.value = displayTimeZone;
+    select.disabled = false;
+  }
+};
 document.getElementById('btnFloat').onclick = async () => {
   await api('/api/float', {method:'POST', body:'{}'});
   toast('悬浮窗已启动');
@@ -1806,6 +1842,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeAdd()
   try {
     const cfg = await api('/api/config');
     refreshMs = (cfg.watch_seconds ?? 60) * 1000;
+    timeZoneOptions(cfg);
   } catch(e) {}
   armTimer();
   setInterval(updateCountdowns, 30000);
