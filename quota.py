@@ -118,6 +118,11 @@ def main():
         return
     if args.command == "upgrade-run":
         _run_upgrade(wait_pid=args.wait_pid)
+        if sys.stdin.isatty():
+            try:
+                input("\n升级流程已结束，按 Enter 关闭此窗口。")
+            except (EOFError, KeyboardInterrupt):
+                pass
         return
     if not _startup_update(version=version):
         return
@@ -306,16 +311,16 @@ def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
                 return
             time.sleep(0.1)
     elif sys.platform == "win32" and Path(sys.argv[0]).name.lower() == "quota":
-        # distlib's quota.exe waits for this Python process. Release that launcher
-        # before pip replaces it; the new interpreter retains the terminal output.
-        _status("info", "升级", "正在退出旧启动器并执行升级，请等待完成。", output)
-        sys.stdout.flush()
+        # Release quota.exe before pip replaces it. The worker needs its own
+        # console: the original shell resumes reading as soon as quota.exe exits.
         try:
-            os.execv(sys.executable, [
-                sys.executable, str(ROOT / "quota.py"), "upgrade-run", "--wait-pid", str(os.getppid()),
-            ])
+            subprocess.Popen([
+                sys.executable, "-u", str(ROOT / "quota.py"), "upgrade-run", "--wait-pid", str(os.getppid()),
+            ], creationflags=subprocess.CREATE_NEW_CONSOLE)
         except OSError as error:
             _status("warn", "升级", f"无法启动升级进程：{error}", output)
+        else:
+            _status("info", "升级", "已打开独立升级窗口，请在新窗口查看进度；此终端可继续使用。", output)
         return
     _status("info", "升级", "正在执行 pipx upgrade，完成后请重启已有悬浮窗。", output)
     sys.stdout.flush()

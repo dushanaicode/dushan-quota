@@ -1,8 +1,9 @@
 """Exercise menu option 1 with a real pipx install, entirely under project Temp.
 
 Run with a temporary environment containing pipx 1.8.0. The old installation
-receives the candidate CLI so its own launcher performs the upgrade. Only the
-available-update response is fixed; pipx, PyPI, input and child processes are real.
+receives the candidate CLI with a fixed available-update response. On Windows,
+test hooks hide the new console, record its handoff and answer the final close
+prompt. Pipx, PyPI, the installed launcher and child processes remain real.
 """
 
 import json
@@ -13,12 +14,28 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD_VERSION = "0.6.4"
+
+
+def _wait_for_windows_process(pid):
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        assert ctypes.get_last_error() == 87, f"Cannot inspect worker {pid}"  # already exited
+        return
+    try:
+        assert kernel32.WaitForSingleObject(ctypes.c_void_p(handle), 10_000) == 0, "Worker did not exit"
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
 
 
 def main():
@@ -72,18 +89,99 @@ def main():
     assert site.resolve().is_relative_to(scratch)
     update = {"ok": True, "update_available": True, "latest_version": latest}
     candidate = (ROOT / "quota.py").read_text(encoding="utf-8")
-    candidate += (
+    hook = (
         "\nfrom functools import partial\n"
         f"_startup_update = partial(_startup_update, interactive=True, update_result={update!r})\n"
     )
+    if os.name == "nt":
+        hook += f'''
+import builtins
+import ctypes
+import json
+from lib.snapshot import _process_exists
+_scratch = Path({str(scratch)!r})
+_real_popen = subprocess.Popen
+_real_run = subprocess.run
+
+def _console_pids():
+    pids = (ctypes.c_ulong * 64)()
+    count = ctypes.windll.kernel32.GetConsoleProcessList(pids, len(pids))
+    assert count <= len(pids), "Console process buffer is too small"
+    return list(pids[:count])
+
+if sys.argv[1:2] == ["upgrade-run"]:
+    _probe = {{"pid": os.getpid(), "messages": []}}
+    _wait_pid = int(sys.argv[sys.argv.index("--wait-pid") + 1])
+
+    def _record_output(line):
+        print(line, flush=True)
+        _probe["messages"].append(line)
+
+    def _run_pipx(command, *args, **kwargs):
+        _probe["launcher_exited_before_pipx"] = not _process_exists(_wait_pid)
+        _probe["console_pids"] = _console_pids()
+        _probe["stdio_isatty"] = [sys.stdin.isatty(), sys.stdout.isatty(), sys.stderr.isatty()]
+        return _real_run(command, *args, **kwargs)
+
+    def _close_window(prompt):
+        print(prompt, flush=True)
+        _probe["close_prompt"] = prompt
+        pending = _scratch / "worker.pending"
+        pending.write_text(json.dumps(_probe), encoding="utf-8")
+        pending.replace(_scratch / "worker.json")
+        return ""
+
+    _run_upgrade = partial(_run_upgrade, output=_record_output)
+    subprocess.run = _run_pipx
+    builtins.input = _close_window
+else:
+    def _open_upgrade_window(command, *args, **kwargs):
+        assert kwargs["creationflags"] == subprocess.CREATE_NEW_CONSOLE
+        assert not {{"stdin", "stdout", "stderr"}}.intersection(kwargs), "Old terminal handles inherited"
+        parent = {{"pid": os.getpid(), "console_pids": _console_pids()}}
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        process = _real_popen(command, *args, startupinfo=startup, **kwargs)
+        parent["worker_pid"] = process.pid
+        (_scratch / "parent.json").write_text(json.dumps(parent), encoding="utf-8")
+        return process
+
+    subprocess.Popen = _open_upgrade_window
+'''
+    guard = '\nif __name__ == "__main__":\n'
+    assert candidate.count(guard) == 1, "Candidate CLI main guard changed"
+    candidate = candidate.replace(guard, hook + guard)
     (site / "quota.py").write_text(candidate, encoding="utf-8")
 
     output = run("upgrade", [str(launcher)], input="1\n")
+    if os.name == "nt":
+        deadline = time.monotonic() + 300
+        while not (scratch / "worker.json").exists():
+            assert time.monotonic() < deadline, f"Upgrade worker did not finish; evidence: {scratch}"
+            time.sleep(0.1)
+        worker = json.loads((scratch / "worker.json").read_text(encoding="utf-8"))
+        parent = json.loads((scratch / "parent.json").read_text(encoding="utf-8"))
+        # Windows venv python.exe may redirect to a second interpreter process.
+        assert parent["worker_pid"] in worker["console_pids"]
+        assert worker["pid"] in worker["console_pids"]
+        assert parent["pid"] not in worker["console_pids"]
+        assert not set(worker["console_pids"]).intersection(parent["console_pids"])
+        assert worker["stdio_isatty"] == [True, True, True]
+        assert worker["launcher_exited_before_pipx"]
+        assert "按 Enter 关闭此窗口" in worker["close_prompt"]
+        assert "升级命令执行完成" not in output, "Worker wrote into the old terminal"
+        for pid in {worker["pid"], parent["worker_pid"]}:
+            _wait_for_windows_process(pid)
+        output = "\n".join(worker["messages"])
+        print(output, flush=True)
     assert "升级命令执行完成" in output, output
     assert run("version-after", [str(launcher), "--version"]) == f"Dushan Quota {latest}"
     metadata = json.loads((environment / "pipx_metadata.json").read_text(encoding="utf-8"))
     assert metadata["main_package"]["package_version"] == latest
     result = {"platform": platform.platform(), "from": OLD_VERSION, "to": latest, "menu_upgrade": "passed"}
+    if os.name == "nt":
+        result.update(console_isolated=True, worker_exited=True)
     (scratch / "checks.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result), flush=True)
 

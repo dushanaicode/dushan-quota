@@ -159,14 +159,59 @@ class CliStartupTests(unittest.TestCase):
     @patch.object(quota.sys, "platform", "win32")
     @patch.object(quota.sys, "argv", ["quota"])
     @patch.object(quota.os, "getppid", return_value=1234)
-    @patch.object(quota.os, "execv")
+    @patch.object(subprocess, "CREATE_NEW_CONSOLE", 0x10, create=True)
+    @patch("subprocess.Popen")
     @patch("subprocess.run")
-    def test_windows_installed_launcher_exits_before_upgrade(self, run, execv, _getppid):
-        quota._run_upgrade(output=lambda _line: None)
-        execv.assert_called_once_with(quota.sys.executable, [
-            quota.sys.executable, str(quota.ROOT / "quota.py"), "upgrade-run", "--wait-pid", "1234",
-        ])
+    def test_windows_installed_upgrade_uses_its_own_console(self, run, popen, _getppid):
+        lines = []
+        quota._run_upgrade(output=lines.append)
+        popen.assert_called_once_with([
+            quota.sys.executable, "-u", str(quota.ROOT / "quota.py"), "upgrade-run", "--wait-pid", "1234",
+        ], creationflags=0x10)
+        self.assertIn("独立升级窗口", "\n".join(lines))
+        self.assertIn("此终端可继续使用", "\n".join(lines))
         run.assert_not_called()
+
+    @patch.object(quota.sys, "platform", "win32")
+    @patch.object(quota.sys, "argv", ["quota"])
+    @patch.object(subprocess, "CREATE_NEW_CONSOLE", 0x10, create=True)
+    @patch("subprocess.Popen", side_effect=OSError("cannot create console"))
+    @patch("subprocess.run")
+    def test_failed_console_creation_reports_failure_without_starting_upgrade(self, run, popen):
+        lines = []
+        quota._run_upgrade(output=lines.append)
+        popen.assert_called_once()
+        run.assert_not_called()
+        self.assertIn("无法启动升级进程", "\n".join(lines))
+        self.assertNotIn("已打开", "\n".join(lines))
+
+    def test_upgrade_window_explains_how_to_close_after_the_worker_finishes(self):
+        events = []
+        with (
+            patch.object(sys, "argv", ["quota.py", "upgrade-run", "--wait-pid", "1234"]),
+            patch.object(quota.config, "apply_config_env"),
+            patch.object(quota, "_current_version", return_value="0.7.2"),
+            patch.object(quota, "_configure_stdio"),
+            patch.object(quota, "_run_upgrade", side_effect=lambda **kwargs: events.append(("upgrade", kwargs))),
+            patch.object(sys.stdin, "isatty", return_value=True),
+            patch("builtins.input", side_effect=lambda prompt: events.append(("close", prompt))),
+        ):
+            quota.main()
+        self.assertEqual(("upgrade", {"wait_pid": 1234}), events[0])
+        self.assertIn("升级流程已结束，按 Enter 关闭此窗口", events[1][1])
+
+    def test_noninteractive_worker_exits_without_waiting_for_another_key(self):
+        with (
+            patch.object(sys, "argv", ["quota.py", "upgrade-run", "--wait-pid", "1234"]),
+            patch.object(quota.config, "apply_config_env"),
+            patch.object(quota, "_current_version", return_value="0.7.2"),
+            patch.object(quota, "_configure_stdio"),
+            patch.object(quota, "_run_upgrade"),
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch("builtins.input") as ask,
+        ):
+            quota.main()
+        ask.assert_not_called()
 
     @patch("lib.snapshot._process_exists", side_effect=[True, False])
     @patch.object(quota.time, "sleep")
