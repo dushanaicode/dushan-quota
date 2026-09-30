@@ -112,7 +112,8 @@
   .name b { font-size:13px; font-weight:600; color:var(--text); white-space:nowrap; }
   .pill { font-size:10px; padding:1px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; flex:none; }
   .name span { font-size:11px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; white-space:pre-line; overflow-wrap:anywhere; line-height:1.5; font-variant-numeric:tabular-nums; }
+  .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; overflow-wrap:anywhere; line-height:1.5; font-variant-numeric:tabular-nums; }
+  .sub.expired { color:var(--bad); }
   .row { margin:6px 0 2px; }
   .row .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; margin-bottom:4px; }
   .row .lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
@@ -199,7 +200,7 @@
   <div id="cfg">
     <label class="sec" for="timeZone">显示时区</label>
     <select id="timeZone" aria-describedby="timeZoneHelp timeZoneStatus"></select>
-    <div class="time-zone-note" id="timeZoneHelp">订阅、额度重置及更新时间按此时区显示，网页与悬浮窗共用。</div>
+    <div class="time-zone-note" id="timeZoneHelp">网页与悬浮窗共用</div>
     <div class="time-zone-note" id="timeZoneStatus" role="status"></div>
     <div class="sec">窗口</div>
     <div class="albl"><span>不透明度</span><span id="aVal">82%</span></div>
@@ -364,16 +365,12 @@ function fmtDate(iso){
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${offset}`;
 }
 function subscriptionText(it){
-  const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
-  const expired = it.sub_status === 'expired' || Date.parse(it.sub_end) <= Date.now();
-  const lines = [];
-  if(start) lines.push(`订阅生效 ${start}`);
-  if(end) lines.push(`${expired ? '订阅已到期' : '订阅到期'} ${end}`);
-  else if(it.sub_status === 'not_applicable') lines.push('订阅 免费方案 · 到期 不适用');
-  else if(start) lines.push('订阅到期时间未提供');
-  else if(it.provider === 'claude') lines.push('订阅时间未提供');
-  else if(it.sub_status === 'unavailable') lines.push('订阅信息暂未取得，请刷新重试');
-  return lines.join('\n');
+  const start = fmtDate(it.sub_start).slice(0,19), end = fmtDate(it.sub_end).slice(0,19);
+  if(!start && !end && (it.sub_status === 'not_applicable' || (!it.sub_status && it.provider !== 'claude'))) return '';
+  const dates = [];
+  if(S.show['#sub_start']!==false) dates.push(start || '—');
+  if(S.show['#sub_end']!==false) dates.push(end || '—');
+  return dates.join(' - ');
 }
 
 /* 卡片排序：按住卡片标题上下拖，顺序存进设置，随窗口一起持久化 */
@@ -446,8 +443,13 @@ function render(items){
     const planTip = it.plan_detail ? `${it.plan} · 接口原值 ${it.plan_detail}` : (it.plan || '');
     const pill = (S.show['#plan']!==false && it.plan) ? `<span class="pill" title="${esc(planTip)}">${esc(it.plan)}</span>` : '';
     html += `<div class="card" data-key="${esc(accountKey(it))}"><div class="name" title="按住上下拖动可调整顺序"><span class="grip" aria-hidden="true"></span><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
-    const sub = S.show['#plan']!==false ? subscriptionText(it) : '';
-    if(sub) html += `<div class="sub">${esc(sub)}</div>`;
+    const sub = subscriptionText(it);
+    if(sub) {
+      const expired = S.show['#sub_end']!==false && (it.sub_status === 'expired' || Date.parse(it.sub_end) <= Date.now());
+      const labels = [['#sub_start','订阅时间'],['#sub_end','到期时间']].filter(([key])=>S.show[key]!==false).map(([,label])=>label).join(' - ');
+      const tip = `${expired ? '已到期 · ' : ''}${labels}；— 表示未提供`;
+      html += `<div class="sub${expired ? ' expired' : ''}" title="${esc(tip)}">${esc(sub)}</div>`;
+    }
     if(it.ok) html += it.windows.map(w=>row(w,accountKey(it))).join('');
     if(it.notice) html += `<div class="note">${esc(noticeText(it))}</div>`;
     if(it.error || !it.ok && !it.notice) html += `<div class="err">${esc(it.error||'失败')}</div>`;
@@ -505,11 +507,13 @@ function wireChips(container){
   container.querySelectorAll('.chip').forEach(el=>{
     const enabled = el.dataset.n==='#usage' ? usageOn() : S.show[el.dataset.n]!==false;
     el.classList.toggle('on', enabled);
+    el.setAttribute('aria-pressed', String(enabled));
     el.onclick = ()=>{
       const key = el.dataset.n;
       const next = key==='#usage' ? !usageOn() : S.show[key]===false;
       S.show[key] = next;
       el.classList.toggle('on', next);
+      el.setAttribute('aria-pressed', String(next));
       save();
       if(key==='#usage' && next) refresh(false); else render(cache);
     };
@@ -517,8 +521,8 @@ function wireChips(container){
 }
 function buildPick(){
   const names = [...new Set(cache.map(i=>i.title))];
-  $('pick').innerHTML = names.map(n=>`<span class="chip" data-n="${esc(n)}">${esc(n)}</span>`).join('');
-  $('meta').innerHTML = [['#email','邮箱'],['#plan','套餐'],['#usage','用量信息']].map(([k,label])=>`<span class="chip" data-n="${k}">${label}</span>`).join('');
+  $('pick').innerHTML = names.map(n=>`<button type="button" class="chip" data-n="${esc(n)}">${esc(n)}</button>`).join('');
+  $('meta').innerHTML = [['#email','邮箱'],['#plan','套餐'],['#sub_start','订阅时间'],['#sub_end','到期时间'],['#usage','用量信息']].map(([k,label])=>`<button type="button" class="chip" data-n="${k}">${label}</button>`).join('');
   wireChips($('pick')); wireChips($('meta'));
 }
 

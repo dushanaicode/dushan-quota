@@ -129,7 +129,7 @@ async function main() {
   await floating.refresh();
   assert.equal(vm.runInContext('cache.length', floating), 1, 'Failed refresh must preserve existing cards');
   vm.runInContext("S.show['#plan'] = false; render([fixture]);", floating);
-  assert(!floating.get('list').innerHTML.includes('2030-01-02'));
+  assert(floating.get('list').innerHTML.includes('class="sub"'), 'Hiding the plan must not hide subscription dates');
   floating.applyMotion();
   floating.toggleSettings();
   assert(floating.get('panel').classList.contains('settings-open'));
@@ -252,7 +252,7 @@ async function main() {
     subscriptions.renderCards();
     subscriptions.renderHistory();
     subscriptions.renderFocus();
-    const views = [floating.get('list').innerHTML, subscriptions.get('list').children[0].innerHTML,
+    const views = [subscriptions.get('list').children[0].innerHTML,
       subscriptions.get('historyList').children[0].innerHTML, subscriptions.get('fpList').children[0].innerHTML];
     for (const html of views) {
       if (item === subscribed) assert(html.includes(exactStart) && html.includes(exactEnd), 'Every subscription view shows complete start and end timestamps');
@@ -264,7 +264,15 @@ async function main() {
     }
     const overview = subscriptions.get('fpList').children[0].innerHTML;
     if (item === claudeStart || item === claudeMissing) assert(overview.includes('>未知</span>') && !overview.includes('>有效</span>'));
+    const compact = floating.get('list').innerHTML.match(/<div class="sub[^"]*"[^>]*>([^<]*)<\/div>/)?.[1] || '';
+    if (item === subscribed) assert.equal(compact, `${exactStart.slice(0,19)} - ${exactEnd.slice(0,19)}`);
+    if (item === claudeStart) assert.equal(compact, `${exactStart.slice(0,19)} - —`);
+    if (item === claudeMissing) assert.equal(compact, '— - —');
+    if (item === staleExpired) assert(floating.get('list').innerHTML.includes('class="sub expired"'));
+    if (item === free) assert.equal(compact, '', 'Free accounts without subscription dates need no placeholder row');
+    assert(!/UTC|订阅生效|订阅到期|Invalid Date/.test(compact));
   }
+  assert.equal(floating.subscriptionText({...subscribed, sub_start: '2030-01-01', sub_end: 'invalid'}), '2030-01-01 - —');
   for (const item of [{...claudeStart, sub_status: 'known'}, {...claudeMissing, sub_status: ''},
     {...subscribed, sub_end: 'invalid'}]) {
     subscriptions.cache = [item];
@@ -287,12 +295,41 @@ async function main() {
   await zonedFloat.init();
   assert.equal(zonedFloat.get('timeZone').value, 'Asia/Shanghai');
   assert(zonedFloat.get('timeZone').innerHTML.includes('中国 · 上海'));
-  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 UTC+08:00'));
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 - 2030-02-01 14:07:08'));
+  const startChip = zonedFloat.document.createElement('button'), endChip = zonedFloat.document.createElement('button');
+  startChip.dataset.n = '#sub_start'; endChip.dataset.n = '#sub_end';
+  zonedFloat.get('meta').querySelectorAll = () => [startChip, endChip];
+  zonedFloat.buildPick();
+  assert(zonedFloat.get('meta').innerHTML.includes('data-n="#sub_start">订阅时间</button>'));
+  assert(zonedFloat.get('meta').innerHTML.includes('data-n="#sub_end">到期时间</button>'));
+  assert.equal(startChip.getAttribute('aria-pressed'), 'true');
+  const timeRow = ctx => ctx.get('list').innerHTML.match(/<div class="sub[^"]*"[^>]*>([^<]*)<\/div>/)?.[1] || '';
+  startChip.onclick();
+  assert.equal(timeRow(zonedFloat), '2030-02-01 14:07:08');
+  assert.equal(appearanceSaves.at(-1).show['#sub_start'], false);
+  assert.equal(startChip.getAttribute('aria-pressed'), 'false');
+  const savedTimeShow = {...appearanceSaves.at(-1).show};
+  endChip.onclick();
+  assert.equal(timeRow(zonedFloat), '', 'Both date switches off removes the row');
+  assert(!zonedFloat.get('list').innerHTML.includes('class="sub'));
+  assert.equal(appearanceSaves.at(-1).show['#sub_end'], false);
+  startChip.onclick();
+  assert.equal(timeRow(zonedFloat), '2030-01-01 11:04:05');
+  endChip.onclick();
+  assert.equal(timeRow(zonedFloat), '2030-01-01 11:04:05 - 2030-02-01 14:07:08');
+  const restoredTime = context();
+  vm.runInContext(script('float.html'), restoredTime);
+  restoredTime.window.pywebview = {api: {...timeZoneBridge,
+    settings: async () => ({...await timeZoneBridge.settings(), show:savedTimeShow})}};
+  await restoredTime.init();
+  assert.equal(timeRow(restoredTime), '2030-02-01 14:07:08', 'Saved independent date choices survive restart');
+  await restoredTime.refresh();
+  assert.equal(timeRow(restoredTime), '2030-02-01 14:07:08', 'Refresh does not reset the saved date choices');
   const beforeSwitch = quotaCalls;
   await zonedFloat.setTimeZone('America/Los_Angeles');
   assert.equal(quotaCalls, beforeSwitch, 'Changing the time zone rerenders cached data without fetching quota');
   assert.equal(timeZoneSaves.at(-1), 'America/Los_Angeles');
-  assert(zonedFloat.get('list').innerHTML.includes('2029-12-31 19:04:05 UTC-08:00'));
+  assert(zonedFloat.get('list').innerHTML.includes('2029-12-31 19:04:05 - 2030-01-31 22:07:08'));
   assert(zonedFloat.get('status').textContent.includes('19:04:05'));
   assert(zonedFloat.get('status').title.includes('UTC-08:00'));
   assert(zonedFloat.quotaResetAt(Date.parse(subscribed.sub_start) / 1000).includes('19:04:05 UTC-08:00'));
@@ -310,7 +347,7 @@ async function main() {
   globalTimeZone = 'Asia/Shanghai';
   await zonedFloat.refresh();
   assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'Quota refresh synchronizes a time zone changed in the other view');
-  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 UTC+08:00'));
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 - 2030-02-01 14:07:08'));
   timeZoneBridge.quota = async () => ({results: [], snapshot: {state: 'error'}});
   await zonedFloat.refresh();
   assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'A failed quota response without a time zone preserves the selected zone');
