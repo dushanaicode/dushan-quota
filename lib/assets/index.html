@@ -203,13 +203,14 @@
   .wrow .rst-toggle:focus-visible { outline:1px dotted var(--muted); outline-offset:2px; }
   .credits { margin:8px 0 2px; padding:6px 9px; border:1px solid var(--line-soft); border-radius:9px; }
   .credits-head { font-size:10px; color:var(--faint); margin-bottom:2px; }
-  .credit-row { display:flex; align-items:baseline; gap:7px; padding:2px 0; font-size:10.5px; }
+  .credit-row { display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; padding:2px 0; font-size:10.5px; }
   .credit-row .c-state { flex:none; font-size:9px; padding:0 6px; border-radius:99px; background:var(--accent-soft); color:var(--faint); }
   .credit-row .c-state.available { color:var(--ok); }
   .credit-row .c-state.used { color:var(--warn); }
   .credit-row .c-state.expired { color:var(--bad); }
   .credit-row .c-title { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .credit-row .c-exp { flex:1; text-align:right; color:var(--faint); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .credit-row .c-scope { flex-basis:100%; color:var(--faint); font-size:10px; }
   .err { color:var(--bad); font-size:12px; padding:6px 0 2px; }
   .note { color:var(--warn); font-size:12px; padding:6px 0 2px; }
   .foot { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; border-top:1px solid var(--line-soft); padding-top:10px; }
@@ -427,6 +428,7 @@
   .ud-value { margin-top:7px; color:var(--text); font-size:20px; line-height:1.25; font-weight:600;
     font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
   .ud-value small { margin-left:4px; color:var(--faint); font-size:10px; font-weight:400; }
+  .ud-cost-note { margin-top:5px; color:var(--faint); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
   .ud-progress { height:4px; margin-top:9px; overflow:hidden; border-radius:99px; background:var(--track); }
   .ud-progress i { display:block; height:100%; border-radius:99px; background:var(--accent); }
   .ud-section { margin-top:16px; border:1px solid var(--line); border-radius:13px; overflow:hidden;
@@ -788,6 +790,7 @@ function fmtDate(iso){
 }
 function subscriptionLine(item){
   const start = fmtDate(item.sub_start), end = fmtDate(item.sub_end);
+  if (item.provider === 'claude') return start ? `<div class="meta dim">订阅生效 ${esc(start)}</div>` : '';
   const expired = item.sub_status === 'expired' || Date.parse(item.sub_end) <= Date.now();
   if (start && end) {
     const endLabel = expired ? '已到期' : '到期';
@@ -797,7 +800,6 @@ function subscriptionLine(item){
   if (start) return `<div class="meta dim">订阅生效 ${esc(start)} · 订阅到期时间未提供</div>`;
   const status = item.sub_status || '';
   if (status === 'not_applicable') return '<div class="meta dim">订阅 免费方案 · 到期 不适用</div>';
-  if (item.provider === 'claude') return '<div class="meta dim">订阅时间未提供</div>';
   if (status === 'unavailable') {
     return '<div class="meta dim">订阅信息暂未取得，请刷新重试</div>';
   }
@@ -824,10 +826,13 @@ function resetCountdown(targetMs){
   return `${d} 天后`;
 }
 function creditBlock(item){
+  if (item.provider === 'claude') return '';
   const rc = item.reset_credits;
   const credits = rc && Array.isArray(rc.credits) ? rc.credits : [];
-  if (!credits.length) return '';
-  const states = {available:['可用','available'], redeemed:['已使用','used'], expired:['已过期','expired']};
+  if (!rc) return '';
+  const note = [rc.message, rc.cooldown_until ? `下次可用 ${fmtDate(rc.cooldown_until)}` : ''].filter(Boolean).join(' · ');
+  if (!credits.length && !note) return '';
+  const states = {available:['可用','available'], redeemed:['已使用','used'], expired:['已过期','expired'], paused:['暂停','other'], unavailable:['暂不可用','other']};
   const sorted = [...credits].sort((a, b) =>
     (a.status === 'available' ? 0 : 1) - (b.status === 'available' ? 0 : 1)
     || String(a.expires_at || '').localeCompare(String(b.expires_at || '')));
@@ -837,11 +842,13 @@ function creditBlock(item){
     const valid = exp && !isNaN(exp);
     const when = valid ? `${fmtResetAt(exp.getTime() / 1000)} 到期` : '';
     const left = valid && c.status === 'available' ? resetCountdown(exp.getTime()) : '';
-    const full = valid ? `过期时间 ${fmtDate(c.expires_at)}` : '';
-    return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span></div>`;
+    const cleared = (c.clears || []).map(name => ({five_hour:'5 小时额度', seven_day:'周额度'})[name] || name).join('、');
+    const full = [valid ? `过期时间 ${fmtDate(c.expires_at)}` : '', cleared ? `可重置 ${cleared}` : ''].filter(Boolean).join(' · ');
+    const remaining = Number.isFinite(c.remaining_count) ? ` · ${c.remaining_count} 次` : '';
+    return `<div class="credit-row"${full ? ` title="${esc(full)}"` : ''}><span class="c-state ${cls}">${esc(label)}</span><span class="c-title">${esc(c.title || 'Full reset')}${esc(remaining)}</span><span class="c-exp">${esc([when, left].filter(Boolean).join(' · ') || '—')}</span>${cleared?`<span class="c-scope">重置 ${esc(cleared)}</span>`:''}</div>`;
   }).join('');
-  const avail = credits.filter(c => c.status === 'available').length;
-  return `<div class="credits"><div class="credits-head">重置卡 · 可用 ${avail} / 共 ${credits.length} 张</div>${rows}</div>`;
+  const count = Number.isFinite(rc.available_count) ? `剩余 ${rc.available_count} 次` : '状态未知';
+  return `<div class="credits"><div class="credits-head">重置卡 · ${count}</div>${rows}${note?`<div class="hint">${esc(note)}</div>`:''}</div>`;
 }
 
 /* 重置时间的倒计时/绝对时间切换，与悬浮窗共用一套状态模型 */
@@ -920,7 +927,29 @@ function usageBadge(source){
   const local = source === 'local';
   return `<span class="ud-badge ${local?'local':''}">${local?'本机':'远端'}</span>`;
 }
+function costValue(item){
+  if(item.cost==null) return '费用未提供';
+  if(item.cost>0 && item.cost<0.000001) return '<$0.000001';
+  return '$'+item.cost.toLocaleString('en-US', {maximumFractionDigits:6});
+}
+function costSummary(item){
+  if(item.cost==null) return '没有可用费用记录或模型单价';
+  const coverage=item.cost_coverage;
+  const partial=coverage && coverage.priced_events<coverage.total_events;
+  const source={recorded:'客户端记录',estimated:'API 单价估算',mixed:'混合来源'}[item.cost_source];
+  return [partial?'部分费用':'参考费用',source,coverage?`${coverage.priced_events}/${coverage.total_events} 条已计价`:''].filter(Boolean).join(' · ');
+}
+function aggregateUsageCost(rows){
+  const priced=rows.filter(row=>row.cost!=null), sources=new Set(priced.map(row=>row.cost_source));
+  return {cost:priced.length?priced.reduce((sum,row)=>sum+row.cost,0):null,currency:'USD',
+    cost_source:!priced.length?'unavailable':sources.size===1?priced[0].cost_source:'mixed',
+    cost_coverage:{priced_events:rows.reduce((sum,row)=>sum+(row.cost_coverage?.priced_events||0),0),
+      total_events:rows.reduce((sum,row)=>sum+(row.cost_coverage?.total_events||0),0)}};
+}
 function usageMetricValue(item){
+  if (usageMetric==='cost') {
+    return `<div class="ud-value">${esc(costValue(item))}<small>USD</small></div><div class="ud-cost-note">${esc(costSummary(item))}${item.total_tokens==null?'':`<br>${exactNumber(item.total_tokens)} Token`}</div>`;
+  }
   if (item.total_tokens != null) {
     return `<div class="ud-value" title="${exactNumber(item.total_tokens)} Token">${compactNumber(item.total_tokens)}<small>Token</small></div>`;
   }
@@ -952,6 +981,10 @@ function usageBreakdown(values){
 function usageModelTable(models){
   if (!Array.isArray(models) || !models.length) return '';
   const cell = value => `<td title="${exactNumber(value)}">${exactNumber(value)}</td>`;
+  if (usageMetric==='cost') return `<div class="ud-scroll-hint">左右滑动查看全部列 →</div><div class="ud-model-wrap"><table class="ud-table">
+    <thead><tr><th>模型</th><th>参考费用 (USD)</th><th>总 Token</th><th>来源与覆盖</th></tr></thead>
+    <tbody>${models.map(model=>`<tr><td class="ud-model-name">${esc(model.name||'未标记模型')}</td><td>${esc(costValue(model))}</td>${cell(model.total_tokens)}<td>${esc(costSummary(model))}</td></tr>`).join('')}</tbody>
+  </table></div>`;
   return `<div class="ud-scroll-hint">左右滑动查看全部列 →</div><div class="ud-model-wrap"><table class="ud-table">
     <thead><tr><th>模型</th><th>总 Token</th><th>输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>推理</th></tr></thead>
     <tbody>${models.map(model => `<tr><td class="ud-model-name">${esc(model.name||'未标记模型')}</td>${cell(model.total_tokens)}${cell(model.input)}${cell(model.cached)}${cell(model.cache_write)}${cell(model.output)}${cell(model.reasoning)}</tr>`).join('')}</tbody>
@@ -960,7 +993,7 @@ function usageModelTable(models){
 function usageSection(item){
   const hasDetails = item.breakdown || (Array.isArray(item.models) && item.models.length);
   if (!hasDetails) return '';
-  const total = item.total_tokens == null ? '' : `${compactNumber(item.total_tokens)} Token`;
+  const total = usageMetric==='cost' ? esc(costValue(item)) : item.total_tokens == null ? '' : `${compactNumber(item.total_tokens)} Token`;
   return `<section class="ud-section">
     <div class="ud-section-head">${usageBadge(item.source)}<div class="ud-section-title"><b>${esc(item.label||'用量明细')}</b></div><div class="ud-section-total">${total}</div></div>
     ${usageBreakdown(item.breakdown)}${usageModelTable(item.models)}
@@ -973,15 +1006,20 @@ let usageRequestToken = 0;
 let usageDetailData = null;
 let usagePeriod = '30d';
 let usageHarness = 'all';
+let usageMetric = 'tokens';
 try {
   const saved = localStorage.getItem('quota-usage-period');
   if (USAGE_PERIODS.some(([key]) => key===saved)) usagePeriod = saved;
+  const metric = localStorage.getItem('quota-usage-metric');
+  if (['tokens','cost'].includes(metric)) usageMetric = metric;
 } catch(e) {}
 function changeUsageFilters(event){
   usagePeriod = document.getElementById('usagePeriod').value;
   usageHarness = document.getElementById('usageHarness').value;
+  usageMetric = document.getElementById('usageMetric').value;
   try {
     localStorage.setItem('quota-usage-period', usagePeriod);
+    localStorage.setItem('quota-usage-metric', usageMetric);
     const account = usageDetailData.account || {};
     localStorage.setItem(`quota-usage-harness:${account.provider}:${account.identity}`, usageHarness);
   } catch(e) {}
@@ -1013,15 +1051,17 @@ function renderUsageDetail(data){
   const filters = `<div class="ud-filters">
     <label class="ud-filter"><span>时间范围</span><select id="usagePeriod">${USAGE_PERIODS.map(([key,label])=>`<option value="${key}" ${key===usagePeriod?'selected':''}>${label}</option>`).join('')}</select></label>
     <label class="ud-filter"><span>客户端</span><select id="usageHarness"><option value="all" ${usageHarness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${usageHarness==='remote'?'selected':''}>远端</option>`:''}${localHarnesses.map(([key,label])=>`<option value="${esc(key)}" ${key===usageHarness?'selected':''}>${esc(label)}</option>`).join('')}</select></label>
+    <label class="ud-filter"><span>查看方式</span><select id="usageMetric"><option value="tokens" ${usageMetric==='tokens'?'selected':''}>Token 数</option><option value="cost" ${usageMetric==='cost'?'selected':''}>参考费用</option></select></label>
   </div>`;
   const content = visible.length ? `
     <div class="ud-metrics">${metrics.map(usageMetricCard).join('')}</div>
     ${visible.map(usageSection).join('')}
-    <div class="ud-note">本机和远端用量分开显示。</div>`
+    <div class="ud-note">${usageMetric==='cost'?'金额为 USD，来自客户端记录或内置官方 API 单价估算；未记录档位按标准价参考，不等同实付金额或订阅账单。未知单价或计价字段不完整的记录不计入费用。':'本机和远端用量分开显示。'}</div>`
     : '<div class="ud-empty"><b>暂无用量</b><span>试试其他时间或客户端。</span></div>';
   document.getElementById('usageBody').innerHTML = filters + content;
   document.getElementById('usagePeriod').onchange = changeUsageFilters;
   document.getElementById('usageHarness').onchange = changeUsageFilters;
+  document.getElementById('usageMetric').onchange = changeUsageFilters;
   document.getElementById('usageFetched').textContent = `用量读取 ${fmtDate(data.fetched_at || Date.now())}`;
 }
 function aggregateLocalUsage(rows){
@@ -1029,7 +1069,7 @@ function aggregateLocalUsage(rows){
   for(const [key] of USAGE_FIELDS) breakdown[key]=rows.reduce((sum,row)=>sum+Number((row.breakdown||{})[key]||0),0);
   const period=usagePeriod==='all'?'累计':`近 ${usagePeriod.replace('d','')} 天`;
   return {source:'local',label:`本机合计 · ${period}`,
-    total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown};
+    total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown,...aggregateUsageCost(rows)};
 }
 async function loadUsageDetail(force=false){
   if (!usageCtx) return;
@@ -1108,7 +1148,7 @@ function renderCards(){
     }).join('');
     const subLine = subscriptionLine(item);
     const accountKey = `${item.provider}:${item.identity || item.email || item.title}`;
-    const wins = (item.windows || []).map(w => winRow(w, accountKey)).join('');
+    const wins = (item.windows || []).filter(w => item.provider !== 'claude' || !['credits','reset_credits'].includes(w.meta?.kind)).map(w => winRow(w, accountKey)).join('');
     const pill = item.plan ? `<span class="pill ${pillClass(item.plan)}" title="${esc(planTip(item))}">${esc(item.plan)}</span>` : '';
     const credit = item.reset_credits || {};
     const creditTotal = Number.isFinite(credit.available_count) ? credit.available_count : null;
@@ -1116,8 +1156,8 @@ function renderCards(){
     const creditAvailable = creditTotal > 0;
     const resetLabel = creditAvailable
       ? `使用重置次数（剩余 ${creditTotal}）`
-      : (creditTotal === 0 ? '无重置次数' : '重置状态未知');
-    const resetTitle = creditAvailable ? '将消费一次重置次数，需要再次确认' : '当前没有可用的重置次数';
+      : (creditTotal === 0 ? '无重置次数' : creditTotal>0 ? '重置卡暂不可用' : '重置状态未知');
+    const resetTitle = creditAvailable ? '将消费一次重置次数，需要再次确认' : credit.message || '当前没有可用的重置次数';
     const resetButton = item.provider === 'openai'
       ? `<button class="btn act-reset" data-label="${esc(resetLabel)}" ${creditAvailable ? '' : 'disabled'} title="${esc(resetTitle)}">${esc(resetLabel)}</button>`
       : '';
@@ -1154,7 +1194,7 @@ function renderCards(){
     const ub = sec.querySelector('.act-usage');
     if (ub) ub.onclick = () => openUsage(item);
     const rb = sec.querySelector('.act-reset');
-    if (rb) rb.onclick = e => resetOpenAI(item, e.currentTarget);
+    if (rb) rb.onclick = e => resetAccount(item, e.currentTarget);
     box.appendChild(sec);
   });
 }
@@ -1205,10 +1245,11 @@ async function confirmCloseCard(){
   }
 }
 
-async function resetOpenAI(item, btn){
+async function resetAccount(item, btn){
+  if(btn.disabled) return;
   if (!btn.dataset.arm) {
     btn.dataset.arm = '1'; btn.classList.add('arm'); btn.textContent = '确认使用 1 次';
-    setTimeout(() => { delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = btn.dataset.label || '使用重置次数'; }, 2600);
+    setTimeout(() => { if(!btn.dataset.arm) return; delete btn.dataset.arm; btn.classList.remove('arm'); btn.textContent = btn.dataset.label || '使用重置次数'; }, 2600);
     return;
   }
   delete btn.dataset.arm;
@@ -1306,9 +1347,10 @@ function renderFocus(){
   }
 
   const subscriptions = cache.map(it => {
+    if (it.provider === 'claude') return null;
     const start = fmtDate(it.sub_start), end = fmtDate(it.sub_end);
     const status = it.sub_status || '';
-    if (!start && !end && !status && it.provider !== 'claude') return null;
+    if (!start && !end && !status) return null;
     const endTimestamp = Date.parse(it.sub_end || '');
     const inferredExpired = Number.isFinite(endTimestamp) && endTimestamp <= Date.now();
     const state = status === 'expired' || inferredExpired
@@ -1325,7 +1367,7 @@ function renderFocus(){
       account: it.email || it.name || '',
       start,
       end,
-      missingTime: it.provider === 'claude' ? '订阅时间未提供' : '时间暂不可获取',
+      missingTime: '时间暂不可获取',
       state,
       timestamp,
     };

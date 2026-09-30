@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
-from . import agentdb, tokenstore
+from . import agentdb, pricing, tokenstore
 from .discover import collect_accounts
 from .httputil import request_json
 from .store import store_dir
@@ -223,6 +223,12 @@ def collect(results, *, force: bool = False) -> dict:
 
     period_order = {period: index for index, (period, _, _) in enumerate(LOCAL_PERIODS)}
     for rows in account_rows.values():
+        for row in rows:
+            if "total_tokens" in row and "cost" not in row:
+                row.update(pricing.summarize([]))
+            for model in row.get("models", []):
+                if "cost" not in model:
+                    model.update(pricing.summarize([]))
         rows.sort(
             key=lambda row: (
                 0 if row.get("source") == "local" else 1,
@@ -740,6 +746,7 @@ def _owner_lookup(events: list[tuple[int, str]]):
 
 def _local_usage_rows(events: list[dict], harness: str, detail: str, *, now: datetime | None = None) -> dict:
     now = now or datetime.now().astimezone()
+    events = [{**event, "_cost": pricing.event_cost(event, harness)} for event in events]
     output = {}
     identities = {event.get("identity") for event in events if event.get("identity")}
     for identity in identities:
@@ -753,9 +760,10 @@ def _local_usage_rows(events: list[dict], harness: str, detail: str, *, now: dat
             models = {}
             combined = {"input": 0, "cached": 0, "cache_write": 0, "output": 0, "reasoning": 0}
             total_tokens = 0
-            cost = 0.0
+            model_costs = {}
             for event in selected:
                 model = str(event.get("model") or "未标记模型")
+                model_costs.setdefault(model, []).append(event["_cost"])
                 bucket = models.setdefault(
                     model,
                     {"input": 0, "cached": 0, "cache_write": 0, "output": 0, "reasoning": 0, "total_tokens": 0},
@@ -769,12 +777,8 @@ def _local_usage_rows(events: list[dict], harness: str, detail: str, *, now: dat
                     event_total = _usage_total(event)
                 bucket["total_tokens"] += event_total
                 total_tokens += event_total
-                try:
-                    cost += max(0.0, float(event.get("cost") or 0))
-                except (TypeError, ValueError):
-                    pass
             model_rows = [
-                {"name": name, **values}
+                {"name": name, **values, **pricing.summarize(model_costs[name])}
                 for name, values in sorted(models.items(), key=lambda item: -item[1]["total_tokens"])
                 if values["total_tokens"] > 0
             ]
@@ -792,9 +796,8 @@ def _local_usage_rows(events: list[dict], harness: str, detail: str, *, now: dat
                 "detail": detail,
                 "breakdown": combined,
                 "event_count": len(selected),
+                **pricing.summarize(event["_cost"] for event in selected),
             }
-            if cost > 0:
-                row["cost"] = round(cost, 8)
             rows.append(row)
         if rows:
             output[identity] = rows
@@ -935,6 +938,7 @@ def _scan_codex_file(
     event_rows=None,
 ) -> None:
     current_model = ""
+    service_tier = None
     previous: dict[str, int] | None = None
     try:
         stream = path.open("r", encoding="utf-8", errors="replace")
@@ -955,6 +959,7 @@ def _scan_codex_file(
                 model = payload.get("model") or payload.get("model_name") or info.get("model") or info.get("model_name")
                 if isinstance(model, str) and model.strip():
                     current_model = _model_name(model)
+                service_tier = payload.get("service_tier")
                 continue
             if kind != "event_msg" or payload.get("type") != "token_count":
                 continue
@@ -991,12 +996,18 @@ def _scan_codex_file(
             model = current_model or _model_name(info.get("model") or info.get("model_name") or "")
             model = model or "未标记模型"
             if event_rows is not None:
+                input_details = raw_last.get("input_tokens_details") if last is not None and delta == last else None
                 event_rows.append(
                     {
+                        "provider": "openai",
                         "timestamp": timestamp,
                         "identity": owner,
                         "model": model,
                         "total_tokens": _usage_total(delta),
+                        "service_tier": service_tier,
+                        "pricing_context_input": last["input"] if last is not None and delta == last else None,
+                        "pricing_cache_write": input_details.get("cache_write_tokens") if isinstance(input_details, dict) else None,
+                        "pricing_complete": _codex_pricing_complete(raw_last if last is not None else raw_total),
                         **delta,
                     }
                 )
@@ -1078,6 +1089,12 @@ def scan_opencode_local(
                 "model": model_data.get("modelID") or model_data.get("id") or message.get("modelID") or "未标记模型",
                 "total_tokens": total,
                 "cost": message.get("cost"),
+                "pricing_complete": pricing.counts_known(
+                    tokens.get("input"), tokens.get("output"), tokens.get("reasoning", 0),
+                    cache.get("read", 0), cache.get("write", 0),
+                ),
+                "service_tier": message.get("service_tier"),
+                "pricing_cache_write": cache.get("write"),
                 **values,
             }
         )
@@ -1166,6 +1183,12 @@ def scan_omp_local(
                     "model": message.get("model") or "未标记模型",
                     "total_tokens": total,
                     "cost": cost,
+                    "pricing_complete": pricing.counts_known(
+                        raw_usage.get("input"), raw_usage.get("output"),
+                        raw_usage.get("cacheRead", 0), raw_usage.get("cacheWrite", 0),
+                    ),
+                    "service_tier": message.get("service_tier"),
+                    "pricing_cache_write": raw_usage.get("cacheWrite"),
                     **values,
                 }
             )
@@ -1500,9 +1523,8 @@ def scan_claude_periods_by_account(
                     if row.get("type") != "assistant" and message.get("role") != "assistant":
                         continue
                     timestamp = _timestamp(row.get("timestamp"))
-                    values = _claude_token_values(
-                        message.get("usage") if isinstance(message.get("usage"), dict) else None
-                    )
+                    raw_usage = message.get("usage") if isinstance(message.get("usage"), dict) else None
+                    values = _claude_token_values(raw_usage)
                     if timestamp is None or values is None or values["total_tokens"] <= 0:
                         continue
                     identity = owner_at(timestamp)
@@ -1519,10 +1541,16 @@ def scan_claude_periods_by_account(
                         "identity": identity,
                         "timestamp": timestamp,
                         "model": _model_name(message.get("model") or row.get("model") or "") or "未标记模型",
+                        "cost": row.get("costUSD"),
+                        **_claude_pricing_fields(raw_usage),
                         **values,
                     }
                     previous = found.get(key)
-                    if previous is None or event["total_tokens"] > previous["total_tokens"]:
+                    if previous is None or event["total_tokens"] > previous["total_tokens"] or (
+                        event["total_tokens"] == previous["total_tokens"]
+                        and pricing.amount(previous.get("cost")) is None
+                        and pricing.amount(event.get("cost")) is not None
+                    ):
                         found[key] = event
     return _local_maps_by_provider(
         list(found.values()),
@@ -1802,6 +1830,8 @@ def _claude_remote_usage(account) -> list[dict]:
                         "timestamp": timestamp,
                         "model": item.get("model") or "未标记模型",
                         "total_tokens": total,
+                        # Daily model totals cannot establish per-request pricing tiers.
+                        "pricing_complete": False,
                         **values,
                     }
                 )
@@ -1953,10 +1983,35 @@ def _chatgpt_plan_type(value) -> str:
     return text
 
 
+def _codex_pricing_complete(value: dict) -> bool:
+    details = value.get("input_tokens_details") if isinstance(value.get("input_tokens_details"), dict) else {}
+    return pricing.counts_known(
+        value.get("input_tokens"), value.get("output_tokens"),
+        value.get("cached_input_tokens", 0), value.get("cache_read_input_tokens", 0),
+        details.get("cached_tokens", 0),
+    )
+
+
+def _claude_pricing_fields(value: dict) -> dict:
+    creation = value.get("cache_creation")
+    return {
+        "pricing_complete": pricing.counts_known(
+            value.get("input_tokens"), value.get("output_tokens"),
+            value.get("cache_read_input_tokens", 0), value.get("cache_creation_input_tokens", 0),
+        ),
+        "cache_write_5m": creation.get("ephemeral_5m_input_tokens", 0) if isinstance(creation, dict) else None,
+        "cache_write_1h": creation.get("ephemeral_1h_input_tokens", 0) if isinstance(creation, dict) else None,
+        "service_tier": value.get("service_tier"),
+        "speed": value.get("speed"),
+        "inference_geo": value.get("inference_geo"),
+    }
+
+
 def _token_values(value) -> dict[str, int] | None:
     if not isinstance(value, dict):
         return None
     output = _nonnegative_int(value.get("output_tokens"))
+    input_details = value.get("input_tokens_details") if isinstance(value.get("input_tokens_details"), dict) else {}
     details = value.get("output_tokens_details") if isinstance(value.get("output_tokens_details"), dict) else {}
     reasoning = _nonnegative_int(value.get("reasoning_output_tokens") or details.get("reasoning_tokens"))
     return {
@@ -1964,6 +2019,7 @@ def _token_values(value) -> dict[str, int] | None:
         "cached": max(
             _nonnegative_int(value.get("cached_input_tokens")),
             _nonnegative_int(value.get("cache_read_input_tokens")),
+            _nonnegative_int(input_details.get("cached_tokens")),
         ),
         "output": output,
         "reasoning": min(reasoning, output),

@@ -218,6 +218,9 @@ class ClaudeRefreshTests(unittest.TestCase):
                 self.assertNotIn("old-access", result.notice)
             self.assertEqual(1, request.call_count)
             snapshot.get_snapshot(force=True)
+            self.assertEqual(1, request.call_count, "Manual refresh must not bypass Claude's backoff")
+            with patch.object(snapshot.time, "time", return_value=result.retry_at):
+                snapshot.get_snapshot(force=True)
             self.assertEqual(2, request.call_count)
             sleep.assert_not_called()
 

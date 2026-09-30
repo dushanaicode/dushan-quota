@@ -101,7 +101,7 @@ class QuotaResult:
     # A temporary provider condition (rate limit, network) that retries on its
     # own; unlike error it does not mean the account needs attention.
     notice: str = ""
-    # Automatic queries resume at this epoch; set by the snapshot for notices.
+    # Claude queries resume at this epoch; the snapshot enforces refresh/backoff timers.
     retry_at: float = 0.0
     failures: int = 0
     # Short hash of the credentials the result was fetched with, so a new login

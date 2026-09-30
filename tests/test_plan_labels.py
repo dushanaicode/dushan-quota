@@ -77,7 +77,7 @@ class ClaudePlanTests(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertEqual(start, result.sub_start)
             self.assertEqual("", result.sub_end)
-            self.assertEqual("unavailable", result.sub_status)
+            self.assertEqual("", result.sub_status)
 
 
 class OpenAIPlanTests(unittest.TestCase):

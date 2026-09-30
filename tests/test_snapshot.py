@@ -71,7 +71,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_failed_claude_stays_paused_across_auto_refreshes_until_manual_refresh(self):
         claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1")
-        failure = QuotaResult(account=claude, ok=False, title="Claude Code", error="429，已暂停自动查询")
+        failure = QuotaResult(account=claude, ok=False, title="Claude Code", error="认证失败，已暂停自动查询")
         success = QuotaResult(account=claude, ok=True, title="Claude Code")
         calls = []
 
@@ -88,7 +88,8 @@ class SnapshotTests(unittest.TestCase):
                     paused = snapshot.get_snapshot()
                 self.assertEqual(failure.error, paused.results[1].error)
             failure = success
-            resumed = snapshot.get_snapshot(force=True)
+            with patch.object(snapshot.time, "time", return_value=paused.results[1].retry_at):
+                resumed = snapshot.get_snapshot(force=True)
         self.assertEqual([["openai", "claude"], ["openai"], ["openai"], ["openai"], ["openai", "claude"]], calls)
         self.assertTrue(resumed.results[1].ok)
 
@@ -106,21 +107,94 @@ class SnapshotTests(unittest.TestCase):
         now = time.time()
         with patch.object(snapshot, "collect_accounts", return_value=[claude]), patch.object(
             snapshot, "fetch_all", side_effect=fetch
-        ), patch.object(snapshot, "_is_fresh", return_value=False):
+        ), patch.object(snapshot, "_is_fresh", return_value=False), patch.object(snapshot.time, "time", return_value=now):
             snapshot.get_snapshot()
-            with patch.object(snapshot.time, "time", return_value=now):
+            with patch.object(snapshot.time, "time", return_value=now + 300):
                 first = snapshot.get_snapshot().results[0]
                 snapshot.get_snapshot()
-            with patch.object(snapshot.time, "time", return_value=now + 301):
+            with patch.object(snapshot.time, "time", return_value=now + 600):
                 second = snapshot.get_snapshot().results[0]
 
         self.assertEqual([1, 1, 0, 1], calls)
         self.assertTrue(first.ok)
         self.assertEqual(70, first.windows[0].remaining_percent)
         self.assertEqual(("", "暂时被限流（429）"), (first.error, first.notice))
-        self.assertEqual(now + 300, first.retry_at)
-        self.assertEqual((2, now + 301 + 600), (second.failures, second.retry_at))
+        self.assertEqual(now + 600, first.retry_at)
+        self.assertEqual((2, now + 600 + 600), (second.failures, second.retry_at))
         self.assertEqual(70, second.windows[0].remaining_percent)
+
+    def test_claude_minimum_interval_applies_to_manual_and_auto_refresh_without_delaying_openai(self):
+        claude = Account("claude", "Claude Code", "test", "C", secret={"access": "synthetic-access"})
+        success = QuotaResult(claude, True, "Claude Code", windows=[Window("5h quota", remaining_percent=70)])
+        calls = []
+
+        def fetch(accounts):
+            calls.append([account.provider for account in accounts])
+            return [success if account.provider == "claude" else self.result for account in accounts]
+
+        now = time.time()
+        with (
+            patch.object(snapshot, "collect_accounts", return_value=[self.account, claude]),
+            patch.object(snapshot, "fetch_all", side_effect=fetch),
+            patch.object(snapshot, "_is_fresh", return_value=False),
+        ):
+            for elapsed, force in ((0, False), (1, True), (299, False), (300, True)):
+                with patch.object(snapshot.time, "time", return_value=now + elapsed):
+                    result = snapshot.get_snapshot(force=force).results[1]
+                    self.assertEqual(70, result.windows[0].remaining_percent)
+                    self.assertEqual("", result.notice)
+        self.assertEqual([["openai", "claude"], ["openai"], ["openai"], ["openai", "claude"]], calls)
+
+    def test_claude_timer_survives_other_account_invalidation_in_manual_only_mode(self):
+        claude = Account("claude", "Claude Code", "test", "C", secret={"access": "synthetic-access"})
+        success = QuotaResult(claude, True, "Claude Code")
+        calls = []
+
+        def fetch(accounts):
+            calls.append([account.provider for account in accounts])
+            return [success if account.provider == "claude" else self.result for account in accounts]
+
+        with (
+            patch.object(snapshot, "collect_accounts", return_value=[self.account, claude]),
+            patch.object(snapshot, "fetch_all", side_effect=fetch),
+            patch.object(snapshot, "cache_ttl_seconds", return_value=0),
+        ):
+            snapshot.get_snapshot(force=True)
+            snapshot.invalidate()
+            invalidated = snapshot._read_cache()
+            self.assertEqual(["claude"], [item.account.provider for item in invalidated.results])
+            self.assertFalse(snapshot._is_fresh(invalidated, 0))
+            snapshot.get_snapshot()
+            snapshot.get_snapshot(force=True)
+        self.assertEqual([["openai", "claude"], ["openai"], ["openai"]], calls)
+
+    def test_existing_cache_keeps_claude_429_backoff_after_restart(self):
+        claude = Account("claude", "Claude Code", "test", "C", secret={"access": "synthetic-access"})
+        now = time.time()
+        cached = QuotaResult(
+            claude, True, "Claude Code", notice="暂时被限流（429）",
+            sub_end="2030-01-01T00:00:00Z", sub_status="known",
+            windows=[
+                Window("5h quota", remaining_percent=70),
+                Window("重置次数", text="剩余 2 次", meta={"kind": "reset_credits", "available_count": 2}),
+                Window("积分余额", text="剩余 100 积分", meta={"kind": "credits", "remaining": 100}),
+            ],
+        )
+        limited = snapshot._settle(cached, None, now)
+        snapshot._write_cache([limited], now, "before-restart")
+        payload = json.loads(snapshot.cache_path().read_text(encoding="utf-8"))
+        payload["schema"] = 8
+        snapshot.cache_path().write_text(json.dumps(payload), encoding="utf-8")
+        with (
+            patch.object(snapshot, "collect_accounts", return_value=[claude]),
+            patch.object(snapshot, "fetch_all", return_value=[]) as fetch,
+        ):
+            result = snapshot.get_snapshot(force=True).results[0]
+        fetch.assert_called_once_with([])
+        self.assertEqual(limited.retry_at, result.retry_at)
+        self.assertEqual(limited.notice, result.notice)
+        self.assertEqual(["5h quota"], [window.name for window in result.windows])
+        self.assertEqual(("", ""), (result.sub_end, result.sub_status))
 
     def test_new_claude_credentials_end_a_pause_immediately(self):
         claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1", secret={"access": "old"})

@@ -113,7 +113,6 @@
   .pill { font-size:10px; padding:1px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; flex:none; }
   .name span { font-size:11px; color:var(--faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sub { color:var(--dim); font-size:10px; margin:-2px 0 5px; overflow-wrap:anywhere; line-height:1.5; font-variant-numeric:tabular-nums; }
-  .sub.expired { color:var(--bad); }
   .row { margin:6px 0 2px; }
   .row .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:7px; margin-bottom:4px; }
   .row .lbl { font-size:12px; color:var(--muted); white-space:nowrap; }
@@ -125,12 +124,15 @@
   .bar { height:6px; border-radius:99px; background:var(--track); overflow:hidden; }
   .bar i { display:block; height:100%; border-radius:99px; }
   .txt { font-size:11px; color:var(--muted); }
+  .entitlements { margin:2px 0 5px; color:var(--dim); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-variant-numeric:tabular-nums; }
+  .entitlements .expired { color:var(--bad); }
   .usage { margin:8px 0 2px; padding:6px 8px; border-radius:8px; background:var(--card); border:1px solid var(--line); }
   .usage-title { font-size:10px; color:var(--dim); margin-bottom:4px; }
   .usage-filter { display:flex; align-items:center; gap:6px; margin:0 0 5px; }
   .usage-filter select { min-width:0; flex:1 1 0; height:22px; border:1px solid var(--line); border-radius:5px;
     padding:0 3px; background:var(--track); color:var(--muted); font-size:8.5px; outline:none; }
   .usage-filter option { background:var(--option-bg); color:var(--text); }
+  .usage-cost-note { margin:3px 0 4px; color:var(--dim); font-size:9px; line-height:1.4; overflow-wrap:anywhere; }
   .usage-line, .usage-model-main { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:baseline; gap:7px; padding:2px 0; }
   .usage-line .src { font-size:10px; color:var(--accent); white-space:nowrap; }
   .usage-line .ulbl, .usage-model-main .ulbl { min-width:0; font-size:10.5px; color:var(--muted); white-space:normal; overflow-wrap:anywhere; }
@@ -230,7 +232,7 @@
   <div class="rs" id="rsHdl" title="拖动调整大小"></div>
 </div>
 <script>
-let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_harnesses:{}, reset_modes:{}, card_order:[] };
+let S = { alpha:82, show:{}, on_top:true, bg_dim:55, bg_blur:8, glass_blur:16, rounded:true, theme:'dark', animations:false, usage_period:'30d', usage_metric:'tokens', usage_harnesses:{}, reset_modes:{}, card_order:[] };
 const THEMES = [['dark','暗夜'],['ocean','湛蓝'],['forest','翠绿'],['violet','紫檀'],['paper','浅白']];
 let cache = [];
 let displayTimeZone = '';
@@ -294,9 +296,29 @@ function fmtUsage(v){
   return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString([], {maximumFractionDigits:2});
 }
 function usageValue(u){
+  if(S.usage_metric==='cost') return esc(costValue(u));
   if(u.total_tokens!=null) return `${fmtUsage(u.total_tokens)} Token`;
   if(u.used!=null && u.total!=null) return `${fmtUsage(u.used)} / ${fmtUsage(u.total)}${u.unit?' '+esc(u.unit):''}`;
   return '';
+}
+function costValue(item){
+  if(item.cost==null) return '费用未提供';
+  if(item.cost>0 && item.cost<0.000001) return '<$0.000001';
+  return '$'+item.cost.toLocaleString('en-US', {maximumFractionDigits:6});
+}
+function costSummary(item){
+  if(item.cost==null) return '没有可用费用记录或模型单价';
+  const coverage=item.cost_coverage;
+  const partial=coverage && coverage.priced_events<coverage.total_events;
+  const source={recorded:'客户端记录',estimated:'API 单价估算',mixed:'混合来源'}[item.cost_source];
+  return [partial?'部分费用':'参考费用',source,coverage?`${coverage.priced_events}/${coverage.total_events} 条已计价`:''].filter(Boolean).join(' · ');
+}
+function aggregateUsageCost(rows){
+  const priced=rows.filter(row=>row.cost!=null), sources=new Set(priced.map(row=>row.cost_source));
+  return {cost:priced.length?priced.reduce((sum,row)=>sum+row.cost,0):null,currency:'USD',
+    cost_source:!priced.length?'unavailable':sources.size===1?priced[0].cost_source:'mixed',
+    cost_coverage:{priced_events:rows.reduce((sum,row)=>sum+(row.cost_coverage?.priced_events||0),0),
+      total_events:rows.reduce((sum,row)=>sum+(row.cost_coverage?.total_events||0),0)}};
 }
 function usageStats(values){
   if(!values || typeof values!=='object') return '';
@@ -314,7 +336,7 @@ function usageAggregate(rows){
   const breakdown={};
   for(const key of ['input','cached','cache_write','output','reasoning']) breakdown[key]=rows.reduce((sum,row)=>sum+Number((row.breakdown||{})[key]||0),0);
   const period=S.usage_period==='all'?'累计':`近 ${String(S.usage_period).replace('d','')} 天`;
-  return {source:'local',label:`本机合计 · ${period}`,total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown};
+  return {source:'local',label:`本机合计 · ${period}`,total_tokens:rows.reduce((sum,row)=>sum+Number(row.total_tokens||0),0),breakdown,...aggregateUsageCost(rows)};
 }
 function accountKey(item){ return `${item.provider||item.title}:${item.identity||item.email||item.title}`; }
 function usageHarnesses(item){
@@ -322,6 +344,7 @@ function usageHarnesses(item){
   return [...new Map((item.usage||[]).filter(row=>row.source==='local'&&row.harness).map(row=>[row.harness,row.harness_label||row.harness])).entries()];
 }
 function setUsagePeriod(value){ S.usage_period=value; save(); render(cache); }
+function setUsageMetric(value){ S.usage_metric=value; save(); render(cache); }
 function setUsageHarness(account, value){ S.usage_harnesses[account]=value; save(); render(cache); }
 function usageBlock(item){
   const rows=Array.isArray(item.usage)?item.usage:[], harnesses=usageHarnesses(item);
@@ -338,18 +361,20 @@ function usageBlock(item){
   const periods=[['1d','近 1 天'],['3d','近 3 天'],['7d','近 7 天'],['30d','近 30 天'],['all','累计']];
   let html = `<div class="usage"><div class="usage-title">用量信息</div><div class="usage-filter">
     <select id="usage-period-${esc(key)}" aria-label="时间范围" title="时间范围" onchange="setUsagePeriod(this.value);document.getElementById(this.id)?.focus()">${periods.map(([id,label])=>`<option value="${id}" ${id===period?'selected':''}>${label}</option>`).join('')}</select>
-    <select id="usage-harness-${esc(key)}" aria-label="客户端" title="客户端" data-account="${esc(key)}" onchange="setUsageHarness(this.dataset.account,this.value);document.getElementById(this.id)?.focus()"><option value="all" ${harness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${harness==='remote'?'selected':''}>远端</option>`:''}${harnesses.map(([id,label])=>`<option value="${esc(id)}" ${harness===id?'selected':''}>${esc(label)}</option>`).join('')}</select></div>`;
+    <select id="usage-harness-${esc(key)}" aria-label="客户端" title="客户端" data-account="${esc(key)}" onchange="setUsageHarness(this.dataset.account,this.value);document.getElementById(this.id)?.focus()"><option value="all" ${harness==='all'?'selected':''}>全部客户端</option>${hasRemote?`<option value="remote" ${harness==='remote'?'selected':''}>远端</option>`:''}${harnesses.map(([id,label])=>`<option value="${esc(id)}" ${harness===id?'selected':''}>${esc(label)}</option>`).join('')}</select>
+    <select id="usage-metric-${esc(key)}" aria-label="查看方式" title="查看方式" onchange="setUsageMetric(this.value);document.getElementById(this.id)?.focus()"><option value="tokens" ${S.usage_metric==='tokens'?'selected':''}>Token 数</option><option value="cost" ${S.usage_metric==='cost'?'selected':''}>参考费用</option></select></div>`;
   if(!visible.length) return html+'<div class="txt">暂无用量</div></div>';
   for(const u of visible){
     const src = u.source==='local'?'本机':'远端';
     html += `<div class="usage-line"><span class="src">${src}</span><span class="ulbl">${esc(u.label||'用量')}</span><span class="uval">${usageValue(u)}</span></div>`;
-    html += usageStats(u.breakdown);
+    html += S.usage_metric==='cost'?`<div class="usage-cost-note">${u.total_tokens==null?'':`${fmtUsage(u.total_tokens)} Token · `}${esc(costSummary(u))}</div>`:usageStats(u.breakdown);
     for(const m of (Array.isArray(u.models)?u.models:[])){
-      const value = m.total_tokens==null ? '' : `${fmtUsage(m.total_tokens)} Token`;
-      html += `<div class="usage-model"><div class="usage-model-main"><span class="ulbl">${esc(m.name||'未标记模型')}</span><span class="uval">${value}</span></div>${usageStats(m)}</div>`;
+      const value = usageValue(m);
+      const details = S.usage_metric==='cost'?`<div class="usage-cost-note">${m.total_tokens==null?'':`${fmtUsage(m.total_tokens)} Token · `}${esc(costSummary(m))}</div>`:usageStats(m);
+      html += `<div class="usage-model"><div class="usage-model-main"><span class="ulbl">${esc(m.name||'未标记模型')}</span><span class="uval">${value}</span></div>${details}</div>`;
     }
   }
-  return html+'</div>';
+  return html+(S.usage_metric==='cost'?'<div class="usage-cost-note">USD · 客户端记录 / 内置 API 单价估算；未记录档位按标准价参考，非实付账单。</div>':'')+'</div>';
 }
 
 function fmtDate(iso){
@@ -365,12 +390,7 @@ function fmtDate(iso){
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} ${offset}`;
 }
 function subscriptionText(it){
-  const start = fmtDate(it.sub_start).slice(0,19), end = fmtDate(it.sub_end).slice(0,19);
-  if(!start && !end && (it.sub_status === 'not_applicable' || (!it.sub_status && it.provider !== 'claude'))) return '';
-  const dates = [];
-  if(S.show['#sub_start']!==false) dates.push(start || '—');
-  if(S.show['#sub_end']!==false) dates.push(end || '—');
-  return dates.join(' - ');
+  return S.show['#sub_start']!==false?fmtDate(it.sub_start).slice(0,19):'';
 }
 
 /* 卡片排序：按住卡片标题上下拖，顺序存进设置，随窗口一起持久化 */
@@ -433,6 +453,27 @@ function noticeText(it){
   const time = fmtDate(it.retry_at * 1000).slice(11);
   return `${it.notice}，${it.ok ? '显示上次数据，' : ''}${time} 自动重试`;
 }
+function entitlementSummary(it){
+  if(it.provider==='claude') return '';
+  const rc=it.reset_credits;
+  const creditWindows=it.windows.filter(w=>w.meta?.kind==='credits');
+  const credits=creditWindows.find(w=>w.meta.scope==='account')||creditWindows[0];
+  const showCredits=it.provider==='openai'||credits;
+  const showEnd=S.show['#sub_end']!==false && it.sub_status!=='not_applicable';
+  if(!rc&&!showCredits&&!(showEnd&&(it.sub_start||it.sub_end||it.sub_status))) return '';
+  const parts=[];
+  if(rc) parts.push(`重置 ${Number.isFinite(rc.available_count)?rc.available_count+' 次':'—'}`);
+  if(showCredits){
+    const meta=credits?.meta;
+    const balance=meta?.unlimited?'无限':Number.isFinite(meta?.remaining)?meta.remaining.toLocaleString('en-US',{maximumSignificantDigits:15}):'—';
+    parts.push(`积分 ${balance}`);
+  }
+  if(showEnd) parts.push(`订阅到期 ${fmtDate(it.sub_end).slice(0,19)||'—'}`);
+  const text=parts.join(' · ');
+  const expired=showEnd&&(it.sub_status==='expired'||Date.parse(it.sub_end)<=Date.now());
+  const content=parts.map((part,index)=>showEnd&&index===parts.length-1?`<span class="expiry${expired?' expired':''}">${esc(part)}</span>`:esc(part)).join(' · ');
+  return `<div class="entitlements" title="${esc(text+(expired?'；订阅已到期':'')+'；完整明细见 Web')}">${content}</div>`;
+}
 function render(items){
   if(cardDrag) return;
   let html = '';
@@ -445,12 +486,10 @@ function render(items){
     html += `<div class="card" data-key="${esc(accountKey(it))}"><div class="name" title="按住上下拖动可调整顺序"><span class="grip" aria-hidden="true"></span><b>${esc(it.title)}</b>${pill}${meta.join('')}</div>`;
     const sub = subscriptionText(it);
     if(sub) {
-      const expired = S.show['#sub_end']!==false && (it.sub_status === 'expired' || Date.parse(it.sub_end) <= Date.now());
-      const labels = [['#sub_start','订阅时间'],['#sub_end','到期时间']].filter(([key])=>S.show[key]!==false).map(([,label])=>label).join(' - ');
-      const tip = `${expired ? '已到期 · ' : ''}${labels}；— 表示未提供`;
-      html += `<div class="sub${expired ? ' expired' : ''}" title="${esc(tip)}">${esc(sub)}</div>`;
+      html += `<div class="sub" title="订阅开始时间">${esc(sub)}</div>`;
     }
-    if(it.ok) html += it.windows.map(w=>row(w,accountKey(it))).join('');
+    html += entitlementSummary(it);
+    if(it.ok) html += it.windows.filter(w=>w.meta?.kind!=='credits'&&(!(it.reset_credits||it.provider==='claude')||w.meta?.kind!=='reset_credits')).map(w=>row(w,accountKey(it))).join('');
     if(it.notice) html += `<div class="note">${esc(noticeText(it))}</div>`;
     if(it.error || !it.ok && !it.notice) html += `<div class="err">${esc(it.error||'失败')}</div>`;
     html += usageBlock(it);
@@ -638,6 +677,7 @@ async function init(){
   }catch(e){ setRefreshState('设置加载失败', 'error', e.message); }
   $('timeZone').onchange = e => setTimeZone(e.target.value);
   if(!['1d','3d','7d','30d','all'].includes(S.usage_period)) S.usage_period='30d';
+  if(!['tokens','cost'].includes(S.usage_metric)) S.usage_metric='tokens';
   if(!S.usage_harnesses || typeof S.usage_harnesses!=='object' || Array.isArray(S.usage_harnesses)) S.usage_harnesses={};
   delete S.usage_harness;
   S.animations=S.animations===true;

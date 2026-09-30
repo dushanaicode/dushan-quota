@@ -108,6 +108,7 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
                 "text": window.text,
                 "reset": _reset_text(window.reset_iso, now),
                 "reset_ts": _reset_ts(window.reset_iso),
+                "meta": window.meta,
             }
             for window in item.windows
         ]
@@ -128,6 +129,7 @@ def _fetch_payload(force: bool = False, include_usage: bool = False) -> dict:
                 "sub_end": item.sub_end,
                 "sub_status": item.sub_status,
                 "windows": [w for w in windows if w["text"] is not None or w["remaining_percent"] is not None],
+                "reset_credits": next((w.meta for w in item.windows if w.meta.get("kind") == "reset_credits"), None),
                 "usage": usage_rows,
                 "harnesses": usage_data.get("harnesses", {}).get((item.account.provider, item.account.identity), []),
             }

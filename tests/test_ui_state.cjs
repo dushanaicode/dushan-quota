@@ -47,6 +47,14 @@ function context(storage = new Map()) {
 async function main() {
   const row = {source: 'local', harness: 'codex', period: '30d', label: 'Codex',
     total_tokens: 123, breakdown: {input: 100, output: 23}, detail: 'Legacy attribution explanation'};
+  const pricedRow = {...row, cost: 0.25, currency: 'USD', cost_source: 'estimated',
+    cost_coverage: {priced_events: 2, total_events: 3}, models: [
+      {name: 'priced-model', total_tokens: 100, cost: 0.25, currency: 'USD', cost_source: 'estimated', cost_coverage: {priced_events: 2, total_events: 2}},
+      {name: 'unknown-model', total_tokens: 23, cost: null, currency: 'USD', cost_source: 'unavailable', cost_coverage: {priced_events: 0, total_events: 1}},
+    ]};
+  const zeroRow = {...row, harness: 'opencode', label: 'OpenCode', cost: 0, currency: 'USD', cost_source: 'recorded',
+    cost_coverage: {priced_events: 1, total_events: 1}};
+  const unknownRow = {...row, cost: null, currency: 'USD', cost_source: 'unavailable', cost_coverage: {priced_events: 0, total_events: 2}};
   const fixture = {title: 'OpenAI', provider: 'openai', identity: 'a', ok: true, windows: [],
     sub_end: '2030-01-02T00:00:00Z', usage: [row], harnesses: [{key: 'codex', label: 'Codex', configured: true}]};
   const grok = {title: 'xAI', provider: 'grok', identity: 'x', ok: true, windows: [],
@@ -101,8 +109,8 @@ async function main() {
   assert.equal(saved.at(-1).reset_modes[resetKey], true, 'The reset display preference is saved');
   const usage = floating.usageBlock(fixture);
   assert(usage.includes('123 Token'));
-  assert.equal((usage.match(/<select /g) || []).length, 2);
-  assert(usage.includes('aria-label="时间范围"') && usage.includes('aria-label="客户端"'));
+  assert.equal((usage.match(/<select /g) || []).length, 3);
+  assert(usage.includes('aria-label="时间范围"') && usage.includes('aria-label="客户端"') && usage.includes('aria-label="查看方式"'));
   assert(usage.includes('value="3d"') && !usage.includes('usage-periods'));
   floating.setUsagePeriod('3d');
   const threeDayFixture = {...fixture, usage: [row, {...row, period: '3d', total_tokens: 45}]};
@@ -122,6 +130,46 @@ async function main() {
   assert.equal(saved.at(-1).usage_harnesses['openai:a'], 'codex');
   floating.setUsageHarness('openai:a', 'kimi_code');
   assert(floating.usageBlock(fixture).includes('value="all" selected'));
+  const costFixture = {...fixture, usage: [pricedRow, zeroRow],
+    windows: [{name: '周额度', remaining_percent: 98}],
+    harnesses: [...fixture.harnesses, {key: 'opencode', label: 'OpenCode'}]};
+  floating.costFixture = costFixture;
+  vm.runInContext('cache = [costFixture]', floating);
+  const quotaBeforeMetric = floating.row(costFixture.windows[0], 'openai:a');
+  floating.setUsageMetric('cost');
+  assert.equal(saved.at(-1).usage_metric, 'cost');
+  assert.equal(saved.at(-1).usage_period, '30d');
+  assert.equal(saved.at(-1).usage_harnesses['grok:x'], 'grok_cli');
+  assert(floating.get('list').innerHTML.includes('$0.25') && floating.get('list').innerHTML.includes('部分费用 · 混合来源 · 3/4 条已计价'));
+  assert(floating.get('list').innerHTML.includes('246 Token'));
+  assert.equal(floating.row(costFixture.windows[0], 'openai:a'), quotaBeforeMetric, 'Usage view changes leave quota percentages untouched');
+  floating.setUsageHarness('openai:a', 'codex');
+  assert(floating.get('list').innerHTML.includes('unknown-model') && floating.get('list').innerHTML.includes('费用未提供'));
+  assert(floating.get('list').innerHTML.includes('API 单价估算 · 2/2 条已计价'));
+  floating.setUsageHarness('openai:a', 'opencode');
+  assert(floating.get('list').innerHTML.includes('>$0</span>'));
+  const costSaved = saved.at(-1);
+  vm.runInContext("S.show['#usage'] = false", floating);
+  assert.equal(floating.usageBlock(costFixture), '', 'The usage information switch controls both display modes');
+  vm.runInContext("S.show['#usage'] = true", floating);
+  const costReloaded = context();
+  vm.runInContext(script('float.html'), costReloaded);
+  let costQuotaCalls = 0;
+  costReloaded.window.pywebview = {api: {
+    settings: async () => ({...costSaved, time_zone: '', time_zones: []}),
+    quota: async () => {costQuotaCalls++; return {results: [costFixture], snapshot: {state: 'fresh'}, time_zone: ''};},
+    save_settings() {}, set_alpha() {}, background: async () => ({}),
+  }};
+  await costReloaded.init();
+  assert(costReloaded.get('list').innerHTML.includes('value="cost" selected') && costReloaded.get('list').innerHTML.includes('>$0</span>'));
+  await costReloaded.refresh();
+  assert(costReloaded.get('list').innerHTML.includes('value="cost" selected'), 'Quota refresh preserves the saved metric');
+  const callsBeforeMetric = costQuotaCalls;
+  costReloaded.setUsageMetric('tokens');
+  assert.equal(costQuotaCalls, callsBeforeMetric, 'Switching metrics only redraws cached data');
+  assert(costReloaded.get('list').innerHTML.includes('123 Token'));
+  floating.setUsageMetric('tokens');
+  floating.setUsageHarness('openai:a', 'all');
   await floating.refresh();
   assert.equal(vm.runInContext('cache.length', floating), 0, 'Successful empty results must clear old cards');
   vm.runInContext('cache = [fixture]', floating);
@@ -129,7 +177,7 @@ async function main() {
   await floating.refresh();
   assert.equal(vm.runInContext('cache.length', floating), 1, 'Failed refresh must preserve existing cards');
   vm.runInContext("S.show['#plan'] = false; render([fixture]);", floating);
-  assert(floating.get('list').innerHTML.includes('class="sub"'), 'Hiding the plan must not hide subscription dates');
+  assert(floating.get('list').innerHTML.includes('订阅到期'), 'Hiding the plan must not hide subscription dates');
   floating.applyMotion();
   floating.toggleSettings();
   assert(floating.get('panel').classList.contains('settings-open'));
@@ -202,12 +250,13 @@ async function main() {
   const source = script('index.html');
   // Render the actual subscription helpers, cards, history and overview with complete and missing timestamps.
   const subscriptions = context();
-  vm.runInContext(source.slice(source.indexOf('function pillClass'), source.indexOf('function fmtResetAt')), subscriptions);
+  vm.runInContext(source.slice(source.indexOf('const colorOf'), source.indexOf('\n',source.indexOf('const colorOf'))), subscriptions);
+  vm.runInContext(source.slice(source.indexOf('function textRowClass'), source.indexOf('function compactNumber')), subscriptions);
   vm.runInContext(source.slice(source.indexOf('function renderCards'), source.indexOf('let closeCardCtx')), subscriptions);
   vm.runInContext(source.slice(source.indexOf('function renderFocus'), source.indexOf('/* ---------- 历史')), subscriptions);
   vm.runInContext(source.slice(source.indexOf('function archivedTime'), source.indexOf('let forgetCardCtx')), subscriptions);
   Object.assign(subscriptions, {cache: [], historyItems: [], filter: '*', fpTab: 'subscription',
-    displayTimeZone: '', cardsSignature: '', focusSignature: '', historySignature: '', planTip: item => item.plan, creditBlock: () => ''});
+    displayTimeZone: '', cardsSignature: '', focusSignature: '', historySignature: ''});
   const subscribed = {...fixture, sub_start: '2030-01-01T03:04:05Z', sub_end: '2030-02-01T06:07:08Z', sub_status: 'known'};
   const claudeStart = {...pausedClaude, notice: '', sub_start: subscribed.sub_start, sub_status: 'unavailable', windows: []};
   const claudeMissing = {...claudeStart, sub_start: ''};
@@ -253,33 +302,40 @@ async function main() {
     subscriptions.renderHistory();
     subscriptions.renderFocus();
     const views = [subscriptions.get('list').children[0].innerHTML,
-      subscriptions.get('historyList').children[0].innerHTML, subscriptions.get('fpList').children[0].innerHTML];
+      subscriptions.get('historyList').children[0].innerHTML];
+    if (item.provider !== 'claude') views.push(subscriptions.get('fpList').children[0].innerHTML);
     for (const html of views) {
       if (item === subscribed) assert(html.includes(exactStart) && html.includes(exactEnd), 'Every subscription view shows complete start and end timestamps');
-      if (item === claudeStart) assert(html.includes(exactStart) && html.includes('订阅到期时间未提供'));
-      if (item === claudeMissing) assert(html.includes('订阅时间未提供'), 'Missing Claude dates remain visible');
+      if (item === claudeStart) assert(html.includes(exactStart) && !html.includes('订阅到期时间未提供'));
+      if (item === claudeMissing) assert(!html.includes('订阅时间未提供'), 'Claude has no missing-subscription placeholders');
       if (item === staleExpired) assert(html.includes('已到期'), 'An elapsed end timestamp overrides a cached known status');
       if (item === free) assert(html.includes('免费'), 'Free subscriptions retain their explicit status');
       assert(!html.includes('Invalid Date'));
     }
-    const overview = subscriptions.get('fpList').children[0].innerHTML;
-    if (item === claudeStart || item === claudeMissing) assert(overview.includes('>未知</span>') && !overview.includes('>有效</span>'));
+    if (item.provider === 'claude') assert.equal(subscriptions.get('fpList').children.length,0,'Claude is omitted from the subscription overview');
     const compact = floating.get('list').innerHTML.match(/<div class="sub[^"]*"[^>]*>([^<]*)<\/div>/)?.[1] || '';
-    if (item === subscribed) assert.equal(compact, `${exactStart.slice(0,19)} - ${exactEnd.slice(0,19)}`);
-    if (item === claudeStart) assert.equal(compact, `${exactStart.slice(0,19)} - —`);
-    if (item === claudeMissing) assert.equal(compact, '— - —');
-    if (item === staleExpired) assert(floating.get('list').innerHTML.includes('class="sub expired"'));
+    if (item === subscribed) {
+      assert.equal(compact, exactStart.slice(0,19));
+      assert(floating.get('list').innerHTML.includes(`订阅到期 ${exactEnd.slice(0,19)}`));
+      assert.equal(floating.get('list').innerHTML.split(exactEnd.slice(0,19)).length-1,2,'Expiry appears once visually plus its tooltip, never in the start-date row');
+    }
+    if (item === claudeStart) assert.equal(compact, exactStart.slice(0,19));
+    if (item === claudeMissing) assert.equal(compact, '');
+    if (item === staleExpired) assert(floating.get('list').innerHTML.includes('class="expiry expired"'));
     if (item === free) assert.equal(compact, '', 'Free accounts without subscription dates need no placeholder row');
     assert(!/UTC|订阅生效|订阅到期|Invalid Date/.test(compact));
   }
-  assert.equal(floating.subscriptionText({...subscribed, sub_start: '2030-01-01', sub_end: 'invalid'}), '2030-01-01 - —');
+  assert.equal(floating.subscriptionText({...subscribed, sub_start: '2030-01-01', sub_end: 'invalid'}), '2030-01-01');
   for (const item of [{...claudeStart, sub_status: 'known'}, {...claudeMissing, sub_status: ''},
     {...subscribed, sub_end: 'invalid'}]) {
     subscriptions.cache = [item];
     subscriptions.renderFocus();
-    const overview = subscriptions.get('fpList').children[0].innerHTML;
-    assert(overview.includes('>未知</span>'), 'Missing or invalid end dates never establish an active subscription');
-    assert(!overview.includes('Invalid Date'));
+    if (item.provider === 'claude') assert.equal(subscriptions.get('fpList').children.length,0);
+    else {
+      const overview = subscriptions.get('fpList').children[0].innerHTML;
+      assert(overview.includes('>未知</span>'), 'Missing or invalid end dates never establish an active subscription');
+      assert(!overview.includes('Invalid Date'));
+    }
   }
   const zonedFloat = context(), timeZoneSaves = [], appearanceSaves = [];
   let globalTimeZone = 'Asia/Shanghai', quotaCalls = 0;
@@ -295,7 +351,7 @@ async function main() {
   await zonedFloat.init();
   assert.equal(zonedFloat.get('timeZone').value, 'Asia/Shanghai');
   assert(zonedFloat.get('timeZone').innerHTML.includes('中国 · 上海'));
-  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 - 2030-02-01 14:07:08'));
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05') && zonedFloat.get('list').innerHTML.includes('订阅到期 2030-02-01 14:07:08'));
   const startChip = zonedFloat.document.createElement('button'), endChip = zonedFloat.document.createElement('button');
   startChip.dataset.n = '#sub_start'; endChip.dataset.n = '#sub_end';
   zonedFloat.get('meta').querySelectorAll = () => [startChip, endChip];
@@ -303,33 +359,37 @@ async function main() {
   assert(zonedFloat.get('meta').innerHTML.includes('data-n="#sub_start">订阅时间</button>'));
   assert(zonedFloat.get('meta').innerHTML.includes('data-n="#sub_end">到期时间</button>'));
   assert.equal(startChip.getAttribute('aria-pressed'), 'true');
-  const timeRow = ctx => ctx.get('list').innerHTML.match(/<div class="sub[^"]*"[^>]*>([^<]*)<\/div>/)?.[1] || '';
+  const timeRow = ctx => {
+    const html=ctx.get('list').innerHTML;
+    return {start:html.match(/<div class="sub[^"]*"[^>]*>([^<]*)<\/div>/)?.[1]||'',
+      end:html.match(/<span class="expiry[^"]*">订阅到期 ([^<]*)<\/span>/)?.[1]||''};
+  };
   startChip.onclick();
-  assert.equal(timeRow(zonedFloat), '2030-02-01 14:07:08');
+  assert.deepEqual(timeRow(zonedFloat), {start:'',end:'2030-02-01 14:07:08'});
   assert.equal(appearanceSaves.at(-1).show['#sub_start'], false);
   assert.equal(startChip.getAttribute('aria-pressed'), 'false');
   const savedTimeShow = {...appearanceSaves.at(-1).show};
   endChip.onclick();
-  assert.equal(timeRow(zonedFloat), '', 'Both date switches off removes the row');
+  assert.deepEqual(timeRow(zonedFloat), {start:'',end:''}, 'Both date switches off removes both dates');
   assert(!zonedFloat.get('list').innerHTML.includes('class="sub'));
   assert.equal(appearanceSaves.at(-1).show['#sub_end'], false);
   startChip.onclick();
-  assert.equal(timeRow(zonedFloat), '2030-01-01 11:04:05');
+  assert.deepEqual(timeRow(zonedFloat), {start:'2030-01-01 11:04:05',end:''});
   endChip.onclick();
-  assert.equal(timeRow(zonedFloat), '2030-01-01 11:04:05 - 2030-02-01 14:07:08');
+  assert.deepEqual(timeRow(zonedFloat), {start:'2030-01-01 11:04:05',end:'2030-02-01 14:07:08'});
   const restoredTime = context();
   vm.runInContext(script('float.html'), restoredTime);
   restoredTime.window.pywebview = {api: {...timeZoneBridge,
     settings: async () => ({...await timeZoneBridge.settings(), show:savedTimeShow})}};
   await restoredTime.init();
-  assert.equal(timeRow(restoredTime), '2030-02-01 14:07:08', 'Saved independent date choices survive restart');
+  assert.deepEqual(timeRow(restoredTime), {start:'',end:'2030-02-01 14:07:08'}, 'Saved independent date choices survive restart');
   await restoredTime.refresh();
-  assert.equal(timeRow(restoredTime), '2030-02-01 14:07:08', 'Refresh does not reset the saved date choices');
+  assert.deepEqual(timeRow(restoredTime), {start:'',end:'2030-02-01 14:07:08'}, 'Refresh does not reset the saved date choices');
   const beforeSwitch = quotaCalls;
   await zonedFloat.setTimeZone('America/Los_Angeles');
   assert.equal(quotaCalls, beforeSwitch, 'Changing the time zone rerenders cached data without fetching quota');
   assert.equal(timeZoneSaves.at(-1), 'America/Los_Angeles');
-  assert(zonedFloat.get('list').innerHTML.includes('2029-12-31 19:04:05 - 2030-01-31 22:07:08'));
+  assert(zonedFloat.get('list').innerHTML.includes('2029-12-31 19:04:05') && zonedFloat.get('list').innerHTML.includes('订阅到期 2030-01-31 22:07:08'));
   assert(zonedFloat.get('status').textContent.includes('19:04:05'));
   assert(zonedFloat.get('status').title.includes('UTC-08:00'));
   assert(zonedFloat.quotaResetAt(Date.parse(subscribed.sub_start) / 1000).includes('19:04:05 UTC-08:00'));
@@ -347,7 +407,7 @@ async function main() {
   globalTimeZone = 'Asia/Shanghai';
   await zonedFloat.refresh();
   assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'Quota refresh synchronizes a time zone changed in the other view');
-  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05 - 2030-02-01 14:07:08'));
+  assert(zonedFloat.get('list').innerHTML.includes('2030-01-01 11:04:05') && zonedFloat.get('list').innerHTML.includes('订阅到期 2030-02-01 14:07:08'));
   timeZoneBridge.quota = async () => ({results: [], snapshot: {state: 'error'}});
   await zonedFloat.refresh();
   assert.equal(zonedFloat.get('timeZone').value, globalTimeZone, 'A failed quota response without a time zone preserves the selected zone');
@@ -391,19 +451,68 @@ async function main() {
   assert.equal(web.compactNumber(null), '\u2014');
   web.renderUsageDetail({account: {title: 'OpenAI'}, usage: [row], harnesses: fixture.harnesses});
   const rendered = web.get('usageBody').innerHTML;
-  assert.equal((rendered.match(/<select /g) || []).length, 2);
-  assert(rendered.includes('id="usagePeriod"') && rendered.includes('id="usageHarness"'));
+  assert.equal((rendered.match(/<select /g) || []).length, 3);
+  assert(rendered.includes('id="usagePeriod"') && rendered.includes('id="usageHarness"') && rendered.includes('id="usageMetric"'));
   assert(rendered.includes('value="3d"') && !rendered.includes('data-period='));
   const detail = {account: fixture, usage: threeDayFixture.usage, harnesses: fixture.harnesses};
   web.renderUsageDetail(detail);
   web.get('usagePeriod').value = '3d';
   web.get('usageHarness').value = 'codex';
+  web.get('usageMetric').value = 'tokens';
   web.get('usagePeriod').onchange({target: web.get('usagePeriod')});
   assert(web.get('usageBody').innerHTML.includes('45 Token'));
   assert(!web.get('usageBody').innerHTML.includes('123 Token'));
   assert(web.get('usagePeriod').focused, 'Changing the dropdown must retain keyboard focus');
   assert.equal(storage.get('quota-usage-period'), '3d');
   assert.equal(storage.get('quota-usage-harness:openai:a'), 'codex');
+
+  for (const [ctx, aggregate] of [[floating, floating.usageAggregate], [web, web.aggregateLocalUsage]]) {
+    assert.equal(ctx.costValue({cost: 0}), '$0');
+    assert.equal(ctx.costValue({cost: null}), '费用未提供');
+    assert.equal(ctx.costValue({}), '费用未提供');
+    assert.equal(ctx.costValue({cost: 0.00000001}), '<$0.000001');
+    assert.equal(ctx.costValue({cost: 0.000001}), '$0.000001');
+    const mixed = aggregate([pricedRow, zeroRow]);
+    assert.equal(mixed.cost, 0.25);
+    assert.equal(mixed.cost_source, 'mixed');
+    assert.equal(JSON.stringify(mixed.cost_coverage), JSON.stringify({priced_events: 3, total_events: 4}));
+    assert(ctx.costSummary(mixed).includes('部分费用'));
+    const zero = aggregate([zeroRow, {...zeroRow, harness: 'codex'}]);
+    assert.equal(zero.cost, 0);
+    assert.equal(zero.cost_source, 'recorded');
+    const unknown = aggregate([unknownRow, {...unknownRow, harness: 'opencode'}]);
+    assert.equal(unknown.cost, null);
+    assert.equal(unknown.cost_source, 'unavailable');
+    assert.equal(ctx.costValue(unknown), '费用未提供');
+    const partial = aggregate([zeroRow, unknownRow]);
+    assert.equal(partial.cost, 0);
+    assert(ctx.costSummary(partial).includes('部分费用 · 客户端记录 · 1/3 条已计价'));
+  }
+  const costDetail = {account: fixture, usage: [pricedRow, zeroRow], harnesses: costFixture.harnesses};
+  web.renderUsageDetail(costDetail);
+  web.get('usagePeriod').value = '30d';
+  web.get('usageHarness').value = 'all';
+  web.get('usageMetric').value = 'cost';
+  web.api = () => {throw Error('Changing usage mode must not fetch quota or usage');};
+  web.get('usageMetric').onchange({target: web.get('usageMetric')});
+  const costRendered = web.get('usageBody').innerHTML;
+  assert(costRendered.includes('$0.25') && costRendered.includes('部分费用 · 混合来源 · 3/4 条已计价'));
+  assert(costRendered.includes('参考费用 (USD)') && costRendered.includes('unknown-model') && costRendered.includes('费用未提供'));
+  assert(costRendered.includes('API 单价估算 · 2/2 条已计价'));
+  assert(costRendered.includes('不等同实付金额或订阅账单'));
+  assert(web.get('usageMetric').focused);
+  assert.equal(storage.get('quota-usage-metric'), 'cost');
+  web.renderUsageDetail(costDetail);
+  assert(web.get('usageBody').innerHTML.includes('value="cost" selected'), 'A refreshed response preserves the view mode');
+  const costWebReload = context(storage);
+  vm.runInContext(usageSource, costWebReload);
+  costWebReload.renderUsageDetail(costDetail);
+  assert(costWebReload.get('usageBody').innerHTML.includes('value="cost" selected'), 'The web view mode survives reload');
+  web.get('usageMetric').value = 'tokens';
+  web.get('usagePeriod').value = '3d';
+  web.get('usageHarness').value = 'codex';
+  web.get('usageMetric').onchange({target: web.get('usageMetric')});
+  assert.equal(storage.get('quota-usage-metric'), 'tokens');
 
   // Reset time in the web UI: the same countdown/absolute toggle the float window has.
   const clockStorage = new Map();
@@ -463,15 +572,17 @@ async function main() {
   reloaded.renderUsageDetail(detail);
   assert.equal(vm.runInContext('usageHarness', reloaded), 'all', 'Unavailable saved clients fall back to all');
 
-  const invalidSaved = context(new Map([['quota-usage-period', 'invalid']]));
+  const invalidSaved = context(new Map([['quota-usage-period', 'invalid'], ['quota-usage-metric', 'invalid']]));
   vm.runInContext(usageSource, invalidSaved);
   assert.equal(vm.runInContext('usagePeriod', invalidSaved), '30d');
+  assert.equal(vm.runInContext('usageMetric', invalidSaved), 'tokens');
   const noStorage = context();
   noStorage.localStorage = {getItem() {throw Error('Storage unavailable');}, setItem() {throw Error('Storage unavailable');}};
   vm.runInContext(usageSource, noStorage);
   noStorage.renderUsageDetail(detail);
   noStorage.get('usagePeriod').value = '3d';
   noStorage.get('usageHarness').value = 'all';
+  noStorage.get('usageMetric').value = 'tokens';
   noStorage.get('usagePeriod').onchange({target: noStorage.get('usagePeriod')});
   assert(noStorage.get('usageBody').innerHTML.includes('45 Token'), 'Filtering still works without storage');
   vm.runInContext("usagePeriod = '30d'", web);
@@ -513,7 +624,49 @@ async function main() {
   resolveStart({login_id:'late-login', verification_uri_complete:'https://claude.com'});
   await starting;
   assert.equal(authCalls.at(-1).body.login_id, 'late-login', 'A dismissed dialog cannot leave a late OAuth session active');
-  console.log('UI checks passed: subscription timestamps, saved time zones, dropdowns, filters, account-scoped clients, keyboard focus, animations, empty states, metrics, and Claude OAuth.');
+  const resetMeta = {available_count:2, credits:[{id:'grant-a', title:'Full reset', status:'available', expires_at:'2099-01-01T00:00:00Z'}]};
+  const resetClaude = {...claudeStart, reset_credits:resetMeta};
+  vm.runInContext("displayTimeZone='Asia/Shanghai'",floating);
+  const creditWindow = {name:'月度积分',text:'已用 48.98 / 400，剩余 351.02 积分',meta:{kind:'credits',remaining:351.02,unlimited:false}};
+  const summaryAccount = {...resetClaude,provider:'openai',title:'OpenAI',sub_end:'2030-02-01T06:07:08Z',windows:[creditWindow,{name:'周额度',remaining_percent:98},{name:'重置次数',text:'剩余 2 次',meta:{kind:'reset_credits'}}]};
+  const summaryText = item => floating.entitlementSummary(item).replace(/<[^>]*>/g,'');
+  assert.equal(summaryText(summaryAccount),'重置 2 次 · 积分 351.02 · 订阅到期 2030-02-01 14:07:08');
+  assert.equal(summaryText({...summaryAccount,reset_credits:{available_count:0,credits:[]},windows:[{...creditWindow,meta:{kind:'credits',remaining:0}}]}),'重置 0 次 · 积分 0 · 订阅到期 2030-02-01 14:07:08');
+  assert(summaryText({...summaryAccount,windows:[{...creditWindow,meta:{kind:'credits',unlimited:true}}]}).includes('积分 无限'));
+  assert(summaryText({...summaryAccount,windows:[{...creditWindow,meta:{kind:'credits',remaining:0.000000001}}]}).includes('积分 0.000000001'));
+  const unavailableReset = floating.entitlementSummary({...summaryAccount,reset_credits:{available_count:null,credits:[]},windows:[],sub_end:''});
+  assert(unavailableReset.includes('重置 —') && unavailableReset.includes('订阅到期 —'));
+  assert(!/<button|<details|onclick=/.test(unavailableReset));
+  assert.equal(typeof floating.resetAccount,'undefined','The floating window exposes no reset mutation');
+  assert.equal(summaryText({...summaryAccount,reset_credits:{...resetMeta,credits:[...resetMeta.credits,{status:'available',expires_at:'2098-01-01T00:00:00Z'},{status:'expired',expires_at:'2097-01-01T00:00:00Z'}]}}),'重置 2 次 · 积分 351.02 · 订阅到期 2030-02-01 14:07:08','Reset-card expiration never replaces subscription expiration');
+  floating.render([summaryAccount]);
+  const summaryView=floating.get('list').innerHTML;
+  assert.equal((summaryView.match(/class="entitlements"/g)||[]).length,1);
+  assert(!summaryView.includes('已用 48.98') && !summaryView.includes('reset-card') && !summaryView.includes('resetAccount('));
+  assert(summaryView.includes('98%'),'The read-only summary leaves quota percentages intact');
+  assert.equal(summaryText({...summaryAccount,provider:'openai',windows:[{name:'周额度',remaining_percent:98}]}),'重置 2 次 · 积分 — · 订阅到期 2030-02-01 14:07:08','Missing wallet information is unknown, never imported zero');
+  assert(summaryText({...summaryAccount,windows:[{name:'月度积分',meta:{kind:'credits',scope:'individual',remaining:0}},{name:'积分余额',meta:{kind:'credits',scope:'account',remaining:351.02}}]}).includes('积分 351.02'),'The summary reports the account wallet when a monthly limit also exists');
+  const staleClaude = {...summaryAccount,provider:'claude',title:'Claude Code'};
+  floating.render([staleClaude]);
+  const claudeView = floating.get('list').innerHTML;
+  assert.equal(floating.entitlementSummary(staleClaude),'');
+  assert(!/重置次数|重置 2 次|积分|订阅到期|剩余 2 次/.test(claudeView),'Claude has no entitlement rows, even with stale metadata');
+  assert(claudeView.includes('98%'));
+  subscriptions.cache = [staleClaude];
+  subscriptions.renderCards();
+  const claudeWebView = subscriptions.get('list').children[0].innerHTML;
+  assert(!/act-reset|重置卡|重置次数|积分|订阅到期|2030-02-01/.test(claudeWebView),'Claude Web cards omit entitlements and reset actions');
+  assert(claudeWebView.includes('98%'));
+  const resetCalls = [], resetWeb = context();
+  vm.runInContext(source.slice(source.indexOf('async function resetAccount'), source.indexOf('async function refreshQuota')), resetWeb);
+  Object.assign(resetWeb, {api:async (url,options)=>{resetCalls.push([url,JSON.parse(options.body)]);return {ok:false,uncertain:true,error:'请刷新，勿重复提交'};},toast(){},refreshQuota(){}});
+  const webResetButton = resetWeb.document.createElement('button');
+  await resetWeb.resetAccount(summaryAccount,webResetButton);
+  assert.equal(resetCalls.length,0,'The first reset click only asks for explicit confirmation');
+  await resetWeb.resetAccount(summaryAccount,webResetButton);
+  assert.deepEqual(resetCalls,[['/api/reset',{provider:'openai',identity:summaryAccount.identity,confirmed:true}]]);
+  assert.equal(resetCalls.length,1,'An uncertain response never retries the mutation');
+  console.log('UI checks passed: quota, credits, confirmed resets, token/cost modes, persistence, account filters, dates, and Claude OAuth.');
 }
 
 main().catch(error => {console.error(error); process.exitCode = 1;});

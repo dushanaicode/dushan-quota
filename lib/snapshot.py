@@ -25,7 +25,8 @@ from .store import store_dir
 # Version display-only cache records whenever normalized result fields change.
 # A mismatch forces a fresh provider read instead of decoding an old record as
 # if newly added fields were explicitly unavailable.
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 8
+_CLAUDE_REFRESH_SECONDS = 300
 _BACKOFF_SECONDS = 300
 _BACKOFF_MAX_SECONDS = 1800
 _LOCK_STALE_SECONDS = 75.0
@@ -99,9 +100,8 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
 
         accounts = collect_accounts()
         now = time.time()
-        # Claude requests are throttled hard, so a failed account is skipped by
-        # timer ticks in every process: errors until a manual refresh, notices
-        # until their backoff ends. New credentials end either pause at once.
+        # Every surface shares Claude's minimum interval and failure backoff.
+        # Manual refresh cannot bypass these timers. New credentials may resume.
         previous = {}
         if latest:
             previous = {
@@ -110,13 +110,12 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
                 if item.account.provider == "claude"
             }
         paused = {}
-        if not force:
-            for account in accounts:
-                item = previous.get((account.provider, account.identity))
-                if item and item.credential_tag == _credential_tag(account) and (
-                    item.error and not item.ok or now < item.retry_at
-                ):
-                    paused[(account.provider, account.identity)] = item
+        for account in accounts:
+            item = previous.get((account.provider, account.identity))
+            if item and item.credential_tag == _credential_tag(account) and (
+                now < item.retry_at or (not force and item.error and not item.ok)
+            ):
+                paused[(account.provider, account.identity)] = item
         active = [account for account in accounts if (account.provider, account.identity) not in paused]
         refreshed = [
             _settle(item, previous.get((item.account.provider, item.account.identity)), now)
@@ -150,7 +149,12 @@ def get_snapshot(force: bool = False, max_age: int | None = None) -> Snapshot:
 
 
 def invalidate() -> None:
-    """Invalidate display data after an account or credential store changes."""
+    """Invalidate display data without erasing Claude's cross-process query timers."""
+    cached = _read_cache()
+    claude_results = [item for item in cached.results if item.account.provider == "claude"] if cached else []
+    if claude_results:
+        _write_cache(claude_results, 0, cached.generation)
+        return
     try:
         cache_path().unlink()
     except OSError:
@@ -164,11 +168,11 @@ def _credential_tag(account: Account) -> str:
 
 
 def _settle(item: QuotaResult, previous: QuotaResult | None, now: float) -> QuotaResult:
-    """Stamp the credentials used and, for a temporary failure, the next automatic retry."""
+    """Stamp Claude's credentials and next permitted query, including failure backoff."""
     # The provider may have refreshed the tokens in place during this fetch.
     tag = _credential_tag(item.account)
     if not item.notice:
-        return replace(item, credential_tag=tag)
+        return replace(item, credential_tag=tag, retry_at=now + _CLAUDE_REFRESH_SECONDS)
     failures = previous.failures + 1 if previous and previous.notice else 1
     retry_at = max(item.retry_at, now + min(_BACKOFF_MAX_SECONDS, _BACKOFF_SECONDS * 2 ** (failures - 1)))
     if not item.ok and previous and previous.ok:
@@ -186,7 +190,7 @@ def _satisfies_waiter(snapshot: Snapshot, force: bool, starting_generation: str,
 def _is_fresh(snapshot: Snapshot, ttl: int) -> bool:
     # watch_seconds=0 means "manual only": an existing snapshot stays valid
     # until a caller explicitly asks for force=True or an account change invalidates it.
-    return ttl == 0 or snapshot.age_seconds < ttl
+    return snapshot.fetched_at > 0 and (ttl == 0 or snapshot.age_seconds < ttl)
 
 
 def _acquire_lock() -> bool:
@@ -368,8 +372,10 @@ def _decode_result(raw: dict) -> QuotaResult:
     for item in raw.get("windows") or []:
         meta = item.get("meta")
         meta = meta if isinstance(meta, dict) else {}
+        if account.provider == "claude" and meta.get("kind") in {"credits", "reset_credits"}:
+            continue
         text = item.get("text")
-        if meta.get("kind") == "reset_credits" and isinstance(meta.get("available_count"), (int, float)):
+        if account.provider == "openai" and meta.get("kind") == "reset_credits" and isinstance(meta.get("available_count"), (int, float)):
             text = f"剩余 {int(meta['available_count'])} 次"
         windows.append(
             Window(
@@ -395,8 +401,8 @@ def _decode_result(raw: dict) -> QuotaResult:
         plan_detail=str(raw.get("plan_detail") or ""),
         auth_mode=str(raw.get("auth_mode") or ""),
         sub_start=str(raw.get("sub_start") or ""),
-        sub_end=str(raw.get("sub_end") or ""),
-        sub_status=str(raw.get("sub_status") or ""),
+        sub_end="" if account.provider == "claude" else str(raw.get("sub_end") or ""),
+        sub_status="" if account.provider == "claude" else str(raw.get("sub_status") or ""),
         notice=str(raw["notice"]),
         retry_at=float(raw["retry_at"]),
         failures=int(raw["failures"]),

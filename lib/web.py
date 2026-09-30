@@ -297,26 +297,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/reset":
-                provider = payload.get("provider") or ""
-                identity = payload.get("identity") or ""
-                if provider != "openai":
-                    self._json({"ok": False, "error": "该平台不支持重置"}, 400)
+                try:
+                    result = _reset_account(
+                        payload.get("provider"), payload.get("identity"),
+                        confirmed=payload.get("confirmed") is True,
+                    )
+                except LookupError as error:
+                    self._json({"ok": False, "error": str(error)}, 404)
                     return
-                account = next(
-                    (a for a in collect_accounts() if a.provider == provider and a.identity == identity),
-                    None,
-                )
-                if account is None:
-                    self._json({"ok": False, "error": "未找到该账号"}, 404)
-                    return
-                from .providers import openai as openai_provider
-
-                result = openai_provider.reset_credits(
-                    account,
-                    confirmed=payload.get("confirmed") is True,
-                )
-                if result.get("ok") or result.get("uncertain"):
-                    snapshot.invalidate()
                 self._json(result)
                 return
         except Exception as error:
@@ -566,6 +554,24 @@ def _clear_hidden() -> None:
     _clear_archived()
 
 
+def _reset_account(provider: str, identity: str, *, confirmed: bool = False) -> dict:
+    from .providers import openai as openai_provider
+
+    if provider != "openai":
+        raise ValueError("该平台不支持重置")
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("缺少账号标识")
+    if confirmed is not True:
+        return {"ok": False, "error": "需要明确确认后才能使用重置卡"}
+    account = next((a for a in collect_accounts() if a.provider == provider and a.identity == identity), None)
+    if account is None:
+        raise LookupError("未找到该账号")
+    result = openai_provider.reset_credits(account, confirmed=True)
+    if result.get("ok") or result.get("uncertain"):
+        snapshot.invalidate()
+    return result
+
+
 def _quota_payload(force: bool = False):
     from .usage import activation_statuses, supported as usage_supported
 
@@ -586,11 +592,7 @@ def _quota_payload(force: bool = False):
         reset_credits = None
         for window in item.windows:
             if window.meta.get("kind") == "reset_credits":
-                reset_credits = {
-                    "available_count": window.meta.get("available_count"),
-                    "applicable_available_count": window.meta.get("applicable_available_count"),
-                    "credits": window.meta.get("credits") or [],
-                }
+                reset_credits = window.meta
             windows.append(
                 {
                     "name": _window_name(window.name),

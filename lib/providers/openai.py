@@ -1,6 +1,8 @@
 import base64
 import json
+import math
 from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from .. import tokenstore
@@ -108,6 +110,13 @@ def _fetch(account: Account) -> QuotaResult:
     remaining = _parse_remaining(spend.get("individual_limit"), "Quota")
     if remaining:
         windows.append(remaining)
+    credits = _credit_balance(data)
+    if credits:
+        windows.append(credits)
+        if credits.meta["scope"] == "individual":
+            wallet = _credit_balance({"credits": data.get("credits")})
+            if wallet:
+                windows.append(wallet)
     credits_detail = None
     if isinstance(data.get("rate_limit_reset_credits"), dict):
         credits_detail = _reset_credit_list(account, access)
@@ -153,6 +162,7 @@ def _usage(account: Account, access: str):
     headers = {
         "Authorization": f"Bearer {access}",
         "User-Agent": "OpenCode-Quota-Toast/1.0",
+        "Cache-Control": "no-cache",
     }
     account_id = account.secret.get("account_id") or _account_id(access)
     if account_id:
@@ -326,6 +336,86 @@ def _parse_remaining(window, name: str) -> Window | None:
     if not isinstance(remaining, (int, float)):
         return None
     return Window(name=name, remaining_percent=max(0.0, min(100.0, float(remaining))), reset_iso=_reset(window))
+
+
+def _credit_number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _credit_balance(data: dict) -> Window | None:
+    """Read consumption credits from the selected account, not reset cards or USD."""
+    spend = data.get("spend_control")
+    individual = spend.get("individual_limit") if isinstance(spend, dict) else None
+    wallet = data.get("credits")
+    wallet_known = isinstance(wallet, dict) and (
+        wallet.get("unlimited") is True
+        or _credit_number(wallet.get("remaining")) is not None
+        or _credit_number(wallet.get("balance")) is not None
+    )
+    for scope, name, raw in (
+        ("individual", "月度积分", individual),
+        ("account", "积分余额", wallet),
+    ):
+        if not isinstance(raw, dict):
+            continue
+        total = _credit_number(raw.get("limit")) if scope == "individual" else None
+        used = _credit_number(raw.get("used")) if scope == "individual" else None
+        remaining = _credit_number(raw.get("remaining"))
+        if remaining is None:
+            if scope == "account":
+                remaining = _credit_number(raw.get("balance"))
+            elif total is not None and used is not None:
+                remaining = max(0.0, float(Decimal(str(total)) - Decimal(str(used))))
+        unlimited = raw.get("unlimited") is True
+        if scope == "individual" and not unlimited and total == 0 and used in (None, 0) and remaining in (None, 0):
+            # No monthly allocation does not establish a zero wallet balance.
+            continue
+        if scope == "individual" and wallet_known and not unlimited and (
+            remaining is None or (remaining == 0 and total in (None, 0) and used in (None, 0))
+        ):
+            # An empty/inapplicable monthly allocation is not the account wallet.
+            continue
+        if not unlimited and total is None and used is None and remaining is None:
+            continue
+
+        def amount(value: float) -> str:
+            return f"{value:,}".removesuffix(".0")
+
+        parts = []
+        if used is not None:
+            parts.append(f"已用 {amount(used)}" + (f" / {amount(total)}" if total is not None else ""))
+        elif total is not None:
+            parts.append(f"额度 {amount(total)}")
+        if unlimited:
+            parts.append("无限")
+        elif remaining is not None:
+            parts.append(f"剩余 {amount(remaining)}")
+
+        reset_iso = _subscription_iso(raw.get("reset_at"))
+        reset_after = _credit_number(raw.get("reset_after_seconds"))
+        if not reset_iso and reset_after is not None and reset_after >= 0:
+            reset_iso = _subscription_iso(datetime.now(timezone.utc).timestamp() + reset_after)
+        return Window(
+            name=name,
+            used=used,
+            total=total,
+            reset_iso=reset_iso or None,
+            text="，".join(parts) + " 积分",
+            meta={
+                "kind": "credits",
+                "unit": "credits",
+                "scope": scope,
+                "remaining": remaining,
+                "unlimited": unlimited,
+            },
+        )
+    return None
 
 
 def _reset(window: dict) -> str | None:
