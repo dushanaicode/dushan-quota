@@ -69,6 +69,32 @@ class SnapshotTests(unittest.TestCase):
             snapshot.get_snapshot(force=True, max_age=300)
         self.assertEqual(2, fetch.call_count)
 
+    def test_old_openai_subscription_cache_refreshes_without_resetting_claude_timer(self):
+        now = time.time()
+        claude = Account("claude", "Claude Code", "test", "C", secret={"access": "synthetic-access"})
+        limited = snapshot._settle(
+            QuotaResult(claude, False, "Claude Code", notice="暂时被限流（429）"), None, now,
+        )
+        old = QuotaResult(self.account, True, "OpenAI", plan="OpenAI (Pro 20x)",
+                          sub_end="2020-02-01T00:00:00Z", sub_status="expired")
+        snapshot._write_cache([old, limited], now, "old-subscription-cache")
+        path = snapshot.cache_path()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("openai_subscription_version", None)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with (
+            patch.object(snapshot, "collect_accounts", return_value=[self.account, claude]),
+            patch.object(snapshot, "fetch_all", return_value=[self.result]) as fetch,
+        ):
+            refreshed = snapshot.get_snapshot(max_age=0)
+            reused = snapshot.get_snapshot(max_age=0)
+        fetch.assert_called_once_with([self.account])
+        self.assertFalse(refreshed.from_cache)
+        self.assertTrue(reused.from_cache)
+        self.assertEqual(self.result.sub_end, refreshed.results[0].sub_end)
+        self.assertEqual(limited.retry_at, refreshed.results[1].retry_at)
+        self.assertEqual(limited.notice, refreshed.results[1].notice)
+
     def test_failed_claude_stays_paused_across_auto_refreshes_until_manual_refresh(self):
         claude = Account(provider="claude", label="Claude Code", source="test", identity="claude-1")
         failure = QuotaResult(account=claude, ok=False, title="Claude Code", error="认证失败，已暂停自动查询")

@@ -44,7 +44,7 @@ def fetch_all(accounts: list[Account]) -> list[QuotaResult]:
     order = {id(account): index for index, account in enumerate(accounts)}
     results.sort(key=lambda item: order.get(id(item.account), 0))
     for item in results:
-        if item.sub_start or item.sub_end:
+        if item.account.provider != "openai" and (item.sub_start or item.sub_end):
             agentdb.update_plan_period(item.account.provider, item.account.identity, item.sub_start, item.sub_end)
     provision.guard_omp_cursor(accounts)
     return results

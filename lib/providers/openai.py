@@ -2,10 +2,10 @@ import base64
 import json
 import math
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import urlencode
 
-from .. import tokenstore
+from .. import agentdb, tokenstore
 from ..httputil import request_json
 from ..models import Account, QuotaResult, Window
 
@@ -46,7 +46,7 @@ def fetch(account: Account) -> QuotaResult:
         return _fetch(account)
     except tokenstore.RefreshError as error:
         id_token = account.secret.get("id_token") or ""
-        start, end, status = _token_subscription(id_token, account.plan)
+        start, end, status, _ = _subscription_status(account, "", None, id_token)
         plan = _plan(_auth_claims(id_token).get("chatgpt_plan_type") or account.plan, account.plan)
         return QuotaResult(account=account, ok=False, title="OpenAI", error=str(error),
                            plan=plan, sub_start=start, sub_end=end, sub_status=status)
@@ -57,7 +57,7 @@ def _fetch(account: Account) -> QuotaResult:
     id_token = str(account.secret.get("id_token") or "")
     token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type")
     if not access:
-        sub_start, sub_end, sub_status = _token_subscription(id_token, token_plan_type or account.plan)
+        sub_start, sub_end, sub_status, _ = _subscription_status(account, "", None, id_token)
         return QuotaResult(
             account=account,
             ok=False,
@@ -76,8 +76,7 @@ def _fetch(account: Account) -> QuotaResult:
         id_token = str(account.secret.get("id_token") or id_token)
         token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type") or token_plan_type
         status, text, data = _usage(account, access)
-    plan_hint = data.get("plan_type") if isinstance(data, dict) else None
-    plan_hint = plan_hint or token_plan_type or account.plan
+    plan_hint = data.get("plan_type") if status == 200 and isinstance(data, dict) else None
     sub_start, sub_end, sub_status, subscription_plan = _subscription_status(
         account,
         access,
@@ -385,7 +384,7 @@ def _credit_balance(data: dict) -> Window | None:
             continue
 
         def amount(value: float) -> str:
-            return f"{value:,}".removesuffix(".0")
+            return f"{Decimal(str(value)).to_integral_value(rounding=ROUND_HALF_UP):,f}"
 
         parts = []
         if used is not None:
@@ -452,13 +451,15 @@ def _auth_claims(token: str) -> dict:
 
 
 def _token_subscription(id_token: str, plan_type) -> tuple[str, str, str]:
-    """Fallback for accounts whose dedicated read-only endpoints are unavailable."""
+    """Read the login snapshot without treating an elapsed period as current expiry."""
     claims = _auth_claims(id_token)
     start = _subscription_iso(claims.get("chatgpt_subscription_active_start"))
     end = _subscription_iso(claims.get("chatgpt_subscription_active_until"))
+    if end and _subscription_expired(end):
+        end = ""
     if start or end:
-        return start, end, "expired" if end and _subscription_expired(end) else "known"
-    if "free" in str(plan_type or "").lower():
+        return start, end, "known"
+    if _plan_key(plan_type or claims.get("chatgpt_plan_type")) == "free":
         return "", "", "not_applicable"
     return "", "", "unavailable"
 
@@ -472,48 +473,63 @@ def _subscription_status(
     """Fetch subscription metadata using Cockpit Tools' read-only endpoint flow.
 
     accounts/check supplies the matching entitlement and its access expiry. The
-    subscriptions endpoint enriches it with active_start and is also the fallback
-    when the entitlement expiry is missing or already past. Quota reset timestamps
-    are deliberately never accepted as subscription dates.
+    subscriptions endpoint enriches it with active_start. Use the later live
+    expiry so renewal is not masked by an older entitlement. A successful usage
+    plan or an active entitlement prevents an elapsed billing period from being
+    reported as current expiration. Quota reset timestamps are never accepted.
     """
     token_start, token_end, token_status = _token_subscription(id_token, plan_type)
     check: dict = {}
     subscriptions: dict = {}
 
-    status, _, payload = _subscription_request(
-        access,
-        ACCOUNT_CHECK_PATH,
-        {"timezone_offset_min": _timezone_offset_min()},
-    )
-    if status == 200:
-        check = _parse_account_check(payload, account, access)
-
-    account_id = (
-        _scalar(check.get("account_id"))
-        or _scalar(account.secret.get("account_id"))
-        or _account_id(access)
-        or ""
-    )
-    if account_id:
+    if access:
         status, _, payload = _subscription_request(
             access,
-            SUBSCRIPTIONS_PATH,
-            {"account_id": account_id},
+            ACCOUNT_CHECK_PATH,
+            {"timezone_offset_min": _timezone_offset_min()},
         )
         if status == 200:
-            subscriptions = _parse_subscriptions(payload)
+            check = _parse_account_check(payload, account, access)
+
+        account_id = (
+            _scalar(check.get("account_id"))
+            or _scalar(account.secret.get("account_id"))
+            or _account_id(access)
+            or ""
+        )
+        if account_id:
+            status, _, payload = _subscription_request(
+                access,
+                SUBSCRIPTIONS_PATH,
+                {"account_id": account_id},
+            )
+            if status == 200:
+                subscriptions = _parse_subscriptions(payload)
 
     check_start = _subscription_iso(check.get("sub_start"))
     check_end = _subscription_iso(check.get("sub_end"))
     api_start = _subscription_iso(subscriptions.get("sub_start"))
     api_end = _subscription_iso(subscriptions.get("sub_end"))
+    live_start = api_start or check_start
+    live_end = max((value for value in (check_end, api_end) if value), key=datetime.fromisoformat, default="")
+    saved_start, saved_end = agentdb.update_plan_period(
+        account.provider, account.identity, live_start, live_end,
+    )
 
-    start = api_start or check_start or token_start
-    end = check_end
+    plan_key = _plan_key(plan_type)
+    current_paid = (
+        plan_key in _PLAN_TIERS and plan_key != "free"
+    ) or check.get("has_active_subscription") is True
+    if plan_key == "free" or (check.get("has_active_subscription") is False and not current_paid):
+        token_start = token_end = ""
+        saved_start = saved_end = ""
+    if saved_end and _subscription_expired(saved_end):
+        saved_end = ""
+    start = max((value for value in (live_start, saved_start) if value), key=datetime.fromisoformat, default=token_start)
+    end = max((value for value in (live_end, saved_end) if value), key=datetime.fromisoformat, default=token_end)
+    if current_paid and end and _subscription_expired(end):
+        end = ""
     check_expired = bool(check_end and _subscription_expired(check_end))
-    if not end or check_expired:
-        end = api_end or end
-    end = end or token_end
 
     check_plan = _scalar(check.get("plan_type"))
     api_plan = _scalar(subscriptions.get("plan_type"))
@@ -525,7 +541,9 @@ def _subscription_status(
 
     if start or end:
         sub_status = "expired" if end and _subscription_expired(end) else "known"
-    elif token_status == "not_applicable" or "free" in str(subscription_plan or plan_type or "").lower():
+    elif not current_paid and (
+        token_status == "not_applicable" or plan_key == "free" or _plan_key(subscription_plan) == "free"
+    ):
         sub_status = "not_applicable"
     else:
         sub_status = "unavailable"
@@ -536,6 +554,7 @@ def _subscription_request(access: str, path: str, query: dict):
     headers = {
         "Authorization": f"Bearer {access}",
         "Accept": "application/json",
+        "Cache-Control": "no-cache",
         "Referer": "https://chatgpt.com/",
         "User-Agent": "Mozilla/5.0 Dushan-Quota/1.0",
         "x-openai-target-path": path,
@@ -604,6 +623,7 @@ def _parse_account_check(payload, account: Account, access: str) -> dict:
         or _field(account_node, "active_start", "starts_at", "started_at"),
         "sub_end": _field(entitlement, "expires_at", "active_until")
         or _field(account_node, "expires_at", "active_until"),
+        "has_active_subscription": entitlement.get("has_active_subscription"),
     }
 
 

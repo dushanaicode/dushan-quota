@@ -200,17 +200,30 @@ def get_tokens(provider: str, identity: str) -> dict | None:
     }
 
 
-def update_plan_period(provider: str, identity: str, start: str, end: str) -> None:
-    """记录订阅的起止时间（参考 Cockpit 的套餐周期展示）。"""
-    if not (start or end):
-        return
+def update_plan_period(provider: str, identity: str, start: str, end: str) -> tuple[str, str]:
+    """保存并返回订阅周期；OpenAI 的已确认日期不被空值或旧周期覆盖。"""
+    has_dates = bool(start or end)
+    if not has_dates and provider != "openai":
+        return start, end
     conn = _connect()
     try:
-        conn.execute(
-            "UPDATE accounts SET plan_start = ?, plan_end = ?, updated_at = ? WHERE provider = ? AND identity = ?",
-            (start, end, int(time.time()), provider, identity),
-        )
+        if provider == "openai":
+            if has_dates:
+                conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute(
+                "SELECT plan_start, plan_end FROM accounts WHERE provider = ? AND identity = ?",
+                (provider, identity),
+            ).fetchone()
+            if previous:
+                start = max((value for value in (previous[0], start) if value), key=datetime.fromisoformat, default="")
+                end = max((value for value in (previous[1], end) if value), key=datetime.fromisoformat, default="")
+        if has_dates:
+            conn.execute(
+                "UPDATE accounts SET plan_start = ?, plan_end = ?, updated_at = ? WHERE provider = ? AND identity = ?",
+                (start, end, int(time.time()), provider, identity),
+            )
         conn.commit()
+        return start, end
     finally:
         conn.close()
 

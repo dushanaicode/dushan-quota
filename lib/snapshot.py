@@ -26,6 +26,8 @@ from .store import store_dir
 # A mismatch forces a fresh provider read instead of decoding an old record as
 # if newly added fields were explicitly unavailable.
 _SCHEMA_VERSION = 8
+# Invalidate old OpenAI subscription dates without resetting Claude's timers.
+_OPENAI_SUBSCRIPTION_VERSION = 2
 _CLAUDE_REFRESH_SECONDS = 300
 _BACKOFF_SECONDS = 300
 _BACKOFF_MAX_SECONDS = 1800
@@ -273,6 +275,7 @@ def _write_cache(results: list[QuotaResult], fetched_at: float, generation: str)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema": _SCHEMA_VERSION,
+        "openai_subscription_version": _OPENAI_SUBSCRIPTION_VERSION,
         "generation": generation,
         "fetched_at": fetched_at,
         "results": [_encode_result(item) for item in results],
@@ -304,6 +307,11 @@ def _read_cache() -> Snapshot | None:
         results = [_decode_result(item) for item in raw_results]
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
+    if payload.get("openai_subscription_version") != _OPENAI_SUBSCRIPTION_VERSION and any(
+        item.account.provider == "openai" for item in results
+    ):
+        results = [item for item in results if item.account.provider != "openai"]
+        fetched_at = 0
     generation = payload.get("generation")
     if not isinstance(generation, str) or not generation:
         generation = f"legacy-{float(fetched_at):.9f}"

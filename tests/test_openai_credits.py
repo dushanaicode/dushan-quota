@@ -49,7 +49,7 @@ class OpenAICreditsTests(unittest.TestCase):
             "credits": {"balance": "42.125"},
         })
         self.assertEqual("积分余额", window.name)
-        self.assertEqual("剩余 42.125 积分", window.text)
+        self.assertEqual("剩余 42 积分", window.text)
         self.assertEqual("account", window.meta["scope"])
 
     def test_empty_monthly_allocation_does_not_hide_live_wallet(self):
@@ -136,10 +136,20 @@ class OpenAICreditsTests(unittest.TestCase):
         self.assertEqual(["5h quota", "Week quota", "Quota", "月度积分", "重置次数"],
                          [window.name for window in result.windows])
         self.assertEqual([85, 75, 88], [window.remaining_percent for window in result.windows[:3]])
-        self.assertEqual("已用 48.98 / 400，剩余 351.02 积分", result.windows[3].text)
+        self.assertEqual("已用 49 / 400，剩余 351 积分", result.windows[3].text)
         self.assertEqual("剩余 2 次", result.windows[4].text)
         self.assertEqual([openai.USAGE_URL, openai.RESET_CREDITS_URL],
                          [call.args[0] for call in request.call_args_list])
+
+    def test_credit_display_rounds_half_up_without_changing_raw_balance(self):
+        for value, text in (
+            (37819.520653, "37,820"), (42.49, "42"), (42.5, "43"),
+            (0.000000001, "0"), (0.5, "1"), (0, "0"), (-42.5, "-43"),
+        ):
+            with self.subTest(value=value):
+                window = openai._credit_balance({"credits": {"balance": value}})
+                self.assertEqual(f"剩余 {text} 积分", window.text)
+                self.assertEqual(value, window.meta["remaining"])
 
     @patch.object(openai, "_subscription_status", return_value=("", "", "unavailable", ""))
     @patch.object(openai.tokenstore, "ensure_fresh", side_effect=lambda account: account.secret["access"])

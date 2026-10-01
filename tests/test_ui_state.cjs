@@ -630,22 +630,24 @@ async function main() {
   const creditWindow = {name:'月度积分',text:'已用 48.98 / 400，剩余 351.02 积分',meta:{kind:'credits',remaining:351.02,unlimited:false}};
   const summaryAccount = {...resetClaude,provider:'openai',title:'OpenAI',sub_end:'2030-02-01T06:07:08Z',windows:[creditWindow,{name:'周额度',remaining_percent:98},{name:'重置次数',text:'剩余 2 次',meta:{kind:'reset_credits'}}]};
   const summaryText = item => floating.entitlementSummary(item).replace(/<[^>]*>/g,'');
-  assert.equal(summaryText(summaryAccount),'重置 2 次 · 积分 351.02 · 订阅到期 2030-02-01 14:07:08');
+  assert.equal(summaryText(summaryAccount),'重置 2 次 · 积分 351 · 订阅到期 2030-02-01 14:07:08');
   assert.equal(summaryText({...summaryAccount,reset_credits:{available_count:0,credits:[]},windows:[{...creditWindow,meta:{kind:'credits',remaining:0}}]}),'重置 0 次 · 积分 0 · 订阅到期 2030-02-01 14:07:08');
   assert(summaryText({...summaryAccount,windows:[{...creditWindow,meta:{kind:'credits',unlimited:true}}]}).includes('积分 无限'));
-  assert(summaryText({...summaryAccount,windows:[{...creditWindow,meta:{kind:'credits',remaining:0.000000001}}]}).includes('积分 0.000000001'));
+  for(const [remaining,expected] of [[37819.520653,'37,820'],[42.49,'42'],[42.5,'43'],[0.000000001,'0'],[0.5,'1'],[-42.5,'-43']]){
+    assert(summaryText({...summaryAccount,windows:[{...creditWindow,meta:{kind:'credits',remaining}}]}).includes(`积分 ${expected} ·`));
+  }
   const unavailableReset = floating.entitlementSummary({...summaryAccount,reset_credits:{available_count:null,credits:[]},windows:[],sub_end:''});
   assert(unavailableReset.includes('重置 —') && unavailableReset.includes('订阅到期 —'));
   assert(!/<button|<details|onclick=/.test(unavailableReset));
   assert.equal(typeof floating.resetAccount,'undefined','The floating window exposes no reset mutation');
-  assert.equal(summaryText({...summaryAccount,reset_credits:{...resetMeta,credits:[...resetMeta.credits,{status:'available',expires_at:'2098-01-01T00:00:00Z'},{status:'expired',expires_at:'2097-01-01T00:00:00Z'}]}}),'重置 2 次 · 积分 351.02 · 订阅到期 2030-02-01 14:07:08','Reset-card expiration never replaces subscription expiration');
+  assert.equal(summaryText({...summaryAccount,reset_credits:{...resetMeta,credits:[...resetMeta.credits,{status:'available',expires_at:'2098-01-01T00:00:00Z'},{status:'expired',expires_at:'2097-01-01T00:00:00Z'}]}}),'重置 2 次 · 积分 351 · 订阅到期 2030-02-01 14:07:08','Reset-card expiration never replaces subscription expiration');
   floating.render([summaryAccount]);
   const summaryView=floating.get('list').innerHTML;
   assert.equal((summaryView.match(/class="entitlements"/g)||[]).length,1);
   assert(!summaryView.includes('已用 48.98') && !summaryView.includes('reset-card') && !summaryView.includes('resetAccount('));
   assert(summaryView.includes('98%'),'The read-only summary leaves quota percentages intact');
   assert.equal(summaryText({...summaryAccount,provider:'openai',windows:[{name:'周额度',remaining_percent:98}]}),'重置 2 次 · 积分 — · 订阅到期 2030-02-01 14:07:08','Missing wallet information is unknown, never imported zero');
-  assert(summaryText({...summaryAccount,windows:[{name:'月度积分',meta:{kind:'credits',scope:'individual',remaining:0}},{name:'积分余额',meta:{kind:'credits',scope:'account',remaining:351.02}}]}).includes('积分 351.02'),'The summary reports the account wallet when a monthly limit also exists');
+  assert(summaryText({...summaryAccount,windows:[{name:'月度积分',meta:{kind:'credits',scope:'individual',remaining:0}},{name:'积分余额',meta:{kind:'credits',scope:'account',remaining:351.02}}]}).includes('积分 351'),'The summary reports the account wallet when a monthly limit also exists');
   const staleClaude = {...summaryAccount,provider:'claude',title:'Claude Code'};
   floating.render([staleClaude]);
   const claudeView = floating.get('list').innerHTML;

@@ -465,7 +465,7 @@ function entitlementSummary(it){
   if(rc) parts.push(`重置 ${Number.isFinite(rc.available_count)?rc.available_count+' 次':'—'}`);
   if(showCredits){
     const meta=credits?.meta;
-    const balance=meta?.unlimited?'无限':Number.isFinite(meta?.remaining)?meta.remaining.toLocaleString('en-US',{maximumSignificantDigits:15}):'—';
+    const balance=meta?.unlimited?'无限':Number.isFinite(meta?.remaining)?meta.remaining.toLocaleString('en-US',{maximumFractionDigits:0}):'—';
     parts.push(`积分 ${balance}`);
   }
   if(showEnd) parts.push(`订阅到期 ${fmtDate(it.sub_end).slice(0,19)||'—'}`);
