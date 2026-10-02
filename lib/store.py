@@ -126,6 +126,8 @@ def update_fields(provider: str, identity: str, fields: dict, *, expected: dict 
         if item.get("provider") == provider and item.get("identity") == identity:
             if expected is not None and any((item.get(key) or "") != value for key, value in expected.items()):
                 continue
+            if all(item.get(key) == value for key, value in fields.items()):
+                continue
             item.update(fields)
             item["updated_at"] = int(time.time())
             changed = True

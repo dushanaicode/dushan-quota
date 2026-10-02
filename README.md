@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.7.8-C3B191" alt="Release v0.7.8">
+  <img src="https://img.shields.io/badge/Release-v0.8.0-C3B191" alt="Release v0.8.0">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -176,7 +176,11 @@ Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个
 
 每项需要 `provider` 和至少一种凭据（`api_key`、`access`、`refresh`、`id_token`）。建议明确填写 `identity`；省略时由账号 ID、邮箱或凭据指纹生成。可同时保存 `label`、`email`、`name`、`user_id`、`plan`、`auth_mode`、`variant` 和 `expiry`（Unix 秒）。导出的文件可以直接重新导入。
 
-导入前会校验整批数据，错误会指出账号序号；有错误时整批不写入。相同 `provider + identity` 更新本地记录，若已知账号 ID 不同则拒绝覆盖；其余新增，完成后显示数量。同一数组内重复的账号需要先合并。导入不携带原机器路径、数据库 ID、用量或界面设置。
+导入前会校验整批数据，错误会指出账号序号；格式或身份错误时整批不写入。相同 `provider + identity` 更新本地记录，若已知账号 ID 不同则拒绝覆盖；其余新增。同一数组内重复的账号需要先合并。OAuth 导入会保留本地或中央库中更新的凭据，报告跳过数量；已确认失效的旧备份不能覆盖可用新凭据。过期账号会尝试续期，失败时保留账号记录并提示处理。API Key 更新不受 OAuth 新旧比较限制。导入不携带原机器路径、数据库 ID、用量或界面设置。
+
+导出前会采用已保存的新凭据并检查是否需要续期，续期失败会在文件中标明，仍可作为备份下载。OAuth 导出文件只是快照；源机和导入端共用同一续期链时，一端的令牌轮换可能使另一份副本失效。迁移前先停止源机 Quota 和 Codex/相关客户端的刷新，再导出、导入目标机；多台机器同时使用请分别 OAuth 登录。
+
+查询、写入和导出优先采用同账号的新凭据整组数据。已知过期且续期失败时不会再使用旧 access；已确认失效的续期链会暂停重复请求，并提示重新授权。网络错误、429 和服务暂时异常仍可重试，有 `Retry-After` 时遵守等待时间；新登录或可用的新文件可以恢复。Claude 同账号的独立、可续期会话继续保留。
 
 导出的 JSON 包含完整 Key / Token，请按凭据文件妥善保存。
 

@@ -23,8 +23,6 @@ PLAN_DISPLAY_NAMES = {
 
 def fetch(account: Account) -> QuotaResult:
     access = tokenstore.ensure_fresh(account)
-    if not access:
-        access = tokenstore.refresh_account(account) or account.secret.get("access") or ""
 
     if access:
         live = _query(account, access)

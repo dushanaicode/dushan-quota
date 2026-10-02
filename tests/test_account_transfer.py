@@ -100,7 +100,9 @@ class AccountTransferTests(unittest.TestCase):
         exported = add.export_accounts(selection)
         with patch.object(store, "save_store", wraps=store.save_store) as save:
             result = add.add_raw_json("", json.dumps(exported))
-        self.assertEqual(result, {"count": 10, "added": 10, "updated": 0})
+        self.assertEqual((result["count"], result["added"], result["updated"]), (10, 10, 0))
+        self.assertEqual(result["skipped_stale"], [])
+        self.assertEqual(result["credential_errors"], [])
         self.assertEqual(save.call_count, 1)
         originals = {item["identity"]: (item["id"], item["created_at"]) for item in store.list_stored()}
         restored = []
@@ -108,7 +110,9 @@ class AccountTransferTests(unittest.TestCase):
         self.accounts = restored
         self.assertEqual(add.export_accounts(selection), exported)
         result = add.add_raw_json("", json.dumps(exported))
-        self.assertEqual(result, {"count": 10, "added": 0, "updated": 10})
+        self.assertEqual((result["count"], result["added"], result["updated"]), (10, 0, 10))
+        self.assertEqual(result["skipped_stale"], [])
+        self.assertEqual(result["credential_errors"], [])
         self.assertEqual({item["identity"]: (item["id"], item["created_at"]) for item in store.list_stored()}, originals)
         self.assertTrue(all(item["source"] == "dushan-quota" for item in store.list_stored()))
 
@@ -116,7 +120,9 @@ class AccountTransferTests(unittest.TestCase):
         records = [{"api_key": "test-key-first"}, {"api_key": "test-key-second"}]
         status, _, result = self.request("POST", "/api/accounts/json", {"provider": "deepseek", "text": json.dumps(records)})
         self.assertEqual(status, 200)
-        self.assertEqual(result, {"ok": True, "count": 2, "added": 2, "updated": 0})
+        self.assertTrue(result["ok"])
+        self.assertEqual((result["count"], result["added"], result["updated"]), (2, 2, 0))
+        self.assertEqual(result["skipped_stale"], [])
         self.assertEqual(len({item["identity"] for item in store.list_stored()}), 2)
         result = add.add_raw_json("deepseek", json.dumps(records))
         self.assertEqual(result["updated"], 2)

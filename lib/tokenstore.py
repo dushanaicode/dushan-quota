@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import agentdb, logbuf, store
 from .httputil import _retry_after_seconds
+from .models import credential_identity
 from .oauth_openai import _jwt_claims, matching_id_token, token_account_id
 
 XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token"
@@ -55,18 +56,72 @@ class RefreshError(Exception):
         self.diagnostics = diagnostics or {}
 
 
+def _error_credential(secret: dict) -> str:
+    return secret.get("refresh") or ("access:" + secret["access"] if secret.get("access") else "")
+
+
+def credentials_are_dead(provider: str, secret: dict) -> bool:
+    saved = agentdb.get_refresh_error(provider, _error_credential(secret))
+    return bool(saved and saved["reauth"])
+
+
+def _check_refresh_error(account) -> None:
+    saved = agentdb.get_refresh_error(account.provider, _error_credential(account.secret))
+    if saved and (saved["reauth"] or (saved["retry_at"] > time.time()
+                                     and saved["access_tag"] == credential_identity(account.provider, account.secret.get("access") or ""))):
+        raise RefreshError(saved["code"], saved["message"], reauth=saved["reauth"], retry_at=saved["retry_at"])
+
+
+def remember_refresh_error(account, error: RefreshError) -> None:
+    credential = _error_credential(account.secret)
+    if credential and (error.reauth or error.retry_at > time.time()):
+        agentdb.set_refresh_error(account.provider, credential, {
+            "code": error.code, "message": str(error), "reauth": error.reauth, "retry_at": error.retry_at,
+            "access_tag": credential_identity(account.provider, account.secret.get("access") or ""),
+        })
+
+
+def _adopt_bundle(account, cached: dict) -> None:
+    previous = dict(account.secret)
+    expiry = agentdb._secret_expiry(previous)
+    dead = credentials_are_dead(account.provider, previous)
+    # Keep a separate renewable session; only replace its expired mirror when the source matches.
+    replace_stored = dead or (expiry > 0 and expiry <= time.time() and cached["source"] == account.source)
+    account.secret.update(access=cached["access"], refresh=cached["refresh"], expiry=cached["expires"], id_token=cached["id_token"])
+    account.secret.pop("expires", None)
+    if cached["source"]:
+        account.source = cached["source"]
+    if replace_stored:
+        _write_quota_store(account, cached["access"], cached["refresh"], None, cached["id_token"], previous_secret=previous)
+
+
 def adopt_latest(account) -> None:
     """Use a newer complete bundle only when it belongs to this account."""
     if account.provider == "claude" and account.auth_mode != "api_key":
         cached = agentdb.get_tokens("claude", account.identity) or {}
-        if cached.get("access") and agentdb._secret_expiry(cached) > agentdb._secret_expiry(account.secret):
+        if cached.get("access") and not credentials_are_dead("claude", cached) and (
+            agentdb._secret_expiry(cached) > agentdb._secret_expiry(account.secret)
+            or credentials_are_dead("claude", account.secret)
+        ):
             verified = agentdb.get_claude_identity(cached["access"])
             if account.user_id and verified.get("user_id") == account.user_id:
-                account.secret.update(access=cached["access"], refresh=cached["refresh"], expiry=cached["expires"])
-                account.secret.pop("expires", None)
-                account.source = cached["source"]
+                _adopt_bundle(account, cached)
         return
-    if account.provider != "openai" or account.auth_mode == "api_key":
+    if account.auth_mode == "api_key":
+        return
+    if account.provider != "openai":
+        cached = agentdb.get_tokens(account.provider, account.identity)
+        current_expiry = agentdb._secret_expiry(account.secret)
+        cached_expiry = agentdb._secret_expiry(cached) if cached else 0
+        if cached and cached["access"] and (cached_expiry > current_expiry or not account.secret.get("access")
+                                           or (cached_expiry == 0 and 0 < current_expiry <= time.time())):
+            previous_claims = _jwt_claims(account.secret.get("access") or "")
+            cached_claims = _jwt_claims(cached["access"])
+            previous_id = previous_claims.get("principal_id") or previous_claims.get("sub") or account.user_id
+            cached_id = cached_claims.get("principal_id") or cached_claims.get("sub") or cached["user_id"]
+            if previous_id and cached_id and previous_id != cached_id:
+                return
+            _adopt_bundle(account, cached)
         return
     cached = agentdb.get_tokens(account.provider, account.identity) or {}
     access = account.secret.get("access") or ""
@@ -75,17 +130,11 @@ def adopt_latest(account) -> None:
     if actual and expected and actual != expected:
         raise RefreshError("account_mismatch", "账号与访问凭据不一致，请重新授权此账号", reauth=True)
     cached_id = token_account_id(cached.get("access") or "")
-    if cached.get("access") and (not expected or not cached_id or expected == cached_id):
+    if cached.get("access") and not credentials_are_dead("openai", cached) and (not expected or not cached_id or expected == cached_id):
         current_expiry = agentdb._secret_expiry(account.secret)
         cached_expiry = agentdb._secret_expiry(cached)
-        if not access or (cached_expiry and cached_expiry >= current_expiry) or cached.get("access") == access:
-            refresh = cached.get("refresh") or (account.secret.get("refresh") if cached["access"] == access else "") or ""
-            account.secret.update(
-                access=cached["access"], refresh=refresh,
-                id_token=cached.get("id_token") or account.secret.get("id_token") or "",
-                expiry=cached_expiry,
-            )
-            account.secret.pop("expires", None)
+        if not access or (cached_expiry and cached_expiry >= current_expiry) or cached.get("access") == access or credentials_are_dead("openai", account.secret):
+            _adopt_bundle(account, cached)
     access = account.secret.get("access") or ""
     account_id = token_account_id(access) or expected or ""
     account.secret["account_id"] = account_id
@@ -98,7 +147,8 @@ def get_token(provider: str, identity: str) -> dict | None:
 
 def record(account, access: str, refresh: str = "", expires_in=None) -> None:
     """刷新成功后写入中央库 agent.db（汇总所有平台最新票据）。"""
-    agentdb.update_tokens(account.provider, account.identity, access, refresh or (account.secret.get("refresh") or ""), expires_in, account.secret.get("id_token") or "")
+    agentdb.update_tokens(account.provider, account.identity, access, refresh or (account.secret.get("refresh") or ""), expires_in,
+                          account.secret.get("id_token") or "", source=account.source, verified=True)
 
 
 def ensure_fresh(account) -> str:
@@ -108,17 +158,22 @@ def ensure_fresh(account) -> str:
         skew = CLAUDE_EXPIRY_SKEW_SECONDS if account.provider == "claude" else _EXPIRY_SKEW_SECONDS
         with lock:
             adopt_latest(account)
+            _check_refresh_error(account)
             access = account.secret.get("access") or ""
             expiry = _expiry_ts(account)
             if (not access and account.secret.get("refresh")) or (expiry and time.time() >= expiry - skew):
                 return refresh_account(account) or ""
             return access
+    adopt_latest(account)
     access = account.secret.get("access") or ""
     if not access:
-        return ""
+        return refresh_account(account) or "" if account.secret.get("refresh") else ""
     expiry = _expiry_ts(account)
     if expiry and time.time() >= expiry - _EXPIRY_SKEW_SECONDS:
-        return refresh_account(account) or access
+        refreshed = refresh_account(account)
+        if not refreshed:
+            raise RefreshError("refresh_failed", "凭据已过期且续期未返回新凭据，请重新登录或重新导入")
+        return refreshed
     return access
 
 
@@ -127,17 +182,20 @@ def refresh_account(account) -> str | None:
         with OPENAI_LOCK:
             previous = account.secret.get("access")
             adopt_latest(account)
+            _check_refresh_error(account)
             if account.secret.get("access") != previous and _expiry_ts(account) > time.time() + _EXPIRY_SKEW_SECONDS:
                 return account.secret["access"]
             try:
                 return _refresh_account(account)
             except RefreshError as error:
+                remember_refresh_error(account, error)
                 logbuf.warn("OpenAI 令牌续期失败", identity=account.identity, code=error.code, reauth=error.reauth)
                 raise
     if account.provider == "claude":
         with CLAUDE_LOCK:
             previous = account.secret.get("access")
             adopt_latest(account)
+            _check_refresh_error(account)
             if account.secret.get("access") != previous and _expiry_ts(account) > time.time() + CLAUDE_EXPIRY_SKEW_SECONDS:
                 return account.secret["access"]
             source = "local-file" if Path(account.source).is_absolute() else account.source if account.source in {"dushan-quota", "opencode"} else "other"
@@ -147,6 +205,7 @@ def refresh_account(account) -> str | None:
             try:
                 access = _refresh_account(account)
             except RefreshError as error:
+                remember_refresh_error(account, error)
                 logbuf.warn("Claude 令牌续期失败", **context, code=error.code, reauth=error.reauth, **error.diagnostics)
                 raise
             logbuf.info("Claude 令牌续期成功", **context, expires_at=_expiry_ts(account))
@@ -207,9 +266,8 @@ def _refresh_account(account) -> str | None:
     account.secret["refresh"] = new_refresh
     if new_id_token or account.provider == "openai":
         account.secret["id_token"] = new_id_token
-    if isinstance(expires_in, (int, float)):
-        account.secret["expiry"] = int(time.time()) + int(expires_in)
-        account.secret.pop("expires", None)
+    account.secret["expiry"] = int(time.time()) + int(expires_in) if isinstance(expires_in, (int, float)) else agentdb._secret_expiry({"access": access})
+    account.secret.pop("expires", None)
     record(account, access, new_refresh, expires_in)
     if account.provider == "claude" and previous_access:
         verified = agentdb.get_claude_identity(previous_access)
@@ -322,11 +380,14 @@ def _json_post(url: str, payload: dict, *, strict: bool = False):
                 "refresh_token_expired": "续期凭据已过期",
                 "refresh_token_revoked": "续期凭据已被撤销",
             }
-            diagnostics, retry_at = _refresh_response_diagnostics(error, response_body, payload) if is_claude else ({}, 0)
+            diagnostics, retry_at = _refresh_response_diagnostics(error, response_body, payload)
             if isinstance(code, str) and code in {*reasons, "rate_limit_error", "overloaded_error", "authentication_error", "permission_error", "invalid_request_error"}:
                 diagnostics["provider_error"] = code
             if isinstance(code, str) and code in reasons:
                 raise RefreshError(code, f"{reasons[code]}（{code}），请重新授权此账号", reauth=True, diagnostics=diagnostics) from None
+            if error.code in {400, 401, 403}:
+                raise RefreshError("credential_dead", "续期凭据已失效（可能已被其他设备轮换），请重新授权或重新导出导入",
+                                   reauth=True, diagnostics=diagnostics) from None
             raise RefreshError(f"http_{error.code}", f"续期请求失败（HTTP {error.code}），请稍后重试", retry_at=retry_at, diagnostics=diagnostics) from None
         error.close()
         return None
@@ -513,13 +574,13 @@ def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: 
 
 
 def _write_quota_store(account, access: str, refresh: str, expires_in, id_token: str = "", *, previous_secret=None) -> None:
-    fields = {"access": access, "refresh": refresh}
+    fields = {"access": access, "refresh": refresh, "source": account.source}
     if id_token or account.provider == "openai":
         fields["id_token"] = id_token
     if isinstance(expires_in, (int, float)):
         fields["expiry"] = int(time.time()) + int(expires_in)
-    elif account.provider == "openai":
-        fields["expiry"] = agentdb._secret_expiry({"access": access})
+    else:
+        fields["expiry"] = agentdb._secret_expiry(account.secret)
     expected = {key: previous_secret.get(key) or "" for key in ("access", "refresh")} if account.provider == "claude" else None
     store.update_fields(account.provider, account.identity, fields, expected=expected)
 

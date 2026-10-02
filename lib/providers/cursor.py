@@ -8,14 +8,14 @@ USAGE_URL = "https://cursor.com/api/usage-summary"
 def fetch(account: Account) -> QuotaResult:
     access = tokenstore.ensure_fresh(account)
     cookie = _cookie(access)
-    if not cookie:
-        access = tokenstore.refresh_account(account) or access
+    if not cookie and access:
+        access = tokenstore.refresh_account(account)
         cookie = _cookie(access)
     if not cookie:
         return QuotaResult(account=account, ok=False, title="Cursor", error="缺少 session（请在 Cursor IDE 官方登录）")
     status, text, data = _usage(cookie)
     if status == 401:
-        access = tokenstore.refresh_account(account) or access
+        access = tokenstore.refresh_account(account)
         cookie = _cookie(access)
         if cookie:
             status, text, data = _usage(cookie)

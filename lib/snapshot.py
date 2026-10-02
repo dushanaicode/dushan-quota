@@ -27,7 +27,7 @@ from .store import store_dir
 # if newly added fields were explicitly unavailable.
 _SCHEMA_VERSION = 8
 # Invalidate old OpenAI subscription dates without resetting Claude's timers.
-_OPENAI_SUBSCRIPTION_VERSION = 2
+_OPENAI_SUBSCRIPTION_VERSION = 3
 _CLAUDE_REFRESH_SECONDS = 300
 _BACKOFF_SECONDS = 300
 _BACKOFF_MAX_SECONDS = 1800

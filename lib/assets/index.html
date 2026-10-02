@@ -1164,7 +1164,7 @@ function renderCards(){
     const usageButton = item.usage_supported
       ? '<button class="btn act-usage">用量详情</button>'
       : '';
-    const reauthButton = item.provider === 'openai' && item.auth_mode === 'oauth'
+    const reauthButton = item.provider === 'openai' && (item.auth_mode === 'oauth' || (item.auth_mode !== 'api_key' && item.user_id))
       ? '<button class="btn act-reauth">重新授权</button>' : '';
     const sec = document.createElement('section');
     sec.className = 'card';
@@ -1539,7 +1539,7 @@ async function submitImport(){
   try {
     const result = await api('/api/accounts/json', {method:'POST', body:JSON.stringify({text:document.getElementById('importText').value})});
     clearImport();
-    msg.textContent = `已导入 ${result.count} 个账号：新增 ${result.added}，更新 ${result.updated}`;
+    msg.textContent = result.message;
     refreshQuota(false);
   } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
   finally {
@@ -1619,7 +1619,9 @@ async function submitExport(){
     link.href = url; link.download = `dushan-quota-accounts-${new Date().toISOString().slice(0,10)}.json`;
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    document.getElementById('exportModal').close();
+    const notices = [...new Set(accounts.flatMap(item => [item.export_warning, item.credential_error].filter(Boolean)))];
+    if (notices.length) msg.textContent = `已导出 ${accounts.length} 个账号。` + notices.join(' ');
+    else document.getElementById('exportModal').close();
     toast(`已导出 ${accounts.length} 个账号`);
   } catch(e) { msg.className = 'msg bad'; msg.textContent = e.message; }
   finally { exporting = false; updateExportSelection(); btn.textContent = '下载 JSON'; }
@@ -1715,7 +1717,7 @@ async function submitAdd(){
     if (addMode === 'api_key') await api('/api/accounts/key', {method:'POST', body:JSON.stringify({provider:addProv, key:document.getElementById('apiKey').value})});
     else if (addMode === 'json') {
       const result = await api('/api/accounts/json', {method:'POST', body:JSON.stringify({provider:addProv, text:document.getElementById('jsonText').value})});
-      toast(`已导入 ${result.count} 个账号：新增 ${result.added}，更新 ${result.updated}`);
+      toast(result.message);
     }
     else if (addMode === 'env') await api('/api/accounts/env', {method:'POST', body:JSON.stringify({provider:addProv})});
     else if (addMode === 'local') await api('/api/accounts/local', {method:'POST', body:JSON.stringify({provider:addProv})});

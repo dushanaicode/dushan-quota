@@ -113,6 +113,28 @@ def set_claude_identity(access: str, identity: dict) -> None:
         conn.close()
 
 
+def get_refresh_error(provider: str, credential: str) -> dict | None:
+    if not credential:
+        return None
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?",
+                           ("refresh-error:" + credential_identity(provider, credential),)).fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def set_refresh_error(provider: str, credential: str, error: dict) -> None:
+    conn = _connect()
+    try:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                     ("refresh-error:" + credential_identity(provider, credential), json.dumps(error)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def mask_key(key: str) -> str:
     key = (key or "").strip()
     if not key:
@@ -155,22 +177,37 @@ def sync_accounts(accounts) -> None:
         conn.close()
 
 
-def update_tokens(provider: str, identity: str, access: str, refresh: str, expires_in, id_token: str = "") -> None:
-    """刷新成功后无条件写入最新令牌。"""
-    expires = int(time.time()) + int(expires_in) if isinstance(expires_in, (int, float)) else _secret_expiry({"access": access})
+def update_tokens(
+    provider: str, identity: str, access: str, refresh: str, expires_in, id_token: str = "", *,
+    source: str, verified: bool, expiry: int | None = None,
+) -> None:
+    """写入选定的完整票据；服务确认成功时清除对应失败标记。"""
+    if expiry is not None:
+        expires = expiry
+    elif isinstance(expires_in, (int, float)):
+        expires = int(time.time()) + int(expires_in)
+    else:
+        expires = _secret_expiry({"access": access})
     conn = _connect()
     try:
         conn.execute(
-            """INSERT INTO accounts (provider, identity, access, refresh, expires, updated_at, id_token)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO accounts (provider, identity, access, refresh, expires, updated_at, id_token, source)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(provider, identity) DO UPDATE SET
                  access = excluded.access,
                  refresh = excluded.refresh,
                  id_token = excluded.id_token,
-                 expires = CASE WHEN excluded.expires > 0 THEN excluded.expires ELSE accounts.expires END,
+                 api_key = '',
+                 api_key_masked = '',
+                 source = excluded.source,
+                 expires = excluded.expires,
                  updated_at = excluded.updated_at""",
-            (provider, identity, access, refresh, expires, int(time.time()), id_token),
+            (provider, identity, access, refresh, expires, int(time.time()), id_token, source),
         )
+        if verified and refresh:
+            conn.execute("DELETE FROM meta WHERE key = ?", ("refresh-error:" + credential_identity(provider, refresh),))
+        if verified and access:
+            conn.execute("DELETE FROM meta WHERE key = ?", ("refresh-error:" + credential_identity(provider, "access:" + access),))
         conn.commit()
     finally:
         conn.close()
@@ -180,7 +217,7 @@ def get_tokens(provider: str, identity: str) -> dict | None:
     conn = _connect()
     try:
         row = conn.execute(
-            """SELECT provider, identity, email, access, refresh, expires, source, id_token
+            """SELECT provider, identity, email, access, refresh, expires, source, id_token, user_id, auth_mode
                FROM accounts WHERE provider = ? AND identity = ?""",
             (provider, identity),
         ).fetchone()
@@ -197,6 +234,8 @@ def get_tokens(provider: str, identity: str) -> dict | None:
         "expires": row[5],
         "source": row[6],
         "id_token": row[7],
+        "user_id": row[8],
+        "auth_mode": row[9],
     }
 
 

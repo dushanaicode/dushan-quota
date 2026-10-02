@@ -99,7 +99,7 @@ def collect_accounts(home: Path | None = None, *, local_only: bool = False) -> l
         _from_store(lambda account: add(account, saved=True), stored)
         for account in collect_env_accounts():
             add(account)
-    with tokenstore.OPENAI_LOCK:
+    with tokenstore.OPENAI_LOCK, tokenstore.CLAUDE_LOCK:
         for account in accounts:
             tokenstore.adopt_latest(account)
         if not local_only:

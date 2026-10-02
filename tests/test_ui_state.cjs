@@ -668,6 +668,34 @@ async function main() {
   await resetWeb.resetAccount(summaryAccount,webResetButton);
   assert.deepEqual(resetCalls,[['/api/reset',{provider:'openai',identity:summaryAccount.identity,confirmed:true}]]);
   assert.equal(resetCalls.length,1,'An uncertain response never retries the mutation');
+
+  const transfer = context();
+  const transferSource = source.split('/* ---------- account import / export ---------- */')[1].split('/* ---------- add account')[0];
+  vm.runInContext(transferSource, transfer);
+  let exportClosed = false, downloadClicked = false;
+  transfer.get('exportModal').open = true;
+  transfer.get('exportModal').close = () => {exportClosed = true; transfer.get('exportModal').open = false;};
+  transfer.get('importModal').open = true;
+  transfer.get('importText').value = '[{"provider":"openai"}]';
+  const selectedBox = {checked:true,dataset:{index:'0'}};
+  transfer.document.querySelectorAll = selector => selector.includes('input[data-index]') ? [selectedBox] : [];
+  transfer.document.createElement = () => ({click(){downloadClicked=true;},remove(){}});
+  Object.assign(transfer, {
+    Blob: class {}, URL:{createObjectURL(){return 'blob:fixture';},revokeObjectURL(){}},
+    toast(){}, refreshQuota(){},
+    api:async url => url === '/api/accounts/export'
+      ? [{provider:'openai',identity:'A',export_warning:'共享续期链，请停止源机刷新',credential_error:'需要重新授权'}]
+      : {count:0,added:0,updated:0,skipped_stale:[{provider:'openai',identity:'A'}],credential_errors:[],message:'本地已有更新的凭据，已保留，未覆盖'},
+  });
+  vm.runInContext("exportItems = [{provider:'openai',identity:'A'}];", transfer);
+  await transfer.submitExport();
+  assert(downloadClicked,'Credential backup still downloads when renewal needs attention');
+  assert(!exportClosed,'The transfer warning stays visible after the download');
+  assert(transfer.get('exportModal').open);
+  assert(transfer.get('exportMsg').textContent.includes('共享续期链'));
+  assert(transfer.get('exportMsg').textContent.includes('重新授权'));
+  await transfer.submitImport();
+  assert(transfer.get('importMsg').textContent.includes('已保留'));
   console.log('UI checks passed: quota, credits, confirmed resets, token/cost modes, persistence, account filters, dates, and Claude OAuth.');
 }
 

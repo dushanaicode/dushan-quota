@@ -30,7 +30,9 @@ def fetch(account: Account) -> QuotaResult:
         return QuotaResult(account=account, ok=False, title="Grok", error="缺少 access token")
     status, _, billing = request_json(BILLING_URL, headers=_headers(access))
     if status == 401:
-        access = tokenstore.refresh_account(account) or access
+        access = tokenstore.refresh_account(account)
+        if not access:
+            return QuotaResult(account=account, ok=False, title="Grok", error="登录凭据已失效，请重新登录")
         status, _, billing = request_json(BILLING_URL, headers=_headers(access))
     if status != 200 or not isinstance(billing, dict):
         return QuotaResult(account=account, ok=False, title="Grok", error=f"billing {status}")

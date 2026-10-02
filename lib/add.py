@@ -11,6 +11,7 @@ from .oauth_openai import matching_id_token, token_account_id
 from .store import upsert_account
 
 PROVIDERS = list(AUTH_RULES.keys())
+OAUTH_TRANSFER_WARNING = "OAuth 文件是凭据快照，与源机共享续期链；源机继续续期可能使副本失效。迁移请先停止源机 Quota 和相关客户端的刷新；多机使用请分别登录。"
 
 
 def add_interactive() -> None:
@@ -127,14 +128,14 @@ def add_interactive() -> None:
         if raw:
             try:
                 result = add_raw_json(provider, raw)
-                print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {result['updated']}）")
+                print(result["message"])
             except ValueError as error:
                 print(error)
         return
 
 
 def _save_oauth_account(provider: str, label: str, result: dict):
-    with tokenstore.OPENAI_LOCK if provider == "openai" else nullcontext():
+    with tokenstore.OPENAI_LOCK if provider == "openai" else tokenstore.CLAUDE_LOCK if provider == "claude" else nullcontext():
         return _store_oauth_account(provider, label, result)
 
 
@@ -146,6 +147,7 @@ def _store_oauth_account(provider: str, label: str, result: dict):
     record = {
         "provider": provider,
         "auth_mode": "oauth",
+        "api_key": "",
         "label": label,
         "identity": user_id or profile.get("email") or credential_identity(provider, credential),
         "email": profile.get("email") or "",
@@ -189,10 +191,10 @@ def _store_oauth_account(provider: str, label: str, result: dict):
         plan=record.get("plan") or "", secret={**record, "account_id": record["user_id"]},
     )
     agentdb.sync_accounts([account])
+    tokenstore.record(account, record["access"], record["refresh"], result.get("expires_in"))
     if provider == "claude" and user_id and record["access"]:
         agentdb.set_claude_identity(record["access"], {"user_id": user_id, "email": record["email"], "name": record["name"]})
     if provider == "openai":
-        tokenstore.record(account, record["access"], record["refresh"], result.get("expires_in"))
         tokenstore._write_back(account, record["access"], record["refresh"], result.get("expires_in"), record["id_token"])
     return record
 
@@ -222,7 +224,7 @@ def add_json(path: str) -> None:
         return
     try:
         result = add_raw_json("", json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data)
-        print(f"已导入 {result['count']} 个账号（新增 {result['added']}，更新 {result['updated']}）")
+        print(result["message"])
     except ValueError as error:
         print(error)
 
@@ -305,11 +307,59 @@ def add_raw_json(provider: str, raw: str) -> dict:
             "expiry": expiry,
             "variant": item.get("variant") or current_provider,
         }
+        try:
+            credential_expiry = agentdb._secret_expiry(record)
+        except (ValueError, OverflowError):
+            raise ValueError(f"{prefix}的凭据过期时间无效") from None
+        if credential_expiry > 2**63 - 1:
+            raise ValueError(f"{prefix}的凭据过期时间超出支持范围")
         records.append(record)
-    existing = {(item.get("provider"), item.get("identity")) for item in store.list_stored()}
-    updated = len(seen & existing)
-    store.upsert_accounts(records)
-    return {"count": len(records), "added": len(records) - updated, "updated": updated}
+    with tokenstore.OPENAI_LOCK, tokenstore.CLAUDE_LOCK:
+        existing = {(item["provider"], item["identity"]): item for item in store.list_stored()}
+        accepted, skipped = [], []
+        for record in records:
+            key = (record["provider"], record["identity"])
+            current = existing.get(key)
+            if current and current.get("user_id") and record["user_id"] and current["user_id"] != record["user_id"]:
+                raise ValueError("账号身份与已有记录不一致，请使用不同的 identity 添加，原账号未修改")
+            if record["auth_mode"] != "api_key" and (record["access"] or record["refresh"]):
+                cached = agentdb.get_tokens(*key)
+                if cached and cached["user_id"] and record["user_id"] and cached["user_id"] != record["user_id"]:
+                    raise ValueError("账号身份与中央库记录不一致，原账号未修改")
+                candidates = [item for item in (current, cached) if item and item.get("auth_mode") != "api_key" and (item.get("access") or item.get("refresh"))
+                              and not tokenstore.credentials_are_dead(record["provider"], item)]
+                if candidates and (tokenstore.credentials_are_dead(record["provider"], record)
+                                   or max(agentdb._secret_expiry(item) for item in candidates) > agentdb._secret_expiry(record)):
+                    skipped.append({"provider": key[0], "identity": key[1]})
+                    continue
+            accepted.append(record)
+        updated = sum((record["provider"], record["identity"]) in existing for record in accepted)
+        errors = []
+        if accepted:
+            store.upsert_accounts(accepted)
+            accounts = [Account(
+                provider=record["provider"], identity=record["identity"], label=record["label"], source=record["source"],
+                auth_mode=record["auth_mode"], email=record["email"], name=record["name"], user_id=record["user_id"],
+                plan=record["plan"], secret={**record, "account_id": record["user_id"]},
+            ) for record in accepted]
+            agentdb.sync_accounts(accounts)
+            for account in accounts:
+                if account.auth_mode != "api_key" and (account.secret["access"] or account.secret["refresh"]):
+                    agentdb.update_tokens(account.provider, account.identity, account.secret["access"], account.secret["refresh"],
+                                          None, account.secret["id_token"], source=account.source, verified=False,
+                                          expiry=agentdb._secret_expiry(account.secret))
+                    try:
+                        tokenstore.ensure_fresh(account)
+                    except tokenstore.RefreshError as error:
+                        errors.append({"provider": account.provider, "identity": account.identity,
+                                       "error": str(error), "reauth_required": error.reauth})
+        message = f"已导入 {len(accepted)} 个账号：新增 {len(accepted) - updated}，更新 {updated}"
+        if skipped:
+            message += f"；本地已有更新的凭据，已保留 {len(skipped)} 个账号，未覆盖"
+        if errors:
+            message += f"；{len(errors)} 个账号续期检查未通过，请查看账号卡片并按提示处理"
+        return {"count": len(accepted), "added": len(accepted) - updated, "updated": updated,
+                "skipped_stale": skipped, "credential_errors": errors, "message": message}
 
 
 def export_accounts(selection: list) -> list[dict]:
@@ -328,19 +378,30 @@ def export_accounts(selection: list) -> list[dict]:
         raise ValueError("所选账号已不存在，请重新打开导出列表")
     records = []
     for key in dict.fromkeys(keys):
-        account = accounts[key]
-        record = {
-            field: getattr(account, field)
-            for field in ("provider", "identity", "label", "auth_mode", "email", "name", "user_id", "plan")
-        }
-        record.update({
-            field: account.secret.get(field) or ""
-            for field in ("api_key", "refresh", "id_token")
-        })
-        record["access"] = account.secret.get("access") or record["api_key"]
-        record["variant"] = account.secret.get("variant") or account.provider
-        record["expiry"] = agentdb._secret_expiry(account.secret)
-        records.append(record)
+        with tokenstore.OPENAI_LOCK, tokenstore.CLAUDE_LOCK:
+            account = accounts[key]
+            credential_error = ""
+            if account.auth_mode != "api_key" and (account.secret.get("access") or account.secret.get("refresh")):
+                try:
+                    tokenstore.ensure_fresh(account)
+                except tokenstore.RefreshError as error:
+                    credential_error = str(error)
+            record = {
+                field: getattr(account, field)
+                for field in ("provider", "identity", "label", "auth_mode", "email", "name", "user_id", "plan")
+            }
+            record.update({
+                field: account.secret.get(field) or ""
+                for field in ("api_key", "refresh", "id_token")
+            })
+            record["access"] = account.secret.get("access") or record["api_key"]
+            record["variant"] = account.secret.get("variant") or account.provider
+            record["expiry"] = agentdb._secret_expiry(account.secret)
+            if account.provider in {"openai", "claude"} and account.auth_mode != "api_key" and account.secret.get("refresh"):
+                record["export_warning"] = OAUTH_TRANSFER_WARNING
+            if credential_error:
+                record["credential_error"] = credential_error
+            records.append(record)
     return records
 
 

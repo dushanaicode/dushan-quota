@@ -49,7 +49,7 @@ def fetch(account: Account) -> QuotaResult:
         start, end, status, _ = _subscription_status(account, "", None, id_token)
         plan = _plan(_auth_claims(id_token).get("chatgpt_plan_type") or account.plan, account.plan)
         return QuotaResult(account=account, ok=False, title="OpenAI", error=str(error),
-                           plan=plan, sub_start=start, sub_end=end, sub_status=status)
+                           plan=plan, sub_start=start, sub_end=end, sub_status=status, retry_at=error.retry_at)
 
 
 def _fetch(account: Account) -> QuotaResult:
@@ -76,6 +76,10 @@ def _fetch(account: Account) -> QuotaResult:
         id_token = str(account.secret.get("id_token") or id_token)
         token_plan_type = _auth_claims(id_token).get("chatgpt_plan_type") or token_plan_type
         status, text, data = _usage(account, access)
+        if status == 401:
+            error = tokenstore.RefreshError("access_rejected", "新凭据仍被拒绝（HTTP 401），请重新授权此账号", reauth=True)
+            tokenstore.remember_refresh_error(account, error)
+            raise error
     plan_hint = data.get("plan_type") if status == 200 and isinstance(data, dict) else None
     sub_start, sub_end, sub_status, subscription_plan = _subscription_status(
         account,
