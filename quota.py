@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import shlex
 import shutil
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import time
 import unicodedata
+from importlib import metadata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -23,7 +25,6 @@ PYPI_URL = "https://pypi.org/project/dushan-quota/"
 WEB_URL = "http://127.0.0.1:18765/"
 PIPX_VERSION = "1.8.0"
 PIP_VERSION = "25.2"
-UPGRADE_COMMAND = f'pipx upgrade --index-url https://pypi.org/simple --pip-args="pip=={PIP_VERSION}" dushan-quota'
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -163,8 +164,16 @@ def _print_banner(version: str, output=print, *, color: bool | None = None, widt
     output(_panel_row("发布页", GITHUB_URL + "/releases", width, color))
     output(_panel_row("PyPI", PYPI_URL, width, color))
     output(_panel_row("Web UI", _web_url(), width, color))
-    output(_panel_row("工具链", f"pipx {PIPX_VERSION} · pip {PIP_VERSION}", width, color))
-    mode = "本地源码" if (ROOT / ".git").exists() else "已安装发行版"
+    method = _install_method()
+    toolchain = {
+        "editable": "git · editable 安装",
+        "source": "git · 本地源码",
+        "uv": "uv tool",
+        "pipx": f"pipx {PIPX_VERSION} · pip {PIP_VERSION}",
+        "pip": "pip · 当前 Python",
+    }[method]
+    output(_panel_row("工具链", toolchain, width, color))
+    mode = "本地源码" if method in {"editable", "source"} else "已安装发行版"
     title = os.environ.get("DUSHAN_QUOTA_WINDOW_TITLE", "").strip()
     output(_panel_row("运行方式", f"{title} · {mode}" if title else mode, width, color))
     output(border("╰" + "─" * (width - 2) + "╯"))
@@ -300,7 +309,36 @@ def _startup_update(
         output("请输入 1、2 或 3。")
 
 
+def _install_method() -> str:
+    try:
+        direct = metadata.distribution("dushan-quota").read_text("direct_url.json")
+    except metadata.PackageNotFoundError:
+        return "source"
+    if direct and json.loads(direct).get("dir_info", {}).get("editable"):
+        return "editable"
+    if (ROOT / ".git").exists():
+        return "source"
+    prefix = Path(sys.prefix)
+    if (prefix / "uv-receipt.toml").is_file():
+        return "uv"
+    if (prefix / "pipx_metadata.json").is_file():
+        return "pipx"
+    return "pip"
+
+
+def _upgrade_command() -> list[str]:
+    method = _install_method()
+    if method in {"editable", "source"}:
+        return ["git", "-C", str(ROOT), "pull", "--ff-only"]
+    if method == "uv":
+        return ["uv", "tool", "upgrade", "dushan-quota"]
+    if method == "pipx":
+        return ["pipx", "upgrade", "--index-url", "https://pypi.org/simple", f"--pip-args=pip=={PIP_VERSION}", "dushan-quota"]
+    return [sys.executable, "-m", "pip", "install", "--upgrade", "dushan-quota"]
+
+
 def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
+    command = _upgrade_command()
     if wait_pid is not None:
         from lib.snapshot import _process_exists
 
@@ -310,7 +348,7 @@ def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
                 _status("warn", "升级", "等待旧启动器退出超时，未执行升级，请重新运行 quota。", output)
                 return
             time.sleep(0.1)
-    elif sys.platform == "win32" and Path(sys.argv[0]).name.lower() == "quota":
+    elif sys.platform == "win32" and Path(sys.argv[0]).name.lower() == "quota" and command[0] != "git":
         # Release quota.exe before pip replaces it. The worker needs its own
         # console: the original shell resumes reading as soon as quota.exe exits.
         try:
@@ -322,14 +360,22 @@ def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
         else:
             _status("info", "升级", "已打开独立升级窗口，请在新窗口查看进度；此终端可继续使用。", output)
         return
-    _status("info", "升级", "正在执行 pipx upgrade，完成后请重启已有悬浮窗。", output)
+    _status("info", "升级", f"正在执行 {command[0]} 升级，完成后请重启已有悬浮窗。", output)
     sys.stdout.flush()
     try:
-        subprocess.run(shlex.split(UPGRADE_COMMAND), check=True, shell=False)
+        if command[0] == "git":
+            status = subprocess.run(
+                ["git", "-C", str(ROOT), "status", "--porcelain"],
+                check=True, shell=False, stdout=subprocess.PIPE,
+            )
+            if status.stdout:
+                _status("warn", "升级", "源码有本地改动，请先处理后再升级；未执行 git pull。", output)
+                return
+        subprocess.run(command, check=True, shell=False)
     except FileNotFoundError:
-        _status("warn", "升级", "未找到 pipx，请先安装 pipx 并确认它位于 PATH 中。", output)
+        _status("warn", "升级", f"未找到 {command[0]}，请确认已安装且命令路径可用。", output)
     except subprocess.CalledProcessError as error:
-        _status("warn", "升级", f"升级失败（退出码 {error.returncode}），请查看上方 pipx 输出。", output)
+        _status("warn", "升级", f"升级失败（退出码 {error.returncode}），请查看上方 {command[0]} 输出。", output)
     except OSError as error:
         _status("warn", "升级", f"无法执行升级：{error}", output)
     except KeyboardInterrupt:
@@ -339,11 +385,15 @@ def _run_upgrade(output=print, *, wait_pid: int | None = None) -> None:
 
 
 def _print_upgrade_command(output=print) -> None:
+    command = _upgrade_command()
+    text = subprocess.list2cmdline(command) if sys.platform == "win32" else shlex.join(command)
+    if sys.platform == "win32" and command[0] == sys.executable:
+        text = "& " + text
     output("")
     _status("info", "升级命令", "", output)
-    output("    " + _paint(UPGRADE_COMMAND, _CYAN, _color_enabled()))
-    if (ROOT / ".git").exists():
-        _status("muted", "源码模式", "此命令升级已安装的 quota；本地源码保持独立。", output)
+    output("    " + _paint(text, _CYAN, _color_enabled()))
+    if command[0] == "git":
+        _status("muted", "源码模式", "editable / 本地源码通过 git pull --ff-only 升级；有本地改动时停止。", output)
     output("")
 
 

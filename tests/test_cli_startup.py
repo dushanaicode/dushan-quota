@@ -11,6 +11,11 @@ import quota
 
 
 class CliStartupTests(unittest.TestCase):
+    def setUp(self):
+        method = patch.object(quota, "_install_method", return_value="pipx")
+        method.start()
+        self.addCleanup(method.stop)
+
     def test_banner_and_current_release_status_are_shown(self):
         lines = []
 
@@ -61,7 +66,7 @@ class CliStartupTests(unittest.TestCase):
                 self.assertIn("当前 v0.2.0", text)
                 self.assertIn("最新版本", text)
                 self.assertIn("http://127.0.0.1:18766/", text)
-                self.assertIn(quota.UPGRADE_COMMAND, text)
+                self.assertIn("pipx upgrade", text)
                 self.assertIn("悬浮窗已在运行", text)
                 launch.assert_called_once()
 
@@ -71,7 +76,7 @@ class CliStartupTests(unittest.TestCase):
                                         output=lines.append, interactive=False)
         self.assertTrue(proceed)
         self.assertIn("查询失败", "\n".join(lines))
-        self.assertIn(quota.UPGRADE_COMMAND, "\n".join(lines))
+        self.assertIn("pipx upgrade", "\n".join(lines))
 
     def test_current_and_latest_versions_are_shown_separately(self):
         lines = []
@@ -81,7 +86,7 @@ class CliStartupTests(unittest.TestCase):
         text = "\n".join(lines)
         self.assertIn("当前 v0.3.0", text)
         self.assertIn("v0.2.0", text)
-        self.assertIn(quota.UPGRADE_COMMAND, text)
+        self.assertIn("pipx upgrade", text)
 
     def test_narrow_banner_keeps_borders_aligned_and_does_not_truncate_links(self):
         lines = []
@@ -107,7 +112,7 @@ class CliStartupTests(unittest.TestCase):
         )
 
         self.assertFalse(proceed)
-        self.assertIn(quota.UPGRADE_COMMAND, "\n".join(lines))
+        self.assertIn("pipx upgrade", "\n".join(lines))
         run.assert_called_once_with(
             ["pipx", "upgrade", "--index-url", "https://pypi.org/simple", "--pip-args=pip==25.2", "dushan-quota"],
             check=True,

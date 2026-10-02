@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.7.6-C3B191" alt="Release v0.7.6">
+  <img src="https://img.shields.io/badge/Release-v0.7.7-C3B191" alt="Release v0.7.7">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -51,9 +51,9 @@ pipx install --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-q
 quota
 ```
 
-`quota`、`quota float` 和本地 `quota-t` 都会显示彩色启动页，包含当前版本、最新 Release、GitHub 地址、Web 地址和完整升级命令。发现新版本时，选择 `[1] 升级` 会自动执行下方的 pipx 命令并显示进度。Windows 安装版会打开独立升级窗口，原终端立即恢复使用；新窗口结束后明确提示按 Enter 关闭。macOS 和本地源码运行仍在当前终端升级。完成后重新运行 `quota`，已有悬浮窗需退出重开。也可以本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。`quota-t` 使用本地源码，此操作更新已安装的 `quota` 发行版。
+`quota`、`quota float` 和本地 `quota-t` 都会显示彩色启动页，包含当前版本、最新 Release、GitHub 地址、Web 地址、实际安装方式和完整升级命令。发现新版本时，选择 `[1] 升级` 会按安装方式执行：uv tool 使用 `uv tool upgrade dushan-quota`，pipx 使用下方命令，普通 pip 安装使用当前 Python 执行 `-m pip install --upgrade dushan-quota`；editable 安装和本地源码在对应仓库执行 `git pull --ff-only`，有本地改动时停止，保留改动。Windows 包安装会打开独立升级窗口，原终端立即恢复使用；新窗口结束后提示按 Enter 关闭。macOS 和源码升级在当前终端执行。完成后重新运行 `quota`，已有悬浮窗需退出重开。也可以本次跳过，或者永久跳过这个版本；以后出现更高版本仍会提醒。
 
-升级也使用同一份稳定约束：
+pipx 安装的手动升级继续使用同一份稳定约束：
 
 ```powershell
 pipx upgrade --index-url https://pypi.org/simple --pip-args="pip==25.2" dushan-quota
@@ -253,7 +253,7 @@ Web 顶栏点击「导出」，可全选、按 Provider 分组选中，或逐个
 
 ## 升级与开发
 
-普通用户使用“快速安装”里的稳定升级命令即可。
+启动时选择 `[1] 升级` 即可按安装方式更新，也可以手动执行启动页显示的命令。旧版本若仍误用 pipx，请先按实际安装方式手动升级一次；editable / 源码安装在源码目录执行 `git pull --ff-only`。
 
 想改源码的话，克隆仓库、装好依赖，再跑测试就行：
 
