@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -394,7 +395,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
         tokenstore._write_codex_auth(account, account.secret["access"], "rotated", 3600)
         self.assertEqual(path.read_bytes(), before)
 
-    def test_codex_running_daemon_notice_reaches_both_provision_modes(self):
+    def test_codex_running_daemon_restarts_after_both_provision_modes_are_written(self):
         pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
         pid_file.parent.mkdir(parents=True)
         pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
@@ -402,25 +403,39 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
         api_key = Account(provider="openai", label="OpenAI", source="dushan-quota",
                           identity="test-key", auth_mode="api_key", secret={"api_key": "sk-test-key"})
         for account in (oauth, api_key):
-            with self.subTest(mode=account.auth_mode), patch("sys.platform", "darwin"), patch("os.kill") as kill:
+            def restart(command, **kwargs):
+                written = json.loads(provision._codex_auth_path().read_text(encoding="utf-8"))
+                if account.auth_mode == "api_key":
+                    self.assertEqual(written["OPENAI_API_KEY"], account.secret["api_key"])
+                else:
+                    self.assertEqual(written["tokens"]["account_id"], account.user_id)
+                self.assertEqual(kwargs["env"]["CODEX_HOME"], str(pid_file.parent.parent))
+                return subprocess.CompletedProcess(command, 0, b'{"status":"restarted","pid":999}')
+
+            with self.subTest(mode=account.auth_mode), patch("sys.platform", "darwin"), patch("os.kill") as kill, patch(
+                "subprocess.run", side_effect=restart
+            ) as run, patch.dict(os.environ, {"CODEX_HOME": str(self.home / "other-codex")}):
                 result = provision.provision(account, "codex", confirmed=True)
             self.assertTrue(result["ok"])
-            self.assertIn("Codex 服务正在运行", result["message"])
-            self.assertIn("codex app-server daemon restart", result["message"])
-            self.assertIn("旧账号可能被回写", result["message"])
+            self.assertIn("已重启 Codex 服务", result["message"])
             self.assertNotIn("已切换", result["message"])
             kill.assert_called_once_with(12345, 0)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.args[0], ["codex", "app-server", "daemon", "restart"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 15)
+            self.assertFalse(run.call_args.kwargs["shell"])
 
     def test_codex_daemon_detection_never_signals_other_platforms(self):
         pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
         pid_file.parent.mkdir(parents=True)
         pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
         for platform in ("win32", "linux"):
-            with self.subTest(platform=platform), patch("sys.platform", platform), patch("os.kill") as kill:
+            with self.subTest(platform=platform), patch("sys.platform", platform), patch("os.kill") as kill, patch("subprocess.run") as run:
                 result = provision.provision(self.account("A"), "codex", confirmed=True)
             self.assertTrue(result["ok"])
             self.assertNotIn("Codex 服务正在运行", result["message"])
             kill.assert_not_called()
+            run.assert_not_called()
 
     def test_codex_daemon_missing_or_invalid_pid_does_not_fail_provision(self):
         pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
@@ -429,40 +444,87 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
                            b'{"pid":"12345"}', b'{"pid":1.5}', b'{"pid":0}', b'{"pid":-1}',
                            b'{"pid":9223372036854775808}')
         for record in invalid_records:
-            with self.subTest(record=record), patch("sys.platform", "darwin"), patch("os.kill") as kill:
+            with self.subTest(record=record), patch("sys.platform", "darwin"), patch("os.kill") as kill, patch("subprocess.run") as run:
                 if record is not None:
                     pid_file.write_bytes(record)
                 result = provision.provision(self.account("A"), "codex", confirmed=True)
             self.assertTrue(result["ok"])
             self.assertNotIn("Codex 服务正在运行", result["message"])
             kill.assert_not_called()
+            run.assert_not_called()
 
     def test_codex_stale_daemon_pid_does_not_claim_service_is_running(self):
         pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
         pid_file.parent.mkdir(parents=True)
         pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
-        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=ProcessLookupError):
+        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=ProcessLookupError), patch("subprocess.run") as run:
             result = provision.provision(self.account("A"), "codex", confirmed=True)
         self.assertTrue(result["ok"])
         self.assertNotIn("Codex 服务正在运行", result["message"])
+        run.assert_not_called()
 
-    def test_codex_daemon_permission_error_still_warns_about_running_service(self):
+    def test_codex_daemon_permission_error_still_attempts_cli_restart(self):
         pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
         pid_file.parent.mkdir(parents=True)
         pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
-        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=PermissionError):
+        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=PermissionError), patch(
+            "subprocess.run", return_value=subprocess.CompletedProcess([], 0, b'{"status":"restarted"}')
+        ) as run:
             result = provision.provision(self.account("A"), "codex", confirmed=True)
         self.assertTrue(result["ok"])
-        self.assertIn("Codex 服务正在运行", result["message"])
+        self.assertIn("已重启 Codex 服务", result["message"])
+        run.assert_called_once()
 
     def test_codex_unconfirmed_switch_preserves_auth_and_does_not_check_daemon(self):
         path = self.activate(self.account("B"))
         before = path.read_bytes()
-        with patch("sys.platform", "darwin"), patch("os.kill") as kill:
+        pid_file = path.parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir()
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        with patch("sys.platform", "darwin"), patch("os.kill") as kill, patch("subprocess.run") as run:
             result = provision.provision(self.account("A"), "codex", confirmed=False)
         self.assertTrue(result["needs_confirm"])
         self.assertEqual(path.read_bytes(), before)
         kill.assert_not_called()
+        run.assert_not_called()
+
+    def test_codex_restart_failures_preserve_written_account_and_give_manual_command(self):
+        path = provision._codex_auth_path()
+        pid_file = path.parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        failures = [FileNotFoundError("codex"), PermissionError("codex"),
+                    subprocess.TimeoutExpired(["codex"], 15),
+                    subprocess.CompletedProcess([], 1, b'{"status":"restarted"}'),
+                    subprocess.CompletedProcess([], 0, b'{"status":"stopped","message":"restarted"}'),
+                    subprocess.CompletedProcess([], 0, b'{"status":"started"}'),
+                    subprocess.CompletedProcess([], 0, b'not-json-secret-echo'),
+                    subprocess.CompletedProcess([], 0, b'["restarted"]'),
+                    subprocess.CompletedProcess([], 0, b'\xff')]
+        for outcome in failures:
+            with self.subTest(outcome=outcome), patch("sys.platform", "darwin"), patch("os.kill"), patch(
+                "subprocess.run", side_effect=[outcome]
+            ) as run:
+                result = provision.provision(self.account("A"), "codex", confirmed=True)
+            self.assertTrue(result["ok"])
+            self.assertIn("重启失败", result["message"])
+            self.assertIn("codex app-server daemon restart", result["message"])
+            self.assertNotIn("已重启", result["message"])
+            self.assertNotIn("secret-echo", result["message"])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["tokens"]["account_id"], "A")
+            run.assert_called_once()
+
+    def test_codex_background_token_refresh_never_restarts_daemon(self):
+        account = self.account("A")
+        path = self.activate(account)
+        pid_file = path.parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir()
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        with patch("sys.platform", "darwin"), patch("os.kill") as kill, patch("subprocess.run") as run:
+            tokenstore._write_codex_auth(account, account.secret["access"], "rotated", 3600)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["tokens"]["refresh_token"], "rotated")
+        kill.assert_not_called()
+        run.assert_not_called()
 
     def test_provision_and_refresh_reject_another_accounts_id_token(self):
         mixed = self.account("A", id_identity="B")

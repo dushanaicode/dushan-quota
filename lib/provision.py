@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 from contextlib import nullcontext
@@ -530,7 +531,7 @@ def _codex_auth_path() -> Path:
     return Path.home() / ".codex" / "auth.json"
 
 
-def _codex_daemon_notice(auth_path: Path) -> str:
+def _restart_codex_daemon(auth_path: Path) -> str:
     # Windows 的 os.kill(pid, 0) 会终止进程，不能用于存活探测。
     if sys.platform != "darwin":
         return ""
@@ -547,10 +548,19 @@ def _codex_daemon_notice(auth_path: Path) -> str:
         pass  # 进程存在，但当前用户无权发送信号。
     except OSError:
         return ""
-    return (
-        "；检测到 Codex 服务正在运行，请重启 Codex 服务（codex app-server daemon restart）"
-        "并重新打开 Codex App，否则旧账号可能被回写"
-    )
+    try:
+        result = subprocess.run(
+            ["codex", "app-server", "daemon", "restart"],
+            shell=False, stdin=subprocess.DEVNULL, capture_output=True, timeout=15,
+            env={**os.environ, "CODEX_HOME": str(auth_path.parent)},
+        )
+        if result.returncode == 0:
+            payload = json.loads(result.stdout)
+            if isinstance(payload, dict) and payload.get("status") == "restarted":
+                return "；已重启 Codex 服务，请重新打开 Codex App 确认新账号"
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, UnicodeError):
+        pass
+    return "；Codex 服务重启失败，请手动执行 codex app-server daemon restart"
 
 
 def _claude_creds_path() -> Path:
@@ -597,7 +607,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         agentdb.record_provision(account.provider, account.identity, "codex", f"apiKey backup={backup}")
-        return {"ok": True, "message": "已写入 Codex（API Key 模式）" + _codex_daemon_notice(path)}
+        return {"ok": True, "message": "已写入 Codex（API Key 模式）" + _restart_codex_daemon(path)}
 
     access = account.secret.get("access") or ""
     if not access:
@@ -639,7 +649,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agentdb.record_provision(account.provider, account.identity, "codex", f"oauth backup={backup}")
-    return {"ok": True, "message": f"已写入 Codex ({account.email or account_id})" + _codex_daemon_notice(path)}
+    return {"ok": True, "message": f"已写入 Codex ({account.email or account_id})" + _restart_codex_daemon(path)}
 
 
 # ---------------- Claude Code ----------------

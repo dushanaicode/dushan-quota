@@ -54,3 +54,14 @@ jobs:
       - name: Test editable menu upgrade with real uv and Git
         if: github.event_name == 'workflow_dispatch'
         run: ${{ matrix.python }} -B tests/smoke_uv_upgrade.py
+      - name: Install Codex for isolated daemon smoke test
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        env:
+          NPM_CONFIG_CACHE: ${{ github.workspace }}/Temp/tests/npm-cache
+          NPM_CONFIG_UPDATE_NOTIFIER: "false"
+        run: |
+          npm install --prefix Temp/codex-cli --ignore-scripts --no-audit --no-fund @openai/codex@0.160.0
+          ${{ matrix.python }} -m pip install --no-compile websockets==17.0.1
+      - name: Test macOS account writes with real Codex daemon
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        run: ${{ matrix.python }} -B tests/smoke_codex_daemon.py
