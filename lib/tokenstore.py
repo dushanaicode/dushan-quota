@@ -494,7 +494,7 @@ def _write_codex_auth(account, access: str, refresh: str, expires_in, id_token: 
         return
     resolved_id_token = matching_id_token(access, id_token or account.secret.get("id_token") or "", account_id) or access
 
-    data["auth_mode"] = None
+    data["auth_mode"] = "chatgpt"
     data["OPENAI_API_KEY"] = None
     data.pop("personal_access_token", None)
     data["tokens"] = {

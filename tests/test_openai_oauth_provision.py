@@ -1,18 +1,18 @@
 import base64
+import io
 import json
 import os
-import io
 import tempfile
-import time
 import threading
+import time
 import unittest
 import urllib.error
-from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib import agentdb, discover, models, oauth_openai, provision, store, tokenstore, web
+from lib import agentdb, discover, oauth_openai, provision, store, tokenstore, web
 from lib.models import Account
 from lib.providers import openai
 
@@ -131,6 +131,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
             self.assertTrue(result.get("ok"))
 
         written = json.loads((codex_dir / "auth.json").read_text(encoding="utf-8"))
+        self.assertEqual(written["auth_mode"], "chatgpt")
         self.assertIsNone(written.get("OPENAI_API_KEY"))
         self.assertEqual(written.get("type"), "codex")
         self.assertIn("tokens", written)
@@ -161,7 +162,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
 
         written = json.loads((codex_dir / "auth.json").read_text(encoding="utf-8"))
         self.assertEqual(written.get("OPENAI_API_KEY"), "sk-test-secret-key")
-        self.assertEqual(written.get("auth_mode"), "apiKey")
+        self.assertEqual(written.get("auth_mode"), "apikey")
         self.assertEqual(written.get("type"), "codex")
         self.assertIsNone(written.get("tokens"))
 
@@ -197,6 +198,7 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
 
             # Check write-back to ~/.codex/auth.json
             written = json.loads(auth_file.read_text(encoding="utf-8"))
+            self.assertEqual(written["auth_mode"], "chatgpt")
             self.assertEqual(written["tokens"]["access_token"], "new-at-123")
             self.assertEqual(written["tokens"]["refresh_token"], "new-rt-456")
             self.assertEqual(written["tokens"]["id_token"], new_id_jwt)
@@ -386,11 +388,81 @@ class TestOpenAIOAuthProvision(unittest.TestCase):
         account = self.account("A")
         path = self.activate(account)
         data = json.loads(path.read_text(encoding="utf-8"))
-        data.update(auth_mode="apiKey", OPENAI_API_KEY="mock-api-key")
+        data.update(auth_mode="apikey", OPENAI_API_KEY="mock-api-key")
         path.write_text(json.dumps(data), encoding="utf-8")
         before = path.read_bytes()
         tokenstore._write_codex_auth(account, account.secret["access"], "rotated", 3600)
         self.assertEqual(path.read_bytes(), before)
+
+    def test_codex_running_daemon_notice_reaches_both_provision_modes(self):
+        pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        oauth = self.account("A")
+        api_key = Account(provider="openai", label="OpenAI", source="dushan-quota",
+                          identity="test-key", auth_mode="api_key", secret={"api_key": "sk-test-key"})
+        for account in (oauth, api_key):
+            with self.subTest(mode=account.auth_mode), patch("sys.platform", "darwin"), patch("os.kill") as kill:
+                result = provision.provision(account, "codex", confirmed=True)
+            self.assertTrue(result["ok"])
+            self.assertIn("Codex 服务正在运行", result["message"])
+            self.assertIn("codex app-server daemon restart", result["message"])
+            self.assertIn("旧账号可能被回写", result["message"])
+            self.assertNotIn("已切换", result["message"])
+            kill.assert_called_once_with(12345, 0)
+
+    def test_codex_daemon_detection_never_signals_other_platforms(self):
+        pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        for platform in ("win32", "linux"):
+            with self.subTest(platform=platform), patch("sys.platform", platform), patch("os.kill") as kill:
+                result = provision.provision(self.account("A"), "codex", confirmed=True)
+            self.assertTrue(result["ok"])
+            self.assertNotIn("Codex 服务正在运行", result["message"])
+            kill.assert_not_called()
+
+    def test_codex_daemon_missing_or_invalid_pid_does_not_fail_provision(self):
+        pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        invalid_records = (None, b"{", b"\xff", b"[]", b"null", b"{}", b'{"pid":true}',
+                           b'{"pid":"12345"}', b'{"pid":1.5}', b'{"pid":0}', b'{"pid":-1}',
+                           b'{"pid":9223372036854775808}')
+        for record in invalid_records:
+            with self.subTest(record=record), patch("sys.platform", "darwin"), patch("os.kill") as kill:
+                if record is not None:
+                    pid_file.write_bytes(record)
+                result = provision.provision(self.account("A"), "codex", confirmed=True)
+            self.assertTrue(result["ok"])
+            self.assertNotIn("Codex 服务正在运行", result["message"])
+            kill.assert_not_called()
+
+    def test_codex_stale_daemon_pid_does_not_claim_service_is_running(self):
+        pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=ProcessLookupError):
+            result = provision.provision(self.account("A"), "codex", confirmed=True)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("Codex 服务正在运行", result["message"])
+
+    def test_codex_daemon_permission_error_still_warns_about_running_service(self):
+        pid_file = provision._codex_auth_path().parent / "app-server-daemon" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True)
+        pid_file.write_text(json.dumps({"pid": 12345}), encoding="utf-8")
+        with patch("sys.platform", "darwin"), patch("os.kill", side_effect=PermissionError):
+            result = provision.provision(self.account("A"), "codex", confirmed=True)
+        self.assertTrue(result["ok"])
+        self.assertIn("Codex 服务正在运行", result["message"])
+
+    def test_codex_unconfirmed_switch_preserves_auth_and_does_not_check_daemon(self):
+        path = self.activate(self.account("B"))
+        before = path.read_bytes()
+        with patch("sys.platform", "darwin"), patch("os.kill") as kill:
+            result = provision.provision(self.account("A"), "codex", confirmed=False)
+        self.assertTrue(result["needs_confirm"])
+        self.assertEqual(path.read_bytes(), before)
+        kill.assert_not_called()
 
     def test_provision_and_refresh_reject_another_accounts_id_token(self):
         mixed = self.account("A", id_identity="B")

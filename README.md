@@ -10,7 +10,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/Release-v0.7.5-C3B191" alt="Release v0.7.5">
+  <img src="https://img.shields.io/badge/Release-v0.7.6-C3B191" alt="Release v0.7.6">
   <img src="https://img.shields.io/badge/Local--first-No%20telemetry-10B981" alt="Local-first, no telemetry">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2563EB" alt="MIT License"></a>
 </p>
@@ -113,6 +113,7 @@ quota --version
 - **OpenAI 多账号恢复**：优先使用账号库中的新令牌，刷新时只同步仍使用该账号的 Codex / OpenCode。续期失败会显示原因，也可以在原卡片点击“重新授权”，保留账号和历史记录；登录其他账号时会拒绝覆盖。
 - **同来源多账号**：Claude Code、ChatGPT 和其他平台可重复使用本机导入、OAuth 等方式添加不同账号。按账号 ID 或完整凭据指纹区分，客户端切号后旧账号仍保存在本地库；后台续期只回写仍属于该账号的客户端。
 - **写入目标**：覆盖前先确认；多数文件或数据库目标会生成 `.quota-bak` 备份，并在本地记录写入历史。
+- **macOS Codex 切号**：检测到 Codex 常驻服务时，写入成功后会提示重启。先结束进行中的会话，退出 Codex App，执行 `codex app-server daemon restart`，再重新打开 App 确认账号；写入文件不代表运行中的客户端已切换。Quota 不会自动重启服务。
 - **轻量实现**：Python 3.10+、原生 HTML/CSS/JS，没有 Node、React、Tauri 或 Electron 构建链。
 
 ## 界面：Web 与悬浮窗

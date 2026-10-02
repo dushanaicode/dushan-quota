@@ -5,8 +5,10 @@
 
 import base64
 import json
+import os
 import shutil
 import sqlite3
+import sys
 import time
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -528,6 +530,29 @@ def _codex_auth_path() -> Path:
     return Path.home() / ".codex" / "auth.json"
 
 
+def _codex_daemon_notice(auth_path: Path) -> str:
+    # Windows 的 os.kill(pid, 0) 会终止进程，不能用于存活探测。
+    if sys.platform != "darwin":
+        return ""
+    try:
+        data = _load_json(auth_path.parent / "app-server-daemon" / "daemon.pid")
+    except (OSError, UnicodeError):
+        return ""
+    pid = data.get("pid")
+    if type(pid) is not int or not 0 < pid <= 2**31 - 1:
+        return ""
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        pass  # 进程存在，但当前用户无权发送信号。
+    except OSError:
+        return ""
+    return (
+        "；检测到 Codex 服务正在运行，请重启 Codex 服务（codex app-server daemon restart）"
+        "并重新打开 Codex App，否则旧账号可能被回写"
+    )
+
+
 def _claude_creds_path() -> Path:
     return Path.home() / ".claude" / ".credentials.json"
 
@@ -564,7 +589,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
                 "conflict": "Codex 已有凭据配置，覆盖为当前 API Key？",
             }
         backup = _backup(path)
-        data["auth_mode"] = "apiKey"
+        data["auth_mode"] = "apikey"
         data["OPENAI_API_KEY"] = api_key
         data["tokens"] = None
         data.pop("personal_access_token", None)
@@ -572,7 +597,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         agentdb.record_provision(account.provider, account.identity, "codex", f"apiKey backup={backup}")
-        return {"ok": True, "message": "已写入 Codex（API Key 模式）"}
+        return {"ok": True, "message": "已写入 Codex（API Key 模式）" + _codex_daemon_notice(path)}
 
     access = account.secret.get("access") or ""
     if not access:
@@ -600,7 +625,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
     id_token = matching_id_token(access, account.secret.get("id_token") or "", account_id) or access
 
     backup = _backup(path)
-    data["auth_mode"] = None
+    data["auth_mode"] = "chatgpt"
     data["OPENAI_API_KEY"] = None
     data.pop("personal_access_token", None)
     data["tokens"] = {
@@ -614,7 +639,7 @@ def _write_codex(account: Account, confirmed: bool) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     agentdb.record_provision(account.provider, account.identity, "codex", f"oauth backup={backup}")
-    return {"ok": True, "message": f"已切换并写入 Codex ({account.email or account_id})"}
+    return {"ok": True, "message": f"已写入 Codex ({account.email or account_id})" + _codex_daemon_notice(path)}
 
 
 # ---------------- Claude Code ----------------
