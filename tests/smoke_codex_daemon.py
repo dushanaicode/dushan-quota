@@ -6,7 +6,10 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 
@@ -49,8 +52,31 @@ def main():
         "remoteControlEnabled": False, "shutdownGraceSeconds": 1,
         "updater": {"autoUpdateEnabled": False},
     }), encoding="utf-8")
-    (state / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
     auth_path = state / "auth.json"
+    routing_accounts = []
+
+    class AccountBackend(BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            status = 200
+            if path == "/backend-api/wham/accounts/check":
+                identity = self.headers["chatgpt-account-id"]
+                routing_accounts.append(identity)
+                data = {"accounts": [{"id": identity, "workspace_backend_origin": "https://chatgpt.com",
+                                      "account_routing_override": "NO_CONSTRAINT"}], "default_account_id": identity}
+            elif path == "/backend-api/wham/config/bundle":
+                data = {"requirements_toml": {"enterprise_managed": []}}
+            else:
+                status, data = 404, {}
+            body = json.dumps(data).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
 
     def lifecycle(action):
         result = subprocess.run(["codex", "app-server", "daemon", action],
@@ -94,7 +120,17 @@ def main():
             connection.send(json.dumps({"method": "initialized"}))
             return request(2, "account/read", {"refreshToken": False})["account"]
 
-    with patch.object(provision, "_codex_auth_path", return_value=auth_path):
+    with ExitStack() as cleanup:
+        backend = cleanup.enter_context(ThreadingHTTPServer(("127.0.0.1", 0), AccountBackend))
+        worker = Thread(target=backend.serve_forever, daemon=True)
+        worker.start()
+        cleanup.callback(worker.join, 5)
+        cleanup.callback(backend.shutdown)
+        cleanup.enter_context(patch.object(provision, "_codex_auth_path", return_value=auth_path))
+        (state / "config.toml").write_text(
+            'cli_auth_credentials_store = "file"\n'
+            f'chatgpt_base_url = "http://127.0.0.1:{backend.server_port}/backend-api/"\n', encoding="utf-8",
+        )
         initial = provision.provision(oauth("A"), "codex", confirmed=True)
         assert initial["ok"] and "重启" not in initial["message"]
         try:
@@ -122,9 +158,11 @@ def main():
             stopped = lifecycle("stop")
             assert stopped["status"] in {"stopped", "notRunning"}
         assert not (daemon_dir / "daemon.pid").exists()
+        assert set(routing_accounts) == {"A", "B"}, routing_accounts
     result = {"platform": sys.platform, "codex_version": started["managedCodexVersion"],
               "api_key_restart": True, "oauth_restart": True, "pid_changes": [first, second, third],
-              "account_file_preserved": True, "account_in_daemon_verified": True, "isolated_service_stopped": True}
+              "account_file_preserved": True, "account_in_daemon_verified": True,
+              "local_routing_fixture": True, "isolated_service_stopped": True}
     (scratch / "checks.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result), flush=True)
 
